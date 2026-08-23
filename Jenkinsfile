@@ -207,6 +207,12 @@ pipeline {
                         // container, so npm never writes a root-owned
                         // node_modules into the Jenkins workspace — the classic
                         // way this pattern breaks workspace cleanup on the next build.
+                        //
+                        // DATABASE_URL is a throwaway that is never connected to.
+                        // No unit test touches the database, but configs/envConfig.js
+                        // is imported transitively and throws at import time without
+                        // one. A developer's machine hides this because backend/.env
+                        // exists locally; a fresh CI clone has no .env at all.
                         retry(2) {
                             sh '''
                                 set -eu
@@ -214,6 +220,8 @@ pipeline {
                                     -v "$WORKSPACE/backend":/src:ro \\
                                     -v leadsignal_npm_cache:/root/.npm \\
                                     -w /app \\
+                                    -e NODE_ENV=test \\
+                                    -e DATABASE_URL="postgresql://test:test@127.0.0.1:5432/test?schema=public" \\
                                     node:22-slim \\
                                     sh -ec "cp -a /src/. /app/ && npm ci --no-audit --no-fund && npx vitest run --reporter=dot"
                             '''
