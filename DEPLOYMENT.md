@@ -242,8 +242,24 @@ Three places, deliberately separated:
 | Where | Holds | Changed by |
 |---|---|---|
 | `Jenkinsfile` `environment {}` | Ports, domains, `ALLOWED_ORIGINS`, crawler identity | A reviewed commit |
-| `/opt/leadsignal/env/backend.env` | API keys, SMTP, crawler tuning, AI budgets | Editing on the server, then redeploy |
+| `/opt/leadsignal/env/backend.env` | Console credentials, API keys, SMTP, crawler tuning, AI budgets | Editing on the server, then redeploy |
 | `/opt/leadsignal/env/deploy.env` | Postgres credentials | Generated at bootstrap; effectively never |
+
+### Signing in
+
+The app is behind a login — there is no public sign-up. `ADMIN_EMAIL` and
+`ADMIN_PASSWORD` in `backend.env` provision the first account at boot and are
+**required**: the API refuses to start in production without them, and Preflight
+fails the build rather than letting the container crash-loop. `bootstrap-server.sh`
+generates a password and prints it once; set `ADMIN_EMAIL` yourself.
+
+Changing `ADMIN_PASSWORD` later does *not* overwrite a password changed in the
+UI. To force it back after a lockout, set `ADMIN_PASSWORD_RESET=true`, redeploy,
+then set it back to `false`.
+
+The session cookie is httpOnly, `sameSite=lax` and `Secure` in production, so
+the app only works over HTTPS — which is also why the smoke tests hit the
+loopback ports directly rather than going through nginx.
 
 The compose file's explicit `environment:` block **overrides** anything in `backend.env`. That is intentional: `DATABASE_URL`, `REDIS_URL`, `ALLOWED_ORIGINS` and the two crawler safety flags (`CRAWLER_ALLOW_PRIVATE_HOSTS=false`, `CRAWLER_RESPECT_ROBOTS=true`) are pinned in git and cannot be loosened by an edit on the box.
 
@@ -270,6 +286,9 @@ git checkout prod && git merge main && git push origin prod
 |---|---|
 | Preflight: "cannot talk to the docker daemon" | `sudo usermod -aG docker jenkins && sudo systemctl restart jenkins` |
 | Preflight: "required env file missing" | Run `bootstrap-server.sh`, then fill in `/opt/leadsignal/env/backend.env` |
+| Preflight: "ADMIN_EMAIL is missing" | Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `backend.env`. The API will not boot without a console account. |
+| API unhealthy, logs show `ADMIN_PASSWORD is too weak` | The strength check is fatal in production. Use a longer password with mixed case, a digit and a symbol. |
+| Signed out on every page load | The session cookie is `Secure` — the browser must be on HTTPS. Check the certificate and that nginx is not serving the app over plain HTTP. |
 | Preflight: low disk | `docker system prune -af --volumes` — **check `docker volume ls` first**, `--volumes` will delete the database |
 | Migrations fail | `$C run --rm --no-deps api npx prisma migrate status --schema=prisma/schema`. A failed migration blocks the deploy and leaves the old release running. |
 | API unhealthy, logs show `CRAWLER_USER_AGENT must be set` | The Jenkinsfile's `CRAWLER_USER_AGENT` lost its `+http` contact URL — the API refuses to start without one in production |

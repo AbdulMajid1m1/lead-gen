@@ -19,6 +19,8 @@ APP_ROOT="/var/www/leadsignal"
 ENV_STORE="/opt/leadsignal/env"
 BACKUP_DIR="/var/backups/leadsignal"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Set only when this run generates one, and echoed again in the closing summary.
+ADMIN_PW_GENERATED=""
 
 [[ $EUID -eq 0 ]] || { echo "Run me with sudo."; exit 1; }
 id "$DEPLOY_USER" >/dev/null 2>&1 || { echo "User '$DEPLOY_USER' does not exist. Install Jenkins first, or set DEPLOY_USER."; exit 1; }
@@ -81,7 +83,20 @@ if [[ -f "$ENV_STORE/backend.env" ]]; then
 elif [[ -f "$REPO_DIR/deploy/env/backend.env.prod.example" ]]; then
     install -o "$DEPLOY_USER" -g "$DEPLOY_USER" -m 600 \
         "$REPO_DIR/deploy/env/backend.env.prod.example" "$ENV_STORE/backend.env"
-    echo "  created from the template — EDIT IT AND ADD YOUR API KEYS:"
+
+    # The API refuses to boot in production without a usable ADMIN_PASSWORD, so
+    # generate one rather than leaving the template's blank and letting the
+    # first deploy fail its healthcheck with a crash-looping container.
+    admin_pw="$(openssl rand -base64 18 | tr -d '/+=' | head -c 20)Aa1!"
+    sed -i "s#^ADMIN_PASSWORD=.*#ADMIN_PASSWORD=$admin_pw#" "$ENV_STORE/backend.env"
+    ADMIN_PW_GENERATED="$admin_pw"
+
+    echo "  created from the template."
+    echo "  ⚠️  A console password was generated. Save it now — it is not shown again:"
+    echo ""
+    echo "        password: $admin_pw"
+    echo ""
+    echo "  Set ADMIN_EMAIL and your API keys before the first deploy:"
     echo "     sudo -u $DEPLOY_USER nano $ENV_STORE/backend.env"
 else
     install -o "$DEPLOY_USER" -g "$DEPLOY_USER" -m 600 /dev/null "$ENV_STORE/backend.env"
@@ -154,8 +169,11 @@ Next:
   2. Issue certificates:
         certbot --nginx -d leadgen.deventiatech.com
         certbot --nginx -d leadgenapi.deventiatech.com
-  3. Fill in secrets:
+  3. Fill in secrets — ADMIN_EMAIL is required, the API will not boot without it:
         sudo -u $DEPLOY_USER nano $ENV_STORE/backend.env
+${ADMIN_PW_GENERATED:+
+     Console password generated for this box: $ADMIN_PW_GENERATED
+     (change it after the first sign-in; the .env is only the initial value)}
   4. Create the Jenkins pipeline job (branch: prod, script: Jenkinsfile)
      and run it. The first build creates the database and applies migrations.
 ────────────────────────────────────────────────────────────────

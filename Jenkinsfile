@@ -154,6 +154,17 @@ pipeline {
                         done
                     fi
 
+                    # The API hard-refuses to boot in production without a console
+                    # account (configs/envConfig.js). Without this check the only
+                    # symptom is a container that restarts forever and a deploy
+                    # that fails at --wait with nothing pointing at the cause.
+                    if [ -f "$SERVER_BACKEND_ENV" ]; then
+                        for key in ADMIN_EMAIL ADMIN_PASSWORD; do
+                            grep -qE "^${key}=.+" "$SERVER_BACKEND_ENV" \\
+                                || { echo "❌ $key is missing or empty in $SERVER_BACKEND_ENV — the API will not start without it"; fail=1; }
+                        done
+                    fi
+
                     # Free disk is the single most common cause of a half-finished
                     # image build, and it fails in a very unhelpful way.
                     avail_mb=$(df -Pm /var/lib/docker 2>/dev/null | awk 'NR==2 {print $4}')
