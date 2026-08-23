@@ -1,0 +1,25 @@
+/// Enforced twice: at extraction (a suppressed address is never stored as a
+/// usable contact) and at render (a suppressed company never appears as a lead).
+model SuppressionEntry {
+  id        String          @id @default(cuid())
+  kind      SuppressionKind
+  value     String          @db.VarChar(500)
+  reason    String?         @db.VarChar(500)
+  createdAt DateTime        @default(now())
+
+  @@unique([kind, value])
+}
+
+/// The identity resolver's index. Kinds are tried strongest-first
+/// (DOMAIN → OSM_ID → ATS_SLUG → PHONE → NAME_CITY) so two records only merge
+/// on evidence strong enough to justify it.
+model DedupeKey {
+  id        String     @id @default(cuid())
+  companyId String
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  kind      DedupeKind
+  value     String     @db.VarChar(500)
+
+  @@unique([kind, value])
+  @@index([companyId])
+}

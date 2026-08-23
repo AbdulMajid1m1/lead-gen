@@ -1,0 +1,114 @@
+/// One lead per company (enforced by the unique constraint) — re-discovering a
+/// company enriches its existing lead instead of creating a second one.
+model Lead {
+  id        String  @id @default(cuid())
+  companyId String  @unique
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  type               LeadType
+  primaryOpportunity ServiceType
+
+  score          Int
+  /// versioned, fully explainable — see SCORING_SPEC §5. Rendered directly.
+  scoreBreakdown Json
+  freshnessScore Int
+  /// timestamp of the newest piece of evidence behind this lead
+  newestEvidenceAt DateTime
+
+  status LeadStatus @default(NEW)
+
+  searchQueryId  String?
+  searchQuery    SearchQuery?  @relation(fields: [searchQueryId], references: [id])
+  discoveryRunId String?
+  discoveryRun   DiscoveryRun? @relation(fields: [discoveryRunId], references: [id])
+
+  scoredAt  DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  opportunities LeadOpportunity[]
+  reasons       LeadReason[]
+  actions       RecommendedAction[]
+  outreach      OutreachRecommendation[]
+  history       LeadStatusHistory[]
+  emailDrafts   LeadEmailDraft[]
+  threads       OutreachThread[]
+
+  @@index([score(sort: Desc)])
+  @@index([status])
+  @@index([primaryOpportunity])
+  @@index([newestEvidenceAt])
+  @@index([type])
+}
+
+model LeadOpportunity {
+  id      String      @id @default(cuid())
+  leadId  String
+  lead    Lead        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  service ServiceType
+  points  Int
+  rank    Int
+  rationale String    @db.VarChar(500)
+
+  @@unique([leadId, service])
+  @@index([leadId, rank])
+}
+
+/// The human-readable "why this is a lead" sentence, linked to the signal that
+/// justifies it so the UI can expand from claim → evidence in one click.
+model LeadReason {
+  id     String @id @default(cuid())
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  rank   Int
+  text   String @db.VarChar(500)
+
+  confidenceLevel ConfidenceLevel @default(DETECTED)
+  signalId        String?
+  signal          Signal?         @relation(fields: [signalId], references: [id])
+
+  @@index([leadId, rank])
+}
+
+model RecommendedAction {
+  id         String     @id @default(cuid())
+  leadId     String
+  lead       Lead       @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  actionType ActionType
+  title      String     @db.VarChar(200)
+  rationale  String     @db.VarChar(500)
+  priority   Int        @default(50)
+
+  @@index([leadId, priority])
+}
+
+model OutreachRecommendation {
+  id      String          @id @default(cuid())
+  leadId  String
+  lead    Lead            @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  channel OutreachChannel
+
+  subjectLine String? @db.VarChar(200)
+  openingLine String? @db.VarChar(1000)
+  /// [{ point, evidence }] — every talking point traces to something observed
+  talkingPoints Json
+
+  /// RULE = deterministic template, LLM = drafted by the optional AI layer
+  generatedBy     ParserUsed      @default(RULE)
+  confidenceLevel ConfidenceLevel @default(DETECTED)
+  createdAt       DateTime        @default(now())
+
+  @@unique([leadId, channel])
+}
+
+model LeadStatusHistory {
+  id         String      @id @default(cuid())
+  leadId     String
+  lead       Lead        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  fromStatus LeadStatus?
+  toStatus   LeadStatus
+  note       String?     @db.VarChar(1000)
+  changedAt  DateTime    @default(now())
+
+  @@index([leadId, changedAt])
+}

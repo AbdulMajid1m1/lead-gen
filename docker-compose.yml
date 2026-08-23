@@ -1,0 +1,129 @@
+# LeadSignal — AI Lead Intelligence & Prospect Discovery Platform
+#
+# Port choices avoid what is already bound on typical dev machines:
+#   3000 (node), 5000/7000 (macOS ControlCenter / AirPlay), 7070 (AnyDesk)
+#
+#   docker compose up -d              → full stack on http://localhost:4180
+#   docker compose up -d postgres redis   → data services only, for local dev
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: leadsignal-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-leadsignal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-leadsignal_dev_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-leadsignal}
+      # Deterministic collation keeps ILIKE and ordering identical between a
+      # developer's machine and CI.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    ports:
+      - "5433:5432"
+    volumes:
+      - leadsignal_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-leadsignal} -d ${POSTGRES_DB:-leadsignal}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: leadsignal-redis
+    restart: unless-stopped
+    # BullMQ requires noeviction — evicting job keys under memory pressure
+    # would silently drop queued maintenance work.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - leadsignal_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: ./backend
+    container_name: leadsignal-api
+    restart: unless-stopped
+    # Secrets (OPENAI_API_KEY etc.) live in backend/.env, which is gitignored.
+    # The explicit `environment:` block below still wins, so the container keeps
+    # its own DATABASE_URL/REDIS_URL rather than the host's localhost values.
+    env_file:
+      - ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4100
+      DATABASE_URL: postgresql://${POSTGRES_USER:-leadsignal}:${POSTGRES_PASSWORD:-leadsignal_dev_pw}@postgres:5432/${POSTGRES_DB:-leadsignal}?schema=public
+      REDIS_URL: redis://redis:6379
+      APP_URL: http://localhost:4180
+      ALLOWED_ORIGINS: http://localhost:4180,http://127.0.0.1:4180
+      # Required in production: the crawler must be identifiable and contactable.
+      CRAWLER_USER_AGENT: "${CRAWLER_USER_AGENT:-LeadSignalBot/1.0 (+https://leadsignal.local/bot; contact bot@leadsignal.local)}"
+      CRAWLER_CONTACT_URL: ${CRAWLER_CONTACT_URL:-https://leadsignal.local/bot}
+      OVERPASS_URL: ${OVERPASS_URL:-https://overpass.kumi.systems/api/interpreter}
+      NOMINATIM_EMAIL: ${NOMINATIM_EMAIL:-}
+      # AI_ENABLED / OPENAI_API_KEY / AI_*_MODEL come from backend/.env via env_file.
+    ports:
+      - "4100:4100"
+    volumes:
+      # WhatsApp pairing credentials — survive rebuilds so the QR scan is once.
+      - leadsignal_whatsapp:/app/.baileys_auth
+    # Apply migrations before serving: the container is the unit of deployment,
+    # so the schema it needs must be in place before it accepts a request.
+    command: sh -c "npx prisma migrate deploy --schema=prisma/schema && node index.js"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4100/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  worker:
+    build: ./backend
+    container_name: leadsignal-worker
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      WORKER_HEALTH_PORT: 4101
+      DATABASE_URL: postgresql://${POSTGRES_USER:-leadsignal}:${POSTGRES_PASSWORD:-leadsignal_dev_pw}@postgres:5432/${POSTGRES_DB:-leadsignal}?schema=public
+      REDIS_URL: redis://redis:6379
+      CRAWLER_USER_AGENT: "${CRAWLER_USER_AGENT:-LeadSignalBot/1.0 (+https://leadsignal.local/bot; contact bot@leadsignal.local)}"
+      CRAWLER_CONTACT_URL: ${CRAWLER_CONTACT_URL:-https://leadsignal.local/bot}
+      OVERPASS_URL: ${OVERPASS_URL:-https://overpass.kumi.systems/api/interpreter}
+    ports:
+      - "4101:4101"
+    command: ["node", "worker.js"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4101/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build: ./frontend
+    container_name: leadsignal-frontend
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "4180:80"
+
+volumes:
+  leadsignal_pgdata:
+  leadsignal_redisdata:
+  leadsignal_whatsapp:

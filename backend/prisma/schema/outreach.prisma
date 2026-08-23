@@ -1,0 +1,143 @@
+/// Outbound email: one or more configured sending mailboxes, threads of sent
+/// mail per lead, and every message in each thread — outbound initial pitches
+/// and follow-ups, plus inbound replies detected by the IMAP sync.
+///
+/// Sending and receiving are separable: an account may send through one host
+/// (Gmail SMTP, Resend, any SMTP relay) while its replies are read from a
+/// different mailbox (e.g. a domain address forwarded into Gmail). Accounts
+/// with no IMAP host are send-only — replies are simply not tracked.
+
+enum EmailAccountStatus {
+  CONNECTED
+  ERROR
+  DISABLED
+}
+
+enum ThreadStatus {
+  AWAITING_REPLY
+  REPLIED
+  CLOSED
+  BOUNCED
+}
+
+enum MessageDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum OutreachMessageKind {
+  INITIAL
+  FOLLOW_UP
+  REPLY
+}
+
+/// A connected mailbox used to send outreach and (optionally) poll for replies.
+/// Gmail works with an app password (smtp.gmail.com / imap.gmail.com); any SMTP
+/// provider fits the same shape. Several may exist at once — `isDefault` picks
+/// the one pre-selected in the composer.
+model EmailAccount {
+  id String @id @default(cuid())
+  /// GMAIL | SMTP | RESEND — presets for hosts and auth shape, nothing more.
+  provider String @default("GMAIL") @db.VarChar(20)
+  /// The From address recipients see. May be a domain alias that differs from
+  /// the SMTP login (e.g. sending as you@yourdomain.com through Resend).
+  email       String  @unique @db.VarChar(255)
+  displayName String? @db.VarChar(120)
+  /// Where replies should be directed, when that is not the From address.
+  replyTo String? @db.VarChar(255)
+  /// Pre-selected in the composer. At most one account has this set.
+  isDefault Boolean @default(false)
+
+  smtpHost String  @db.VarChar(255)
+  smtpPort Int     @default(465)
+  /// SMTP login when it differs from `email` (Resend uses the literal "resend").
+  smtpUser String? @db.VarChar(255)
+  /// App password / SMTP password / API key. Stored locally for this single-tenant tool.
+  authPassword String @db.VarChar(500)
+
+  /// Reply tracking. Null host = send-only account; replies are not polled.
+  imapHost     String? @db.VarChar(255)
+  imapPort     Int?
+  /// IMAP login and password when the inbox is a different mailbox from the
+  /// sending identity — e.g. sending as you@yourdomain.com but reading the
+  /// Gmail account that the domain forwards into.
+  imapUser     String? @db.VarChar(255)
+  imapPassword String? @db.VarChar(500)
+
+  status    EmailAccountStatus @default(CONNECTED)
+  lastError String?            @db.VarChar(500)
+
+  /// Follow-up automation: send follow-ups automatically when a thread has no
+  /// reply after followUpDays[n] days. When off, due follow-ups wait for a click.
+  autoFollowUp Boolean @default(true)
+  followUpDays Json    @default("[3, 7]")
+  maxFollowUps Int     @default(2)
+  signature    String? @db.VarChar(2000)
+
+  lastSyncAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  threads OutreachThread[]
+
+  @@index([isDefault])
+}
+
+/// One conversation with one lead — email or WhatsApp: the initial pitch, its
+/// follow-ups, and any reply. nextFollowUpAt drives the scheduler; a thread is
+/// "due" when AWAITING_REPLY and nextFollowUpAt has passed.
+model OutreachThread {
+  id     String @id @default(cuid())
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  /// The sending mailbox — null for WhatsApp threads, which go through the
+  /// single QR-paired device instead of a mailbox.
+  accountId String?
+  account   EmailAccount? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  channel OutreachChannel @default(EMAIL)
+  /// Email address for EMAIL threads; phone number for WHATSAPP threads.
+  recipientEmail String       @db.VarChar(255)
+  subject        String       @db.VarChar(255)
+  status         ThreadStatus @default(AWAITING_REPLY)
+
+  lastOutboundAt DateTime?
+  repliedAt      DateTime?
+  followUpsSent  Int       @default(0)
+  nextFollowUpAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages OutreachMessage[]
+
+  @@index([leadId])
+  @@index([status, nextFollowUpAt])
+}
+
+model OutreachMessage {
+  id       String         @id @default(cuid())
+  threadId String
+  thread   OutreachThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  direction MessageDirection
+  kind      OutreachMessageKind
+  subject   String              @db.VarChar(255)
+  body      String              @db.VarChar(8000)
+  /// RFC 5322 Message-ID — ours on outbound (so replies can be matched by
+  /// In-Reply-To/References), theirs on inbound.
+  messageId String?             @unique @db.VarChar(255)
+
+  /// The draft this outbound message was composed from, if any.
+  draftId String?
+  draft   LeadEmailDraft? @relation(fields: [draftId], references: [id], onDelete: SetNull)
+
+  generatedBy ParserUsed?
+  sentAt      DateTime?
+  receivedAt  DateTime?
+  fromAddress String?     @db.VarChar(255)
+
+  createdAt DateTime @default(now())
+
+  @@index([threadId, createdAt])
+}

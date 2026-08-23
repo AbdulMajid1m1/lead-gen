@@ -1,0 +1,57 @@
+/// A public job posting. The status machinery here is what stops a stale
+/// careers page from masquerading as live hiring intent — see SCORING_SPEC §6.
+model JobPosting {
+  id         String  @id @default(cuid())
+  companyId  String
+  company    Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sourceId   String
+  source     Source  @relation(fields: [sourceId], references: [id])
+  externalId String  @db.VarChar(255)
+
+  title           String  @db.VarChar(300)
+  normalizedTitle String  @db.VarChar(300)
+  url             String?
+  applyUrl        String?
+  location        String? @db.VarChar(255)
+  department      String? @db.VarChar(160)
+  employmentType  String? @db.VarChar(60)
+  remote          Boolean @default(false)
+
+  postedAt        DateTime?
+  updatedAtSource DateTime?
+  deadlineAt      DateTime?
+
+  status JobStatus @default(UNKNOWN)
+  /// last time the job was observed present on its own board — the only
+  /// evidence that justifies ACTIVE
+  lastSeenActiveAt DateTime?
+  lastVerifiedAt   DateTime?
+  disappearedAt    DateTime?
+  verifyAttempts   Int       @default(0)
+  /// [{ method, boardHadJob, httpStatus, at }] appended on every check
+  statusEvidence   Json?
+
+  descriptionSnippet String? @db.VarChar(2000)
+
+  firstSeenAt DateTime @default(now())
+
+  skills         JobSkill[]
+  signalEvidence SignalEvidence[]
+
+  @@unique([sourceId, externalId])
+  @@index([companyId, status])
+  @@index([status, lastVerifiedAt])
+  @@index([normalizedTitle])
+  @@index([postedAt])
+}
+
+model JobSkill {
+  id           String     @id @default(cuid())
+  jobPostingId String
+  jobPosting   JobPosting @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+  skill        String     @db.VarChar(80)
+  kind         String     @db.VarChar(20) // TECH | ROLE | DOMAIN
+
+  @@unique([jobPostingId, skill])
+  @@index([skill])
+}

@@ -1,0 +1,85 @@
+/// A single atomic thing we learned about a company, always attributed.
+///
+/// Keys are stable snake_case strings ("copyright_year", "viewport_meta",
+/// "has_online_ordering") so the signal engine can query them without
+/// re-parsing HTML.
+model ExtractedFact {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  key       String  @db.VarChar(100)
+  value     String? @db.VarChar(2000)
+  valueJson Json?
+
+  confidenceLevel  ConfidenceLevel
+  extractorName    String          @db.VarChar(60)
+  extractorVersion String          @db.VarChar(20)
+  /// the literal snippet that proves it — rendered verbatim in the UI
+  evidenceSnippet  String?         @db.VarChar(1000)
+
+  sourceRecordId String?
+  sourceRecord   SourceRecord? @relation(fields: [sourceRecordId], references: [id])
+  crawlResultId  String?
+  crawlResult    CrawlResult?  @relation(fields: [crawlResultId], references: [id])
+
+  extractedAt DateTime @default(now())
+
+  signalEvidence SignalEvidence[]
+
+  @@unique([companyId, key, sourceRecordId])
+  @@index([companyId, key])
+  @@index([key])
+}
+
+model TechnologyDetection {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  domainId  String?
+  domain    CompanyDomain? @relation(fields: [domainId], references: [id])
+
+  techSlug String  @db.VarChar(60)
+  techName String  @db.VarChar(100)
+  category String  @db.VarChar(60) // CMS | ECOMMERCE | CRM | BOOKING | ANALYTICS | …
+  version  String? @db.VarChar(40)
+
+  confidence ConfidenceLevel
+  /// how it was proven: HEADER | HTML | ASSET_URL | INFERENCE, plus the snippet
+  matchedOn  String          @db.VarChar(20)
+  evidence   String?         @db.VarChar(1000)
+
+  crawlResultId String?
+  crawlResult   CrawlResult? @relation(fields: [crawlResultId], references: [id])
+
+  detectedAt DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  signalEvidence SignalEvidence[]
+
+  @@unique([companyId, techSlug])
+  @@index([techSlug])
+  @@index([category])
+}
+
+model WebsiteAudit {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  domainId  String
+  domain    CompanyDomain @relation(fields: [domainId], references: [id])
+
+  overallScore Int  // 0–100; < 40 raises OUTDATED_WEBSITE
+  /// { security, mobile, performance, seo, freshness, content } each 0–100
+  subscores    Json
+  /// [{ code, severity, detail, evidence }] — the human-readable findings list
+  findings     Json
+  pagesAudited Int  @default(1)
+
+  auditedAt DateTime @default(now())
+
+  signalEvidence SignalEvidence[]
+
+  @@index([companyId, auditedAt])
+  @@index([overallScore])
+}

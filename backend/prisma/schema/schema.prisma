@@ -1,0 +1,15 @@
+// LeadSignal data model — split by domain across prisma/schema/*.prisma
+//
+// Design rule that drives the whole schema: every derived row (fact, technology,
+// audit, job, signal, reason) holds a foreign key back to the immutable
+// SourceRecord or CrawlResult that produced it. Provenance is therefore a
+// relation walk, not a "source" string glued on after the fact.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}

@@ -1,0 +1,145 @@
+model Company {
+  id             String            @id @default(cuid())
+  name           String            @db.VarChar(255)
+  /// lowercased, punctuation- and suffix-stripped ("Acme Ltd." → "acme")
+  normalizedName String            @db.VarChar(255)
+  industry       String?           @db.VarChar(100) // human label, e.g. "Restaurant"
+  osmCategory    String?           @db.VarChar(100) // raw tag, e.g. "amenity=restaurant"
+  sizeBucket     CompanySizeBucket @default(UNKNOWN)
+  description    String?
+  countryCode    String?           @db.VarChar(2)
+  city           String?           @db.VarChar(120)
+
+  firstSeenAt    DateTime  @default(now())
+  lastSeenAt     DateTime  @default(now())
+  lastEnrichedAt DateTime?
+  lastCrawledAt  DateTime?
+
+  domains     CompanyDomain[]
+  aliases     CompanyAlias[]
+  contacts    Contact[]
+  locations   Location[]
+  facts       ExtractedFact[]
+  tech        TechnologyDetection[]
+  audits      WebsiteAudit[]
+  jobPostings JobPosting[]
+  signals     Signal[]
+  leads       Lead[]
+  dedupeKeys  DedupeKey[]
+  atsAccounts AtsAccount[]
+  aiCandidates AiCandidate[]
+
+  @@index([normalizedName])
+  @@index([industry])
+  @@index([osmCategory])
+  @@index([city, countryCode])
+}
+
+model CompanyDomain {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// registrable domain, lowercased, no scheme or www
+  domain    String  @unique @db.VarChar(255)
+  isPrimary Boolean @default(true)
+  httpsOk   Boolean?
+  /// earliest certificate-transparency sighting — powers the NEW_DOMAIN signal
+  firstCertSeenAt DateTime?
+  discoveredVia   SourceKind
+
+  audits WebsiteAudit[]
+  tech   TechnologyDetection[]
+
+  @@index([companyId])
+}
+
+model CompanyAlias {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  alias     String  @db.VarChar(255)
+
+  @@unique([companyId, alias])
+}
+
+model Contact {
+  id        String      @id @default(cuid())
+  companyId String
+  company   Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  kind      ContactKind
+  /// email address, E.164-ish phone, contact-form URL, or social profile URL
+  value     String      @db.VarChar(500)
+  /// ROLE | PERSONAL | NON_OUTREACH for emails; network name for socials
+  roleHint  String?     @db.VarChar(100)
+
+  confidenceLevel ConfidenceLevel
+  sourceRecordId  String?
+  sourceRecord    SourceRecord?   @relation(fields: [sourceRecordId], references: [id])
+
+  verifiedAt   DateTime?
+  isSuppressed Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+
+  @@unique([companyId, kind, value])
+  @@index([kind])
+  @@index([value])
+}
+
+model Location {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  lat         Float?
+  lon         Float?
+  addressLine String?
+  city        String? @db.VarChar(120)
+  region      String? @db.VarChar(120)
+  country     String? @db.VarChar(2)
+  postalCode  String? @db.VarChar(20)
+
+  osmType String? @db.VarChar(10)
+  osmId   BigInt?
+
+  @@unique([osmType, osmId])
+  @@index([companyId])
+  @@index([city])
+  @@index([country])
+}
+
+/// A company's account on a public applicant-tracking system. Discovering one
+/// is what makes live "is this job still open?" verification possible.
+model AtsAccount {
+  id        String     @id @default(cuid())
+  companyId String
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  provider  SourceKind // ATS_GREENHOUSE | ATS_LEVER | …
+  slug      String     @db.VarChar(160)
+
+  boardUrl        String?
+  lastFetchedAt   DateTime?
+  lastJobCount    Int       @default(0)
+  consecutiveFails Int      @default(0)
+  isActive        Boolean   @default(true)
+
+  @@unique([provider, slug])
+  @@index([companyId])
+  @@index([isActive, lastFetchedAt])
+}
+
+/// Cached geocoding results. Nominatim's usage policy *requires* that results
+/// be cached rather than re-queried, so this table is a compliance artefact as
+/// much as a performance one.
+model GeoPlace {
+  id          String   @id @default(cuid())
+  query       String   @unique @db.VarChar(300)
+  displayName String?
+  lat         Float
+  lon         Float
+  boundingBox Json?
+  osmType     String?  @db.VarChar(10)
+  osmId       BigInt?
+  countryCode String?  @db.VarChar(2)
+  fetchedAt   DateTime @default(now())
+}

@@ -1,0 +1,57 @@
+{
+  "name": "leadsignal-backend",
+  "version": "1.0.0",
+  "description": "AI Lead Intelligence & Prospect Discovery Platform \u2014 API + discovery engine",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon index.js",
+    "start": "node index.js",
+    "worker": "node worker.js",
+    "worker:dev": "nodemon worker.js",
+    "generate": "prisma generate --schema=prisma/schema",
+    "migrate": "prisma migrate dev --schema=prisma/schema",
+    "migrate:deploy": "prisma migrate deploy --schema=prisma/schema",
+    "db:push": "prisma db push --schema=prisma/schema",
+    "seed": "node seeds/seed.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "node tests/e2e/acceptance.js",
+    "test:research": "node tests/e2e/research-acceptance.js"
+  },
+  "prisma": {
+    "schema": "prisma/schema"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "@prisma/client": "^6.19.0",
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "bullmq": "^5.63.0",
+    "cheerio": "^1.1.2",
+    "cors": "^2.8.5",
+    "date-fns": "^4.1.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.3.0",
+    "helmet": "^8.1.0",
+    "imapflow": "^1.7.1",
+    "ioredis": "^5.9.0",
+    "nodemailer": "^9.0.5",
+    "openai": "^6.10.0",
+    "p-limit": "^7.2.0",
+    "pino": "^10.1.0",
+    "pino-pretty": "^13.1.2",
+    "prisma": "^6.19.0",
+    "qrcode": "^1.5.4",
+    "robots-parser": "^3.0.1",
+    "tldts": "^7.0.19",
+    "undici": "^7.17.0",
+    "zod": "^4.1.14"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10",
+    "supertest": "^7.1.4",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,62 @@
+/// An interpreted observation: "this company shows X". A signal is never
+/// asserted without at least one SignalEvidence row pointing at the underlying
+/// fact, job, detection or audit.
+model Signal {
+  id        String     @id @default(cuid())
+  companyId String
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  type      SignalType
+
+  /// 0–1 detection-quality multiplier (e.g. how far below the audit threshold)
+  strength     Float @default(1)
+  /// catalogue base points captured at detection time, so re-weighting the
+  /// catalogue later never silently rewrites history
+  weight       Int
+  halfLifeDays Int?
+
+  detectedAt   DateTime  @default(now())
+  lastSeenAt   DateTime  @default(now())
+  active       Boolean   @default(true)
+  deactivatedAt DateTime?
+  /// why it stopped being true, e.g. "site now serves a viewport meta tag"
+  deactivatedReason String? @db.VarChar(300)
+
+  /// distinguishes repeatable instances of one type: a job id, "audit:<domainId>"
+  dedupeKey String @db.VarChar(160)
+
+  /// the values needed to render this signal's human sentence (job title, audit
+  /// score, copyright year…). Stored rather than recomputed so the explanation
+  /// shown to the user always matches the evidence as it was when detected.
+  context Json?
+
+  evidence    SignalEvidence[]
+  leadReasons LeadReason[]
+
+  @@unique([companyId, type, dedupeKey])
+  @@index([type, active])
+  @@index([companyId, active])
+  @@index([detectedAt])
+}
+
+/// Join table linking a signal to whichever kind of evidence supports it.
+/// Exactly one of the FK columns is set per row.
+model SignalEvidence {
+  id       String @id @default(cuid())
+  signalId String
+  signal   Signal @relation(fields: [signalId], references: [id], onDelete: Cascade)
+
+  extractedFactId String?
+  extractedFact   ExtractedFact? @relation(fields: [extractedFactId], references: [id])
+  sourceRecordId  String?
+  sourceRecord    SourceRecord?  @relation(fields: [sourceRecordId], references: [id])
+  jobPostingId    String?
+  jobPosting      JobPosting?    @relation(fields: [jobPostingId], references: [id])
+  techDetectionId String?
+  techDetection   TechnologyDetection? @relation(fields: [techDetectionId], references: [id])
+  websiteAuditId  String?
+  websiteAudit    WebsiteAudit?  @relation(fields: [websiteAuditId], references: [id])
+
+  note String? @db.VarChar(500)
+
+  @@index([signalId])
+}

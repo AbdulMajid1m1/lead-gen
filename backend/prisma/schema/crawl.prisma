@@ -1,0 +1,85 @@
+model CrawlRequest {
+  id      String @id @default(cuid())
+  url     String
+  urlHash String @db.VarChar(64) // sha256 of the normalized URL — the dedupe key
+  host    String @db.VarChar(255)
+
+  /// frontier priority: home 100, /contact 90, /about 80, /careers 75, … other 20
+  priority Int         @default(50)
+  status   CrawlStatus @default(QUEUED)
+  /// what robots.txt said — stored even when ALLOWED so provenance can show it
+  robotsDecision RobotsDecision?
+
+  companyId      String?
+  discoveryRunId String?
+  discoveryRun   DiscoveryRun? @relation(fields: [discoveryRunId], references: [id])
+
+  attempts    Int      @default(0)
+  scheduledAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  result CrawlResult?
+
+  @@unique([urlHash])
+  @@index([host])
+  @@index([status, priority])
+  @@index([discoveryRunId])
+  @@index([companyId])
+}
+
+model CrawlResult {
+  id             String       @id @default(cuid())
+  crawlRequestId String       @unique
+  crawlRequest   CrawlRequest @relation(fields: [crawlRequestId], references: [id], onDelete: Cascade)
+
+  httpStatus Int?
+  /// machine-readable refusal: ROBOTS_DISALLOWED, CLOUDFLARE_CHALLENGE,
+  /// SSRF_PRIVATE_HOST, RATE_LIMITED, TIMEOUT… never null when ok = false
+  blockReason String? @db.VarChar(60)
+  blockDetail String? @db.VarChar(500)
+  ok          Boolean @default(false)
+
+  contentType   String? @db.VarChar(100)
+  bytes         Int?
+  totalMs       Int?
+  contentHash   String? @db.VarChar(64)
+  finalUrl      String?
+  redirectChain Json?
+  /// true when the page is an empty SPA shell — explains thin extraction
+  jsRendered    Boolean @default(false)
+
+  /// the stored raw HTML lives on this SourceRecord
+  sourceRecordId String?       @unique
+  sourceRecord   SourceRecord? @relation(fields: [sourceRecordId], references: [id])
+
+  fetchedAt DateTime @default(now())
+
+  facts ExtractedFact[]
+  tech  TechnologyDetection[]
+
+  @@index([fetchedAt])
+  @@index([blockReason])
+}
+
+/// robots.txt is cached in Postgres as well as in-process so a worker restart
+/// does not re-hammer every host we already know the rules for.
+model RobotsCache {
+  host          String   @id @db.VarChar(255)
+  content       String?
+  crawlDelaySec Int?
+  httpStatus    Int?
+  denyAll       Boolean  @default(false)
+  fetchedAt     DateTime @default(now())
+  expiresAt     DateTime
+}
+
+model HostCrawlState {
+  host          String    @id @db.VarChar(255)
+  lastRequestAt DateTime?
+  cooldownUntil DateTime?
+  cooldownReason String?  @db.VarChar(80)
+  errorStreak   Int       @default(0)
+  totalCrawled  Int       @default(0)
+
+  @@index([cooldownUntil])
+}

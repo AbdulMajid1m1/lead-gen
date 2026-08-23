@@ -1,0 +1,235 @@
+/// How much we actually know. Rendered distinctly in the UI so an inference is
+/// never mistaken for a fact, and AI output is always visibly AI output.
+enum ConfidenceLevel {
+  VERIFIED // unambiguous, source-authored proof (vendor header, generator meta)
+  DETECTED // strong heuristic match
+  INFERRED // derived by our own rules from other facts
+  AI_GENERATED // written by the optional LLM layer
+}
+
+enum ServiceType {
+  WEBSITE_DEV
+  CRM_DEV
+  MOBILE_APP
+  AI_AUTOMATION
+  ECOMMERCE_DEV
+  SAAS_DEV
+  CUSTOM_SOFTWARE
+  // A product vertical, not an agency service: leads whose trigger event is
+  // "this company just hit HR pain" (first HR hire, hiring at scale). Added so
+  // a SaaS like TracefyHR can be sold through the same engine — the outreach
+  // email must pitch the platform, not dev services.
+  HR_SOFTWARE
+}
+
+enum SourceKind {
+  OVERPASS
+  NOMINATIM
+  ATS_GREENHOUSE
+  ATS_LEVER
+  ATS_ASHBY
+  ATS_SMARTRECRUITERS
+  ATS_WORKABLE
+  ATS_RECRUITEE
+  AGG_ARBEITNOW
+  AGG_REMOTIVE
+  AGG_JOBICY
+  AGG_ADZUNA
+  HN_HIRING
+  CRTSH
+  WIKIDATA
+  WEBSITE_CRAWL
+  AI_WEB_SEARCH
+  MANUAL
+}
+
+enum CrawlStatus {
+  QUEUED
+  FETCHING
+  SUCCESS
+  BLOCKED
+  ROBOTS_DENIED
+  SSRF_BLOCKED
+  TIMEOUT
+  ERROR
+}
+
+enum RobotsDecision {
+  ALLOWED
+  DENIED
+  NO_ROBOTS
+  UNREACHABLE
+}
+
+/// Why a job is or is not a live hiring signal. Only ACTIVE (and, at reduced
+/// weight, RECENTLY_ACTIVE) ever produce HIRING_* signals.
+enum JobStatus {
+  ACTIVE
+  RECENTLY_ACTIVE
+  EXPIRED
+  CLOSED
+  UNKNOWN
+}
+
+enum SignalType {
+  NO_WEBSITE
+  OUTDATED_WEBSITE
+  NO_HTTPS
+  NO_MOBILE_VIEWPORT
+  SLOW_SITE
+  OLD_COPYRIGHT
+  LEGACY_JS_LIB
+  WORDPRESS_DETECTED
+  WOOCOMMERCE_DETECTED
+  SHOPIFY_DETECTED
+  WIX_SQUARESPACE
+  MAGENTO_LEGACY
+  NO_ONLINE_ORDERING
+  NO_BOOKING_SYSTEM
+  NO_SCHEMA_ORG
+  NO_ANALYTICS
+  HIRING_TECH_ROLE
+  HIRING_CRM_ROLE
+  HIRING_ECOM_ROLE
+  HIRING_MOBILE_ROLE
+  HIRING_AI_ROLE
+  HIRING_HR_ROLE
+  HIRING_MANY_ROLES
+  NEW_DOMAIN
+  NEW_SUBDOMAIN
+  CAREERS_PAGE_ACTIVE
+  CONTACT_EMAIL_FOUND
+  CONTACT_PHONE_FOUND
+  CONTACT_FORM_FOUND
+  GROWTH_MENTION
+  MANUAL_PROCESS_HINT
+}
+
+enum LeadType {
+  TECH_DEBT
+  HIRING_INTENT
+  NEW_BUSINESS
+  DIGITAL_GAP
+  EXPANSION
+}
+
+enum LeadStatus {
+  NEW
+  QUALIFIED
+  CONTACTED
+  FOLLOW_UP
+  INTERESTED
+  CONVERTED
+  NOT_INTERESTED
+  DISQUALIFIED
+  ARCHIVED
+  DO_NOT_CONTACT
+}
+
+enum ActionType {
+  CONTACT_IMMEDIATELY
+  EMAIL_PITCH
+  PHONE_CALL
+  CONTACT_FORM_MSG
+  SEND_AUDIT_REPORT
+  PROPOSE_MEETING
+  RESEARCH_FURTHER
+  FOLLOW_UP_LATER
+  LOW_PRIORITY
+  DO_NOT_CONTACT
+}
+
+enum OutreachChannel {
+  EMAIL
+  PHONE
+  CONTACT_FORM
+  SOCIAL
+}
+
+enum DiscoveryTrigger {
+  SEED
+  SCHEDULED
+  NL_QUERY
+  MANUAL
+}
+
+enum RunStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+  CANCELLED
+}
+
+enum ParserUsed {
+  DETERMINISTIC
+  LLM
+  RULE
+}
+
+enum SuppressionKind {
+  DOMAIN
+  EMAIL
+  COMPANY
+  PHONE
+}
+
+/// Ordered strongest → weakest. The dedupe resolver tries them in this order.
+enum DedupeKind {
+  DOMAIN
+  OSM_ID
+  ATS_SLUG
+  PHONE
+  NAME_CITY
+}
+
+enum ContactKind {
+  EMAIL
+  PHONE
+  CONTACT_FORM
+  SOCIAL
+}
+
+enum CompanySizeBucket {
+  MICRO
+  SMALL
+  MEDIUM
+  LARGE
+  UNKNOWN
+}
+
+// ─── AI research layer ────────────────────────────────────────────────────────
+
+/// Which field an AI web-search result claims to know.
+enum AiClaimField {
+  EMAIL
+  PHONE
+  WHATSAPP
+  ADDRESS
+  WEBSITE
+  DESCRIPTION
+}
+
+/// The verification verdict on one AI claim.
+///
+/// This enum is the heart of the anti-hallucination design: an AI claim is a
+/// *pointer to where evidence might be*, never evidence itself. It only becomes
+/// a contact once our own crawler observes the same value on a real page.
+enum AiClaimStatus {
+  UNVERIFIED            // claimed by the model, not yet checked
+  CONFIRMED_OWN_SITE    // observed on the company's own site  → contact is VERIFIED
+  CONFIRMED_THIRD_PARTY // observed on the cited page          → contact is DETECTED
+  CONTRADICTED          // page fetched, value absent or different
+  UNCHECKABLE           // citation blocked by robots / bot wall / SSRF guard
+  SUPPRESSED            // on the suppression list
+}
+
+enum AiCandidateStatus {
+  PENDING
+  MATCHED_EXISTING      // resolved onto a company we already knew
+  CREATED_COMPANY
+  REJECTED_UNCITED      // claimed a source URL the search never actually visited
+  REJECTED_NO_EXISTENCE // no fetchable site, no map record, nothing confirmed
+  REJECTED_EXCLUDED     // matched the brief's exclusions or the suppression list
+}

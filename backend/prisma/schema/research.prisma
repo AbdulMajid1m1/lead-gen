@@ -1,0 +1,147 @@
+/// The AI-expanded research brief for one run.
+///
+/// Stored 1:1 with the run so a search opened from history can always show
+/// exactly how it was interpreted at the time, even after the prompts change.
+model ResearchBrief {
+  id     String       @id @default(cuid())
+  runId  String       @unique
+  run    DiscoveryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  searchQueryId String?
+  /// restatedGoal, industries, location, service, signals, icpTraits,
+  /// searchStrategies[], exclusions[]
+  brief         Json
+  /// LLM when the model produced it, DETERMINISTIC when we fell back
+  producedBy    ParserUsed @default(DETERMINISTIC)
+  model         String?    @db.VarChar(60)
+  promptVersion String     @db.VarChar(20)
+  createdAt     DateTime   @default(now())
+}
+
+/// A company the AI web search claims exists.
+///
+/// Quarantine zone. A candidate becomes a real Company only by passing the
+/// existence gate (a fetchable site or a map record), and its claimed contact
+/// details become Contacts only through the verification pipeline.
+model AiCandidate {
+  id    String       @id @default(cuid())
+  runId String
+  run   DiscoveryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  /// the raw web-search API response, stored immutably like every other source
+  sourceRecordId String
+  sourceRecord   SourceRecord @relation(fields: [sourceRecordId], references: [id])
+  strategyLabel  String       @db.VarChar(120)
+
+  name           String  @db.VarChar(160)
+  nameLocal      String? @db.VarChar(160) // e.g. the Arabic name, when shown
+  claimedWebsite String? @db.VarChar(300)
+  claimedCity    String? @db.VarChar(80)
+  industryGuess  String? @db.VarChar(60)
+  whyMatch       String  @db.VarChar(300)
+  matchConfidence String @db.VarChar(10)  // HIGH | MEDIUM | LOW
+  /// true when the model cited a URL the search never actually visited
+  uncited        Boolean @default(false)
+
+  status    AiCandidateStatus @default(PENDING)
+  companyId String?
+  company   Company?          @relation(fields: [companyId], references: [id])
+  matchedOn String?           @db.VarChar(20) // which DedupeKind resolved it
+  rejectedReason String?      @db.VarChar(300)
+
+  claims    AiClaim[]
+  citations AiCitation[]
+  createdAt DateTime     @default(now())
+
+  @@unique([runId, sourceRecordId, name])
+  @@index([runId, status])
+  @@index([companyId])
+}
+
+/// One AI-asserted fact, with where the model says it saw it.
+model AiClaim {
+  id          String      @id @default(cuid())
+  candidateId String
+  candidate   AiCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  field      AiClaimField
+  value      String       @db.VarChar(500)
+  /// the page the model says carried this value — what we go and check
+  foundOnUrl String?      @db.VarChar(600)
+
+  status        AiClaimStatus @default(UNVERIFIED)
+  /// the Contact row created once the claim was independently observed
+  verifiedContactId String?
+  /// the fetch that decided the verdict, including the blocked ones
+  crawlResultId String?
+  checkedAt     DateTime?
+  note          String?       @db.VarChar(300)
+
+  @@unique([candidateId, field])
+  @@index([status])
+}
+
+/// URLs the web search actually consulted, from the response's own citation
+/// annotations. Rendered in the provenance drawer beside crawls and sources.
+model AiCitation {
+  id          String      @id @default(cuid())
+  candidateId String
+  candidate   AiCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  url   String  @db.VarChar(600)
+  title String? @db.VarChar(300)
+  /// whether it appeared in the API's own list of pages it retrieved
+  inSources Boolean @default(true)
+
+  @@index([candidateId])
+}
+
+/// A ready-to-copy personalised outreach email.
+///
+/// Kept per run rather than per lead so history shows the email as it was
+/// written then, together with the facts it was grounded on.
+model LeadEmailDraft {
+  id     String        @id @default(cuid())
+  leadId String
+  lead   Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  runId  String?
+  run    DiscoveryRun? @relation(fields: [runId], references: [id])
+
+  subject      String @db.VarChar(200)
+  body         String @db.VarChar(4000)
+  aboutCompany String @db.VarChar(1000)
+  /// snapshot of the numbered facts handed to the model, so the email can
+  /// always be audited against what it was allowed to know
+  groundingFacts Json
+  factIdsUsed    Json
+
+  generatedBy     ParserUsed      @default(LLM) // RULE when the template fallback ran
+  confidenceLevel ConfidenceLevel @default(AI_GENERATED)
+  model           String?         @db.VarChar(60)
+  promptVersion   String          @db.VarChar(20)
+  createdAt       DateTime        @default(now())
+
+  sentMessages OutreachMessage[]
+
+  @@index([leadId, createdAt])
+  @@index([runId])
+}
+
+/// Immutable snapshot of the results grid at run completion — the history
+/// feature. Re-opening a past run shows what it found *then*, even after the
+/// underlying leads have been re-scored or re-crawled since.
+model ResearchResultRow {
+  id    String       @id @default(cuid())
+  runId String
+  run   DiscoveryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  rank        Int
+  leadId      String?
+  candidateId String?
+  /// the full grid row exactly as rendered
+  snapshot    Json
+  createdAt   DateTime @default(now())
+
+  @@unique([runId, rank])
+  @@index([leadId])
+}

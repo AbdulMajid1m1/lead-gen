@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+/*
+ * The app toggles dark mode with a `.dark` class on <html>, so the `dark:`
+ * variant must key off that class — not the OS media query.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Design system — "Aurora".
+ *
+ * One violet-tinted neutral ramp, one indigo-violet accent (matched to the
+ * brand mark), and a small semantic set for confidence and freshness — the two
+ * dimensions this product is really about. Everything is a token so light and
+ * dark stay in step and no component invents its own colour.
+ *
+ * Both themes deliberately avoid pure white and pure black: light surfaces are
+ * a lavender-tinted porcelain, dark surfaces a deep violet charcoal. Elevation
+ * is expressed with a real shadow ladder (--shadow-*) plus surface steps, not
+ * borders alone.
+ */
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  --color-ink-50: oklch(0.982 0.004 290);
+  --color-ink-100: oklch(0.962 0.006 290);
+  --color-ink-200: oklch(0.92 0.009 290);
+  --color-ink-300: oklch(0.862 0.012 290);
+  --color-ink-400: oklch(0.67 0.018 290);
+  --color-ink-500: oklch(0.54 0.022 290);
+  --color-ink-600: oklch(0.44 0.024 290);
+  --color-ink-700: oklch(0.35 0.026 290);
+  --color-ink-800: oklch(0.25 0.026 290);
+  --color-ink-900: oklch(0.19 0.024 290);
+  --color-ink-950: oklch(0.145 0.02 290);
+
+  --color-accent-50: oklch(0.965 0.018 292);
+  --color-accent-100: oklch(0.93 0.04 292);
+  --color-accent-200: oklch(0.87 0.08 292);
+  --color-accent-300: oklch(0.79 0.12 292);
+  --color-accent-400: oklch(0.7 0.17 292);
+  --color-accent-500: oklch(0.61 0.21 292);
+  --color-accent-600: oklch(0.53 0.22 292);
+  --color-accent-700: oklch(0.46 0.2 293);
+
+  --color-positive: oklch(0.63 0.15 155);
+  --color-caution: oklch(0.74 0.15 78);
+  --color-critical: oklch(0.6 0.2 25);
+  --color-info: oklch(0.64 0.13 230);
+}
+
+:root {
+  --surface: oklch(0.968 0.006 290);
+  --surface-raised: oklch(0.992 0.003 290);
+  --surface-sunken: oklch(0.948 0.008 290);
+  --border: oklch(0.912 0.01 290);
+  --border-strong: oklch(0.85 0.014 290);
+  --text: oklch(0.21 0.026 290);
+  --text-muted: var(--color-ink-500);
+  --text-subtle: var(--color-ink-400);
+
+  --accent: var(--color-accent-600);
+  --accent-strong: var(--color-accent-700);
+  --accent-soft: oklch(0.955 0.025 292);
+  --accent-fg: oklch(0.985 0.005 292);
+  --accent-glow: oklch(0.53 0.22 292 / 0.28);
+  --accent-gradient: linear-gradient(135deg, oklch(0.58 0.21 300), oklch(0.5 0.22 285));
+
+  --scrim: oklch(0.24 0.03 290 / 0.4);
+  --shadow-xs: 0 1px 2px oklch(0.25 0.03 290 / 0.05);
+  --shadow-sm: 0 1px 2px oklch(0.25 0.03 290 / 0.05), 0 2px 8px -2px oklch(0.25 0.03 290 / 0.07);
+  --shadow-md: 0 2px 4px oklch(0.25 0.03 290 / 0.05), 0 10px 24px -8px oklch(0.25 0.03 290 / 0.12);
+  --shadow-lg: 0 4px 10px oklch(0.25 0.04 290 / 0.07), 0 28px 56px -16px oklch(0.25 0.04 290 / 0.22);
+
+  color-scheme: light;
+}
+
+.dark {
+  --surface: oklch(0.168 0.02 288);
+  --surface-raised: oklch(0.207 0.022 288);
+  --surface-sunken: oklch(0.143 0.018 288);
+  --border: oklch(0.283 0.024 288);
+  --border-strong: oklch(0.36 0.026 288);
+  --text: oklch(0.928 0.008 290);
+  --text-muted: oklch(0.7 0.018 290);
+  --text-subtle: oklch(0.56 0.02 290);
+
+  --accent: var(--color-accent-400);
+  --accent-strong: var(--color-accent-300);
+  --accent-soft: oklch(0.27 0.06 292);
+  --accent-fg: oklch(0.16 0.03 292);
+  --accent-glow: oklch(0.7 0.17 292 / 0.25);
+  --accent-gradient: linear-gradient(135deg, oklch(0.74 0.15 300), oklch(0.65 0.18 285));
+
+  --scrim: oklch(0.09 0.015 288 / 0.62);
+  --shadow-xs: 0 1px 2px oklch(0.05 0.01 288 / 0.3), inset 0 1px 0 oklch(1 0 0 / 0.03);
+  --shadow-sm: 0 1px 2px oklch(0.05 0.01 288 / 0.3), 0 3px 10px -2px oklch(0.05 0.01 288 / 0.35), inset 0 1px 0 oklch(1 0 0 / 0.04);
+  --shadow-md: 0 2px 4px oklch(0.05 0.01 288 / 0.35), 0 12px 28px -8px oklch(0.05 0.01 288 / 0.5), inset 0 1px 0 oklch(1 0 0 / 0.05);
+  --shadow-lg: 0 4px 12px oklch(0.05 0.01 288 / 0.4), 0 32px 64px -16px oklch(0.05 0.01 288 / 0.6), inset 0 1px 0 oklch(1 0 0 / 0.06);
+
+  color-scheme: dark;
+}
+
+* { border-color: var(--border); }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in oklch, var(--accent) 24%, transparent);
+}
+
+/* Tabular figures keep score columns from jittering as numbers change. */
+.tnum { font-variant-numeric: tabular-nums; }
+
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  border-radius: 0.5rem;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in oklch, var(--border) 60%, transparent), transparent);
+  animation: shimmer 1.6s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after { animation: none; }
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 99px;
+  border: 3px solid var(--surface);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-subtle); }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}

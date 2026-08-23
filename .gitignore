@@ -1,0 +1,18 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# Secrets. The production equivalents live at /opt/leadsignal/env on the server
+# and are copied into a release by Jenkins — they are never committed.
+.env
+.env.local
+.env.*.local
+backend.env
+deploy.env
+deploy/env/*.env
+!deploy/env/*.example
+
+# WhatsApp pairing state
+.baileys_auth/

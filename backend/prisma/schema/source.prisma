@@ -1,0 +1,44 @@
+model Source {
+  id          String     @id @default(cuid())
+  kind        SourceKind
+  name        String     @db.VarChar(100)
+  baseUrl     String?
+  /// rendered verbatim in the provenance UI (e.g. the ODbL notice for OSM)
+  attribution String?
+  enabled     Boolean    @default(true)
+  config      Json?
+
+  records     SourceRecord[]
+  jobPostings JobPosting[]
+
+  @@unique([kind, name])
+}
+
+/// Immutable raw payload — the root of every provenance chain.
+///
+/// Nothing in the system claims a fact without pointing at one of these rows,
+/// and the (sourceId, payloadHash) unique constraint means re-fetching
+/// unchanged data costs one row, not a duplicate history.
+model SourceRecord {
+  id         String  @id @default(cuid())
+  sourceId   String
+  source     Source  @relation(fields: [sourceId], references: [id])
+  /// the source's own identifier: ATS job id, OSM element id, certificate id…
+  externalId String? @db.VarChar(255)
+  url        String?
+
+  payload     Json
+  payloadHash String @db.VarChar(64) // sha256 of the canonicalised payload
+
+  fetchedAt DateTime @default(now())
+
+  facts          ExtractedFact[]
+  contacts       Contact[]
+  signalEvidence SignalEvidence[]
+  crawlResult    CrawlResult?
+  aiCandidates   AiCandidate[]
+
+  @@unique([sourceId, payloadHash])
+  @@index([sourceId, externalId])
+  @@index([fetchedAt])
+}

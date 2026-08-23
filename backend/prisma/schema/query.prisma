@@ -1,0 +1,67 @@
+model SearchQuery {
+  id      String @id @default(cuid())
+  rawText String @db.VarChar(1000)
+  /// the StructuredQuery the parser produced — shown back to the user as
+  /// editable chips so "how did it understand me?" is never a mystery
+  parsed  Json
+
+  parserUsed  ParserUsed @default(DETERMINISTIC)
+  resultCount Int?
+  tookMs      Int?
+  createdAt   DateTime   @default(now())
+
+  leads         Lead[]
+  discoveryRuns DiscoveryRun[]
+
+  @@index([createdAt])
+}
+
+model DiscoveryRun {
+  id      String           @id @default(cuid())
+  trigger DiscoveryTrigger
+  status  RunStatus        @default(PENDING)
+
+  searchQueryId String?
+  searchQuery   SearchQuery? @relation(fields: [searchQueryId], references: [id])
+
+  /// the ordered plan the planner produced from the query
+  plan  Json
+  /// { companiesFound, crawled, blocked, jobsFound, leadsCreated, errors }
+  stats Json?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  steps         DiscoveryRunStep[]
+  crawlRequests CrawlRequest[]
+  leads         Lead[]
+
+  // ─── AI research layer ───────────────────────────────────────────────────
+  researchBrief ResearchBrief?
+  aiCandidates  AiCandidate[]
+  emailDrafts   LeadEmailDraft[]
+  resultRows    ResearchResultRow[]
+  /// { calls, inputTokens, outputTokens, searchCalls, estCostUsd }
+  aiUsage       Json?
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model DiscoveryRunStep {
+  id      String       @id @default(cuid())
+  runId   String
+  run     DiscoveryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  ordinal Int
+  kind    String       @db.VarChar(40) // OVERPASS | ATS_PROBE | CRAWL | AUDIT | SIGNALS | SCORE
+  label   String       @db.VarChar(200)
+
+  status     RunStatus @default(PENDING)
+  counts     Json?
+  errorText  String?   @db.VarChar(1000)
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  @@unique([runId, ordinal])
+}

@@ -1,0 +1,168 @@
+# LeadSignal — production stack.
+#
+# Unlike docker-compose.yml (development), nothing is built here: Jenkins builds
+# and tags the images, then this file only *runs* the tag it is handed. That is
+# what makes rollback a one-liner — re-run with the previous IMAGE_TAG instead of
+# rebuilding a commit that may no longer even be checked out.
+#
+#   docker compose -f docker-compose.prod.yml -p leadsignal-prod --env-file .env up -d --wait
+#
+# Interpolated variables come from the .env Jenkins writes next to this file
+# (ports + IMAGE_TAG from the Jenkinsfile, credentials from /opt/leadsignal/env).
+# Application secrets are read separately from ./backend.env via env_file.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: leadsignal_postgres_prod
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      # Deterministic collation — keeps ILIKE and ORDER BY identical to dev/CI.
+      # Only applied on first initialisation of an empty data directory.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    ports:
+      # Loopback only. The database is never reachable from the internet; use an
+      # SSH tunnel for psql/Prisma Studio from a laptop.
+      - "127.0.0.1:${POSTGRES_HOST_PORT}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging: &default_logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  redis:
+    image: redis:7-alpine
+    container_name: leadsignal_redis_prod
+    restart: always
+    # BullMQ requires noeviction — evicting job keys under memory pressure would
+    # silently drop queued maintenance work instead of failing loudly.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    logging: *default_logging
+
+  api:
+    image: ${API_IMAGE:-leadsignal-api}:${IMAGE_TAG:?IMAGE_TAG is required}
+    container_name: leadsignal_api_prod
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Application secrets (OPENAI_API_KEY, SMTP, …). The explicit environment
+    # block below deliberately wins over anything set here, so the container
+    # always talks to its own Postgres/Redis rather than a stale localhost URL
+    # copied over from a developer's .env.
+    env_file:
+      - ./backend.env
+    environment:
+      NODE_ENV: production
+      PORT: 4100
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+      APP_URL: ${APP_URL}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+      CRAWLER_USER_AGENT: ${CRAWLER_USER_AGENT}
+      CRAWLER_CONTACT_URL: ${CRAWLER_CONTACT_URL}
+      # Hard guards — these must never be flipped on in production, so they are
+      # pinned here rather than left to whatever backend.env happens to contain.
+      CRAWLER_ALLOW_PRIVATE_HOSTS: "false"
+      CRAWLER_RESPECT_ROBOTS: "true"
+    ports:
+      - "127.0.0.1:${API_HOST_PORT}:4100"
+    volumes:
+      # WhatsApp pairing credentials — survive rebuilds so the QR scan is once.
+      - whatsapp:/app/.baileys_auth
+    # Migrations are NOT run here. Jenkins applies them as a gated step before
+    # the new containers start, so a bad migration fails the build instead of
+    # putting the API into a crash-restart loop.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4100/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default_logging
+
+  worker:
+    image: ${API_IMAGE:-leadsignal-api}:${IMAGE_TAG}
+    container_name: leadsignal_worker_prod
+    restart: always
+    depends_on:
+      api:
+        condition: service_healthy
+    env_file:
+      - ./backend.env
+    environment:
+      NODE_ENV: production
+      WORKER_HEALTH_PORT: 4101
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+      APP_URL: ${APP_URL}
+      CRAWLER_USER_AGENT: ${CRAWLER_USER_AGENT}
+      CRAWLER_CONTACT_URL: ${CRAWLER_CONTACT_URL}
+      CRAWLER_ALLOW_PRIVATE_HOSTS: "false"
+      CRAWLER_RESPECT_ROBOTS: "true"
+    ports:
+      - "127.0.0.1:${WORKER_HOST_PORT}:4101"
+    command: ["node", "worker.js"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4101/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default_logging
+
+  frontend:
+    image: ${WEB_IMAGE:-leadsignal-frontend}:${IMAGE_TAG}
+    container_name: leadsignal_frontend_prod
+    restart: always
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT}:80"
+    # The SPA calls a relative /api, which this container's nginx proxies to
+    # api:4100 over the compose network. Same-origin, so no CORS preflight and
+    # no API hostname baked into the bundle at build time.
+    healthcheck:
+      # 127.0.0.1, never "localhost": this image's /etc/hosts maps localhost to
+      # ::1 only, and because nginx.conf replaces the packaged default.conf the
+      # entrypoint's IPv6 helper never adds a `listen [::]:80`. A localhost
+      # probe therefore fails with ECONNREFUSED against a perfectly healthy
+      # server. Same reasoning applied to the api/worker probes above.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *default_logging
+
+volumes:
+  # Explicit names so the data survives a compose project rename.
+  pgdata:
+    name: leadsignal_pgdata_prod
+  redisdata:
+    name: leadsignal_redisdata_prod
+  whatsapp:
+    name: leadsignal_whatsapp_prod
