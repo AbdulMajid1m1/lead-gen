@@ -47,7 +47,9 @@ pipeline {
         // corrupt the last-good-tag marker the rollback path depends on.
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '20'))
-        timestamps()
+        // No timestamps() here: the Timestamper plugin is not installed on this
+        // controller, and installing it would mean restarting a Jenkins that
+        // four other projects depend on. Not worth it for log cosmetics.
         // A failing parallel branch should stop its sibling immediately instead
         // of burning another five minutes on a build we are going to discard.
         parallelsAlwaysFailFast()
@@ -204,7 +206,7 @@ pipeline {
                         // The source is mounted read-only and copied inside the
                         // container, so npm never writes a root-owned
                         // node_modules into the Jenkins workspace — the classic
-                        // way this pattern breaks cleanWs on the next build.
+                        // way this pattern breaks workspace cleanup on the next build.
                         retry(2) {
                             sh '''
                                 set -eu
@@ -541,7 +543,11 @@ pipeline {
             // The clone is shallow (depth 1) and nothing installs into the
             // workspace, so a full wipe costs a few seconds and guarantees the
             // next build sees exactly what is on the branch.
-            cleanWs(deleteDirs: true, notFailBuild: true)
+            //
+            // deleteDir() rather than cleanWs(): the Workspace Cleanup plugin is
+            // not installed here, and deleteDir is a built-in step that does the
+            // same job. Wrapped so a locked file can never fail a good deploy.
+            catchError(buildResult: null, stageResult: null) { deleteDir() }
         }
     }
 }
