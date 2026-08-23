@@ -38,6 +38,23 @@ export const MIN_RESULTS_BEFORE_DISCOVER = int(process.env.MIN_RESULTS_BEFORE_DI
 export const NOMINATIM_EMAIL             = process.env.NOMINATIM_EMAIL || "";
 export const LOG_LEVEL = process.env.LOG_LEVEL || (NODE_ENV === "production" ? "info" : "debug");
 
+// ─── Admin authentication ─────────────────────────────────────────────────────
+// There is no public sign-up. ADMIN_EMAIL/ADMIN_PASSWORD provision (and only
+// ever provision) the first account at boot — see seeds/admin.js. Changing
+// ADMIN_PASSWORD later does not rewrite a password an operator has since
+// changed in the UI, unless ADMIN_PASSWORD_RESET is also turned on.
+export const ADMIN_EMAIL    = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+export const ADMIN_NAME     = process.env.ADMIN_NAME || "Administrator";
+export const ADMIN_PASSWORD_RESET = bool(process.env.ADMIN_PASSWORD_RESET, false);
+
+export const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME || "leadsignal_session";
+// Long enough that an operator working a full day is not interrupted, short
+// enough that a forgotten laptop is not a standing invitation.
+export const SESSION_TTL_HOURS   = int(process.env.SESSION_TTL_HOURS, 12);
+export const LOGIN_MAX_ATTEMPTS  = int(process.env.LOGIN_MAX_ATTEMPTS, 8);
+export const LOGIN_LOCK_MINUTES  = int(process.env.LOGIN_LOCK_MINUTES, 15);
+
 // ─── Crawler identity & politeness ────────────────────────────────────────────
 // A crawler that does not identify itself is indistinguishable from an attack.
 // CRAWLER_USER_AGENT is sent on every outbound request and CRAWLER_CONTACT_URL
@@ -113,6 +130,14 @@ if (NODE_ENV === "production") {
   }
   if (!CRAWLER_RESPECT_ROBOTS) {
     throw new Error("[envConfig] CRAWLER_RESPECT_ROBOTS cannot be disabled in production.");
+  }
+  // An unauthenticated console that can read every lead and send mail from the
+  // company's mailboxes is not a degraded mode worth booting into.
+  if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
+    throw new Error(
+      "[envConfig] ADMIN_EMAIL and ADMIN_PASSWORD are required in production so the " +
+      "console has an account to sign in with. Refusing to start.",
+    );
   }
 }
 

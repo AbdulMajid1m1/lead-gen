@@ -242,3 +242,10 @@ enum WhatsAppAccountStatus {
   DISCONNECTED
   ERROR
 }
+
+/// Console access level. VIEWER exists so a future read-only seat does not
+/// require a schema change; every provisioned account today is an ADMIN.
+enum AdminRole {
+  ADMIN
+  VIEWER
+}

@@ -37,3 +37,16 @@ export const writeLimiter = rateLimit({
   legacyHeaders: false,
   message: envelope("Too many changes. Please slow down."),
 });
+
+// Credential guessing, bounded per IP. The per-account lockout in
+// authController is the other half of this: one stops a single host hammering
+// many addresses, the other stops many hosts hammering a single address.
+export const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // A successful sign-in should not spend from the same budget as a guess.
+  skipSuccessfulRequests: true,
+  message: envelope("Too many sign-in attempts. Please try again later."),
+});

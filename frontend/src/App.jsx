@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
-import { LayoutDashboard, Search, Users, Radar, Settings, Moon, Sun, Signal, Sparkles } from "lucide-react";
+import { LayoutDashboard, Search, Users, Radar, Settings, Moon, Sun, Signal, Sparkles, LogOut } from "lucide-react";
 import { cn } from "./lib/format.js";
 import SearchPage from "./pages/SearchPage.jsx";
 import ResearchPage from "./pages/ResearchPage.jsx";
@@ -11,6 +11,9 @@ import LeadDetailPage from "./pages/LeadDetailPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import DiscoveryPage from "./pages/DiscoveryPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
+import LoginPage from "./pages/LoginPage.jsx";
+import { useAuth } from "./lib/auth.jsx";
+import { Spinner } from "./components/ui.jsx";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
@@ -33,9 +36,29 @@ const useTheme = () => {
 export default function App() {
   const [theme, setTheme] = useTheme();
   const location = useLocation();
+  const { user, checking, signOut } = useAuth();
 
   // A route change should always start at the top of the new page.
   useEffect(() => { window.scrollTo(0, 0); }, [location.pathname]);
+
+  // Held until the cold-load session probe answers. Rendering the login form
+  // first and then yanking it away is worse than a beat of nothing.
+  if (checking) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center">
+        <Spinner size={22} />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <>
+        <LoginPage />
+        <Toaster theme={theme} position="bottom-right" richColors closeButton />
+      </>
+    );
+  }
 
   return (
     <div className="flex min-h-full">
@@ -66,7 +89,16 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="border-t border-[var(--border)] p-3">
+        <div className="space-y-0.5 border-t border-[var(--border)] p-3">
+          <div className="truncate px-2.5 pb-1 text-[11px] text-[var(--text-muted)]" title={user.email}>
+            {user.name || user.email}
+          </div>
+          <button
+            onClick={() => { signOut(); }}
+            className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-sunken)] hover:text-[var(--text)]"
+          >
+            <LogOut size={15} />Sign out
+          </button>
           <button
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
             className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-sunken)] hover:text-[var(--text)]"

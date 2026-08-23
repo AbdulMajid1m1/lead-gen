@@ -11,6 +11,7 @@ import { PORT, NODE_ENV, ALLOWED_ORIGINS } from "./configs/envConfig.js";
 import { logger } from "./utils/logger.js";
 import { restoreSessions } from "./lib/outreach/whatsapp.js";
 import prisma from "./prismaClient.js";
+import { ensureAdminUser } from "./seeds/admin.js";
 
 const app = express();
 
@@ -62,6 +63,12 @@ app.use(errorHandler);
 
 const server = app.listen(PORT, () => {
   logger.info({ port: PORT, env: NODE_ENV }, "LeadSignal API listening");
+  // Provision the console account before anyone can reach a route. A failure
+  // here is fatal by design: an API nobody can sign in to is not "up".
+  ensureAdminUser().catch((err) => {
+    logger.error({ err }, "could not provision the admin account");
+    process.exit(1);
+  });
   // Re-open the sockets for WhatsApp devices that were paired before this
   // restart. Deliberately here and not on import of the module: the worker
   // imports it too, and two processes holding a socket for the same device

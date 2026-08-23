@@ -1,0 +1,56 @@
+// Admin authentication.
+//
+// The product has no public sign-up: accounts are provisioned, never
+// registered. That is why there is no email-verification or password-reset
+// flow here — an operator with database access is the recovery path.
+//
+// Sessions are opaque server-side rows rather than self-contained JWTs. A JWT
+// cannot be revoked before it expires, and "log this device out now" is a
+// requirement for a console that can send mail from the company's mailboxes.
+
+model AdminUser {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  // scrypt digest, encoded as scrypt$N$r$p$<salt-b64>$<hash-b64>. Never a
+  // reversible form — see lib/auth/password.js.
+  passwordHash String
+  name         String?   @db.VarChar(120)
+  role         AdminRole @default(ADMIN)
+  isActive     Boolean   @default(true)
+
+  // Throttling state for credential stuffing. Kept on the user rather than in
+  // Redis so a lockout survives a cache flush and a worker restart.
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+  lastLoginAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions AdminSession[]
+
+  @@index([email])
+}
+
+model AdminSession {
+  id String @id @default(cuid())
+
+  // SHA-256 of the cookie value, never the value itself. A leaked database
+  // backup therefore does not hand over live sessions.
+  tokenHash String   @unique
+  userId    String
+  user      AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  lastSeenAt DateTime  @default(now())
+
+  // Recorded for the "where am I signed in" view and for incident forensics.
+  userAgent String? @db.VarChar(400)
+  ip        String? @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}

@@ -9,9 +9,31 @@ import * as stats from "../controllers/subControllers/statsController.js";
 import * as research from "../controllers/subControllers/researchController.js";
 import * as outreach from "../controllers/subControllers/outreachController.js";
 import * as signatures from "../controllers/subControllers/signatureController.js";
+import * as auth from "../controllers/subControllers/authController.js";
+import { requireAuth } from "../middlewares/requireAuth.js";
+import { loginLimiter } from "../middlewares/rateLimiter.js";
 
 const router = Router();
 const idParam = z.object({ id: z.string().min(1).max(64) });
+
+// ─── Authentication ───────────────────────────────────────────────────────────
+// Mounted before the gate below, because these are the only routes a
+// signed-out browser is allowed to reach.
+router.post("/auth/login", loginLimiter, validate({ body: auth.loginSchema }), auth.login);
+router.post("/auth/logout", auth.logout);
+router.get("/auth/me", requireAuth, auth.me);
+router.post("/auth/change-password", requireAuth, writeLimiter, validate({ body: auth.changePasswordSchema }), auth.changePassword);
+
+// Liveness has to answer for the container healthcheck and for nginx, neither
+// of which carries a cookie — so it sits outside the gate too. It reports only
+// "can I reach Postgres", never any lead data.
+router.get("/health", stats.health);
+
+// ─── Everything below this line requires a session ────────────────────────────
+// A single gate rather than a per-route flag: adding a route to this file must
+// not be a way to accidentally publish one. Anything genuinely public has to be
+// registered above, where that intent is visible.
+router.use(requireAuth);
 
 // ─── Search & discovery ───────────────────────────────────────────────────────
 router.post("/search", searchLimiter, validate({ body: search.searchSchema }), search.search);
@@ -86,6 +108,4 @@ router.get("/stats/dashboard", stats.dashboard);
 router.get("/suppression", stats.listSuppression);
 router.post("/suppression", writeLimiter, validate({ body: stats.suppressionSchema }), stats.addSuppression);
 router.delete("/suppression/:id", writeLimiter, validate({ params: idParam }), stats.removeSuppression);
-router.get("/health", stats.health);
-
 export default router;

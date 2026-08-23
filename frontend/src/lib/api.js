@@ -15,12 +15,22 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Notified whenever the API answers 401, so the app can drop to the login
+ * screen from anywhere without every caller having to check for it. Registered
+ * by AuthProvider; a no-op until then.
+ */
+let onUnauthorized = null;
+export const setUnauthorizedHandler = (fn) => { onUnauthorized = fn; };
+
 const request = async (path, { method = "GET", body, signal } = {}) => {
   let res;
   try {
     res = await fetch(`/api${path}`, {
       method,
       signal,
+      // The session lives in an httpOnly cookie, so every call has to carry it.
+      credentials: "same-origin",
       headers: body ? { "content-type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
@@ -37,6 +47,11 @@ const request = async (path, { method = "GET", body, signal } = {}) => {
   }
 
   if (!res.ok || payload.success === false) {
+    // The session ended (expired, revoked, or the server restarted with a
+    // cleared table). Let the app react once, centrally.
+    if (res.status === 401 && path !== "/auth/login" && path !== "/auth/me") {
+      onUnauthorized?.();
+    }
     throw new ApiError(payload.message || `Request failed (HTTP ${res.status}).`, {
       status: res.status,
       code: payload.code,
@@ -117,6 +132,12 @@ export const api = {
   whatsappLogout: (accountId) =>
     request("/outreach/whatsapp/logout", { method: "POST", body: accountId ? { accountId } : {} }),
   sendWhatsApp: (body) => request("/outreach/whatsapp/send", { method: "POST", body }),
+
+  // ─── Authentication ────────────────────────────────────────────────────────
+  login: (body) => request("/auth/login", { method: "POST", body }),
+  logout: () => request("/auth/logout", { method: "POST" }),
+  me: () => request("/auth/me"),
+  changePassword: (body) => request("/auth/change-password", { method: "POST", body }),
 
   dashboard: () => request("/stats/dashboard"),
   signalCatalog: () => request("/signals/catalog"),

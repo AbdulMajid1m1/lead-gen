@@ -18,7 +18,8 @@
     "test:watch": "vitest",
     "test:e2e": "node tests/e2e/acceptance.js",
     "test:research": "node tests/e2e/research-acceptance.js",
-    "seed:signatures": "node seeds/signatures.js"
+    "seed:signatures": "node seeds/signatures.js",
+    "seed:admin": "node seeds/admin.js"
   },
   "prisma": {
     "schema": "prisma/schema"
