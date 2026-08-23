@@ -7,6 +7,7 @@ import { api } from "../lib/api.js";
 import { Badge, Button, EmptyState, Skeleton, Surface, SectionHeading } from "../components/ui.jsx";
 import EmailAccountsSection from "../components/EmailAccounts.jsx";
 import WhatsAppSection from "../components/WhatsAppSection.jsx";
+import SignaturesSection from "../components/Signatures.jsx";
 import { formatDate, titleize } from "../lib/format.js";
 
 export default function SettingsPage() {
@@ -40,6 +41,7 @@ export default function SettingsPage() {
       <PageBody className="space-y-5">
         <EmailAccountsSection />
         <WhatsAppSection />
+        <SignaturesSection />
 
         <Surface className="p-5">
           <SectionHeading

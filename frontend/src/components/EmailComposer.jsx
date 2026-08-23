@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   X, Copy, Send, RefreshCw, ChevronDown, ChevronRight, Mail, Phone,
-  MessageCircle, MapPin, CheckCircle2, Clock, CornerUpLeft, Settings,
+  MessageCircle, MapPin, CheckCircle2, Clock, CornerUpLeft, Settings, PenLine,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../lib/api.js";
@@ -40,6 +40,58 @@ export const ThreadStatusChip = ({ thread }) => {
   );
 };
 
+/** Sentinel for the "no sign-off" option — "" already means "not chosen yet". */
+const NO_SIGNATURE = "__none__";
+
+/**
+ * Pick the sign-off, and show exactly what will be appended.
+ *
+ * The signature lives outside the body textarea on purpose: it is rendered
+ * from its own row at send time (a styled HTML block for the email, two plain
+ * lines for WhatsApp), so keeping it out of the editable text is what stops it
+ * being sent twice or edited into something the HTML version no longer matches.
+ */
+const SignaturePicker = ({ signatures, signature, value, onChange, channel }) => {
+  const preview = channel === "WHATSAPP" ? signature?.preview?.whatsapp : signature?.preview?.text;
+
+  if (!signatures.length) {
+    return (
+      <p className="text-[11px] leading-relaxed text-[var(--text-subtle)]">
+        <PenLine size={11} className="mr-1 inline" />
+        No sign-off yet — add one in{" "}
+        <Link to="/settings" className="text-[var(--accent)] hover:underline">Settings</Link>{" "}
+        and every email and message gets signed automatically.
+      </p>
+    );
+  }
+
+  return (
+    <div>
+      <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">
+        Signature
+      </label>
+      <Select className="w-full" value={value || signature?.id || NO_SIGNATURE} onChange={(e) => onChange(e.target.value)}>
+        {signatures.map((s) => (
+          <option key={s.id} value={s.id}>{s.name}{s.isDefault ? " · default" : ""}</option>
+        ))}
+        <option value={NO_SIGNATURE}>No signature</option>
+      </Select>
+      {preview ? (
+        <div className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--surface-sunken)] px-3 py-2.5">
+          <p className="mb-1.5 flex items-center gap-1 text-[10px] uppercase tracking-wide text-[var(--text-subtle)]">
+            <PenLine size={10} />
+            Appended on send
+            {channel === "EMAIL" && <span className="normal-case tracking-normal">· styled in the HTML version</span>}
+          </p>
+          <pre className="whitespace-pre-wrap font-[inherit] text-[12px] leading-snug text-[var(--text-muted)]">{preview}</pre>
+        </div>
+      ) : (
+        <p className="mt-1 text-[11px] text-[var(--text-subtle)]">This message goes out unsigned.</p>
+      )}
+    </div>
+  );
+};
+
 export default function EmailComposer({ leadId, name, contacts = null, address = null, onClose }) {
   const [showFacts, setShowFacts] = useState(false);
   const [to, setTo] = useState("");
@@ -59,7 +111,28 @@ export default function EmailComposer({ leadId, name, contacts = null, address =
     queryKey: ["email-drafts", leadId],
     queryFn: () => api.listEmailDrafts(leadId),
   });
-  const draft = draftsData?.drafts?.[0] || null;
+  // A lead found by ordinary discovery has no stored draft — only deep-research
+  // runs write those. The server then returns an unsaved `suggestion` built
+  // from the same verified facts, which is what keeps this panel from opening
+  // completely blank. Sending one must not set draftId: it has no row.
+  const draft = draftsData?.drafts?.[0] || draftsData?.suggestion || null;
+  const savedDraftId = draft && !draft.isSuggestion ? draft.id : null;
+
+  // Sign-offs. The body textarea holds the message only; the signature is kept
+  // separate so it can be swapped without editing the text, and so the styled
+  // HTML block the recipient sees is rendered from the row rather than parsed
+  // back out of a textarea.
+  const { data: signatureData } = useQuery({ queryKey: ["signatures"], queryFn: api.listSignatures });
+  const signatures = signatureData?.signatures || [];
+  const [signatureId, setSignatureId] = useState("");
+  const signature =
+    signatureId === NO_SIGNATURE
+      ? null
+      : signatures.find((s) => s.id === signatureId)
+        || signatures.find((s) => s.id === account?.signatureId)
+        || signatures.find((s) => s.isDefault)
+        || signatures[0]
+        || null;
 
   const { data: threadsData } = useQuery({
     queryKey: ["outreach-threads", leadId],
@@ -77,16 +150,24 @@ export default function EmailComposer({ leadId, name, contacts = null, address =
   const [waPhone, setWaPhone] = useState("");
   const [waMessage, setWaMessage] = useState("");
   const { data: waStatus } = useQuery({ queryKey: ["whatsapp-status"], queryFn: api.whatsappStatus, refetchInterval: 60_000 });
-  const waConnected = Boolean(waStatus?.connected);
+  // Only a device that is connected right now can actually send.
+  const waDevices = (waStatus?.accounts || []).filter((d) => d.connected);
+  const [waAccountId, setWaAccountId] = useState("");
+  const waDevice =
+    waDevices.find((d) => d.id === waAccountId) || waDevices.find((d) => d.isDefault) || waDevices[0] || null;
+  const waConnected = Boolean(waDevice);
 
   // Seed the editable fields from the newest draft exactly once per draft.
+  // A suggestion has no id, so it is keyed by its subject instead — otherwise
+  // every refetch would overwrite whatever the user had started typing.
+  const draftKey = draft ? draft.id || `suggestion:${draft.subject}` : null;
   useEffect(() => {
-    if (draft && draft.id !== seededDraftId) {
+    if (draft && draftKey !== seededDraftId) {
       setSubject(draft.subject);
       setBody(draft.body);
-      setSeededDraftId(draft.id);
+      setSeededDraftId(draftKey);
     }
-  }, [draft, seededDraftId]);
+  }, [draft, draftKey, seededDraftId]);
   useEffect(() => {
     if (!to && contacts?.email?.value) setTo(contacts.email.value);
   }, [contacts, to]);
@@ -110,7 +191,13 @@ export default function EmailComposer({ leadId, name, contacts = null, address =
   });
 
   const send = useMutation({
-    mutationFn: () => api.sendOutreachEmail({ leadId, to, subject, body, draftId: draft?.id, accountId: account?.id }),
+    mutationFn: () => api.sendOutreachEmail({
+      leadId, to, subject, body,
+      draftId: savedDraftId || undefined,
+      accountId: account?.id,
+      // null is meaningful here: it is the only way to send unsigned.
+      signatureId: signatureId === NO_SIGNATURE ? null : signature?.id,
+    }),
     onSuccess: () => {
       toast.success(account?.canReceive
         ? `Sent to ${to} from ${account.email}. Replies are tracked automatically.`
@@ -140,20 +227,30 @@ export default function EmailComposer({ leadId, name, contacts = null, address =
   });
 
   const sendWa = useMutation({
-    mutationFn: () => api.sendWhatsApp({ leadId, phone: waPhone, message: waMessage }),
+    mutationFn: () => api.sendWhatsApp({
+      leadId, phone: waPhone, message: waMessage,
+      waAccountId: waDevice?.id,
+      signatureId: signatureId === NO_SIGNATURE ? null : signature?.id,
+    }),
     onSuccess: () => {
-      toast.success("WhatsApp message sent. Replies land in this thread automatically.");
+      toast.success(`Sent from ${waDevice?.label || "WhatsApp"}. Replies land in this thread automatically.`);
       queryClient.invalidateQueries({ queryKey: ["outreach-threads"] });
       queryClient.invalidateQueries({ queryKey: ["lead", leadId] });
     },
     onError: (err) => toast.error(err.message),
   });
 
+  // Copy has to include the sign-off. Sending appends it server-side, but a
+  // copied email is pasted straight into someone's mail client — leaving it out
+  // would hand the user an unsigned message with no hint that anything is missing.
   const copy = useCallback(() => {
-    const text = channel === "WHATSAPP" ? waMessage : `Subject: ${subject}\n\n${body}`;
+    const signOff = channel === "WHATSAPP" ? signature?.preview?.whatsapp : signature?.preview?.text;
+    const text = channel === "WHATSAPP"
+      ? [waMessage, signOff].filter(Boolean).join("\n\n")
+      : `Subject: ${subject}\n\n${[body, signOff].filter(Boolean).join("\n\n")}`;
     navigator.clipboard.writeText(text)
       .then(() => toast.success(channel === "WHATSAPP" ? "Message copied" : "Email copied"), () => toast.error("Could not copy"));
-  }, [subject, body, channel, waMessage]);
+  }, [subject, body, channel, waMessage, signature]);
 
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose();
@@ -175,7 +272,7 @@ export default function EmailComposer({ leadId, name, contacts = null, address =
             </div>
             <p className="mt-0.5 text-xs text-[var(--text-muted)]">
               {draft
-                ? `${draft.generatedBy === "LLM" ? "AI-drafted" : "Template"} · grounded on ${draft.groundingFacts?.length ?? 0} verified facts`
+                ? `${draft.isSuggestion ? "Starter draft" : draft.generatedBy === "LLM" ? "AI-drafted" : "Template"} · grounded on ${draft.groundingFacts?.length ?? 0} verified facts`
                 : "No draft yet — write one or hit Regenerate"}
             </p>
           </div>
@@ -260,6 +357,18 @@ export default function EmailComposer({ leadId, name, contacts = null, address =
 
           {channel === "WHATSAPP" && (
             <div className="space-y-2.5">
+              {waDevices.length > 1 && (
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">Send from</label>
+                  <Select className="w-full" value={waDevice?.id || ""} onChange={(e) => setWaAccountId(e.target.value)}>
+                    {waDevices.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.label}{d.phoneNumber ? ` · +${d.phoneNumber}` : ""}{d.isDefault ? " · default" : ""}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              )}
               <div>
                 <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">Phone (with country code)</label>
                 <Input value={waPhone} onChange={(e) => setWaPhone(e.target.value)} placeholder="+966 5x xxx xxxx" />
@@ -268,10 +377,17 @@ export default function EmailComposer({ leadId, name, contacts = null, address =
                 <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">Message</label>
                 <Textarea value={waMessage} onChange={(e) => setWaMessage(e.target.value)} className="min-h-44 text-[13px] leading-relaxed" />
               </div>
+              <SignaturePicker
+                signatures={signatures}
+                signature={signature}
+                value={signatureId}
+                onChange={setSignatureId}
+                channel="WHATSAPP"
+              />
               {!waConnected && (
                 <p className="rounded-lg border border-[color-mix(in_oklch,var(--color-info)_35%,transparent)] bg-[color-mix(in_oklch,var(--color-info)_8%,transparent)] p-3 text-xs leading-relaxed text-[var(--text-muted)]">
                   <Settings size={11} className="mr-1 inline" />
-                  WhatsApp is not paired. Scan the QR code in{" "}
+                  No WhatsApp device is connected. Link one in{" "}
                   <Link to="/settings" className="text-[var(--accent)] hover:underline">Settings</Link> to send from here.
                   Until then, use Copy and send it from your phone.
                 </p>
@@ -316,6 +432,13 @@ export default function EmailComposer({ leadId, name, contacts = null, address =
               <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">Body</label>
               <Textarea value={body} onChange={(e) => setBody(e.target.value)} className="min-h-52 font-[inherit] text-[13px] leading-relaxed" />
             </div>
+            <SignaturePicker
+              signatures={signatures}
+              signature={signature}
+              value={signatureId}
+              onChange={setSignatureId}
+              channel="EMAIL"
+            />
           </div>
 
           {draft?.groundingFacts?.length > 0 && (

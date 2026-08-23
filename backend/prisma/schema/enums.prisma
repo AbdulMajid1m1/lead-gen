@@ -233,3 +233,12 @@ enum AiCandidateStatus {
   REJECTED_NO_EXISTENCE // no fetchable site, no map record, nothing confirmed
   REJECTED_EXCLUDED     // matched the brief's exclusions or the suppression list
 }
+
+/// Pairing state of a linked WhatsApp device. PAIRING means a QR is on screen
+/// and we are waiting for the phone to scan it.
+enum WhatsAppAccountStatus {
+  CONNECTED
+  PAIRING
+  DISCONNECTED
+  ERROR
+}

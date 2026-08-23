@@ -1,7 +1,8 @@
 import prisma from "../../prismaClient.js";
 import { sendMail } from "./mailer.js";
 import { findReplies, canReceive } from "./inbox.js";
-import { sendWhatsAppText } from "./whatsapp.js";
+import { sendWhatsAppText, getWhatsAppAccount } from "./whatsapp.js";
+import { resolveSignature, signatureSuffix } from "./signature.js";
 import { followUpTemplate } from "../research/templates.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
 import { log } from "../../utils/logger.js";
@@ -77,19 +78,31 @@ export const phoneSendIsBlocked = async ({ lead, phone }) => {
  * Send a WhatsApp message for a lead and open (or extend) a tracked thread.
  * Same lifecycle as email: lead goes CONTACTED, replies land in the thread.
  */
-export const sendWhatsAppForLead = async ({ leadId, phone, message }) => {
+export const sendWhatsAppForLead = async ({ leadId, phone, message, waAccountId = null, signatureId = undefined }) => {
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { company: true } });
   if (!lead) return { ok: false, error: "Lead not found." };
+
+  const device = await getWhatsAppAccount(waAccountId);
+  if (!device) return { ok: false, error: "No WhatsApp device is linked yet. Add one in Settings." };
 
   const blocked = await phoneSendIsBlocked({ lead, phone });
   if (blocked) return { ok: false, error: blocked };
 
-  const sent = await sendWhatsAppText({ phone, text: message });
+  // The chat form of the signature: two lines, no rule. A formatted block in a
+  // WhatsApp bubble reads as spam.
+  const signature = await resolveSignature({ signatureId });
+  const text = `${message}${signatureSuffix(message, signature, { channel: "WHATSAPP" })}`;
+
+  const sent = await sendWhatsAppText({ accountId: device.id, phone, text });
   if (!sent.ok) return { ok: false, error: sent.error };
 
   const digits = String(phone).replace(/\D/g, "");
+  // Scoped to the device: the same lead may be in conversation on two phones.
   const existing = await prisma.outreachThread.findFirst({
-    where: { leadId, channel: "WHATSAPP", recipientEmail: { endsWith: digits.slice(-9) } },
+    where: {
+      leadId, channel: "WHATSAPP", waAccountId: device.id,
+      recipientEmail: { endsWith: digits.slice(-9) },
+    },
   });
 
   let thread;
@@ -98,7 +111,7 @@ export const sendWhatsAppForLead = async ({ leadId, phone, message }) => {
       data: {
         threadId: existing.id, direction: "OUTBOUND",
         kind: existing.status === "AWAITING_REPLY" ? "FOLLOW_UP" : "INITIAL",
-        subject: "WhatsApp message", body: message.slice(0, 8000),
+        subject: "WhatsApp message", body: text.slice(0, 8000),
         messageId: sent.messageId, sentAt: new Date(),
       },
     });
@@ -109,13 +122,13 @@ export const sendWhatsAppForLead = async ({ leadId, phone, message }) => {
   } else {
     thread = await prisma.outreachThread.create({
       data: {
-        leadId, channel: "WHATSAPP",
+        leadId, channel: "WHATSAPP", waAccountId: device.id,
         recipientEmail: digits, subject: `WhatsApp — ${lead.company.name}`.slice(0, 255),
         status: "AWAITING_REPLY", lastOutboundAt: new Date(),
         messages: {
           create: {
             direction: "OUTBOUND", kind: "INITIAL",
-            subject: "WhatsApp message", body: message.slice(0, 8000),
+            subject: "WhatsApp message", body: text.slice(0, 8000),
             messageId: sent.messageId, sentAt: new Date(),
           },
         },
@@ -138,14 +151,17 @@ export const sendWhatsAppForLead = async ({ leadId, phone, message }) => {
  * Send the initial pitch for a lead and open a tracked thread.
  * Marks the lead CONTACTED and schedules the first follow-up.
  */
-export const sendInitialEmail = async ({ account, leadId, to, subject, body, draftId = null }) => {
+export const sendInitialEmail = async ({
+  account, leadId, to, subject, body, draftId = null, signatureId = undefined,
+}) => {
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { company: true } });
   if (!lead) return { ok: false, error: "Lead not found." };
 
   const blocked = await sendIsBlocked({ lead, recipientEmail: to });
   if (blocked) return { ok: false, error: blocked };
 
-  const sent = await sendMail({ account, to, subject, body });
+  const signature = await resolveSignature({ signatureId, account });
+  const sent = await sendMail({ account, to, subject, body, signature });
   if (!sent.ok) return { ok: false, error: `Sending failed: ${sent.error}` };
 
   const followUpDays = Array.isArray(account.followUpDays) ? account.followUpDays : [3, 7];
@@ -163,7 +179,7 @@ export const sendInitialEmail = async ({ account, leadId, to, subject, body, dra
       messages: {
         create: {
           direction: "OUTBOUND", kind: "INITIAL",
-          subject: subject.slice(0, 255), body: body.slice(0, 8000),
+          subject: subject.slice(0, 255), body: (sent.text || body).slice(0, 8000),
           messageId: sent.messageId, draftId, sentAt: new Date(),
         },
       },
@@ -202,8 +218,11 @@ export const sendFollowUp = async ({ account, threadId }) => {
   const lastOutbound = [...thread.messages].reverse().find((m) => m.direction === "OUTBOUND");
   const subject = thread.subject.startsWith("Re:") ? thread.subject : `Re: ${thread.subject}`;
 
+  // A follow-up signs off the same way the initial email did, so the thread
+  // reads as one person rather than two.
+  const signature = await resolveSignature({ account });
   const sent = await sendMail({
-    account, to: thread.recipientEmail, subject, body,
+    account, to: thread.recipientEmail, subject, body, signature,
     inReplyTo: lastOutbound?.messageId || null,
     references: thread.messages.filter((m) => m.direction === "OUTBOUND" && m.messageId).map((m) => m.messageId),
   });
@@ -215,7 +234,7 @@ export const sendFollowUp = async ({ account, threadId }) => {
   await prisma.outreachMessage.create({
     data: {
       threadId, direction: "OUTBOUND", kind: "FOLLOW_UP",
-      subject: subject.slice(0, 255), body: body.slice(0, 8000),
+      subject: subject.slice(0, 255), body: (sent.text || body).slice(0, 8000),
       messageId: sent.messageId, generatedBy: "RULE", sentAt: new Date(),
     },
   });

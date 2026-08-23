@@ -8,7 +8,11 @@ import {
   getAccount, listAccounts, sendInitialEmail, sendFollowUp, syncReplies, processDueFollowUps,
   sendWhatsAppForLead,
 } from "../../lib/outreach/service.js";
-import { checkSession, logout as whatsappLogout, whatsappStatus } from "../../lib/outreach/whatsapp.js";
+import {
+  checkSession, logoutWhatsApp, whatsappStatusAll, whatsappAccountStatus,
+  listWhatsAppAccounts, createWhatsAppAccount, deleteWhatsAppAccount,
+  getWhatsAppAccount, applyWhatsAppDefault,
+} from "../../lib/outreach/whatsapp.js";
 import { composeForRun } from "../../lib/research/compose.js";
 import { CostTracker } from "../../lib/llm/responses.js";
 
@@ -21,7 +25,8 @@ const sanitizeAccount = (a) => ({
   canReceive: canReceive(a),
   status: a.status, lastError: a.lastError,
   autoFollowUp: a.autoFollowUp, followUpDays: a.followUpDays, maxFollowUps: a.maxFollowUps,
-  signature: a.signature, lastSyncAt: a.lastSyncAt, createdAt: a.createdAt,
+  signature: a.signature, signatureId: a.signatureId,
+  lastSyncAt: a.lastSyncAt, createdAt: a.createdAt,
 });
 
 /**
@@ -73,6 +78,8 @@ export const accountSchema = z.object({
   followUpDays: z.array(z.number().int().min(1).max(60)).max(5).optional(),
   maxFollowUps: z.number().int().min(0).max(5).optional(),
   signature: z.string().max(2000).optional(),
+  /// The Signature row this mailbox signs off with. Explicit null = none.
+  signatureId: z.string().max(64).nullable().optional(),
 });
 
 /** Only one account may be the default; clear the flag everywhere else. */
@@ -132,6 +139,7 @@ const buildAccountData = (input, existing) => {
     ...(input.followUpDays ? { followUpDays: input.followUpDays } : {}),
     ...(input.maxFollowUps !== undefined ? { maxFollowUps: input.maxFollowUps } : {}),
     ...(input.signature !== undefined ? { signature: input.signature || null } : {}),
+    ...(input.signatureId !== undefined ? { signatureId: input.signatureId || null } : {}),
   };
 };
 
@@ -266,11 +274,14 @@ export const sendSchema = z.object({
   draftId: z.string().max(64).optional(),
   /// Which connected mailbox to send from. Omitted = the default sender.
   accountId: z.string().max(64).optional(),
+  /// Which sign-off to append. Omitted = the mailbox's own, then the global
+  /// default. Explicit null = send unsigned.
+  signatureId: z.string().max(64).nullable().optional(),
 });
 
 /** POST /api/outreach/send */
 export const send = asyncHandler(async (req, res) => {
-  const { leadId, to, subject, body, draftId, accountId } = req.body;
+  const { leadId, to, subject, body, draftId, accountId, signatureId } = req.body;
   const account = await getAccount(accountId || null);
   if (!account) {
     throw createError(400, accountId
@@ -279,7 +290,9 @@ export const send = asyncHandler(async (req, res) => {
   }
   if (account.status === "ERROR") throw createError(400, `${account.email} has an error: ${account.lastError || "unknown"}. Re-test it in Settings.`);
 
-  const result = await sendInitialEmail({ account, leadId, to, subject, body, draftId: draftId || null });
+  const result = await sendInitialEmail({
+    account, leadId, to, subject, body, draftId: draftId || null, signatureId,
+  });
   if (!result.ok) throw createError(400, result.error);
 
   res.status(201).json({ success: true, message: `Email sent to ${to} from ${account.email}.`, data: { thread: result.thread } });
@@ -352,44 +365,112 @@ export const composeBatchSchema = z.object({
   runId: z.string().max(64).optional(),
 });
 
-// ─── WhatsApp: QR pairing, status, sending ────────────────────────────────────
+// ─── WhatsApp: linked devices, QR pairing, status, sending ────────────────────
+//
+// Several phones can be linked at once. The singular /session, /status and
+// /logout routes still work and act on the default device, so nothing that
+// called them before this change has to be updated at once.
 
-export const whatsappSessionQuerySchema = z.object({
-  forceNew: z.enum(["true", "false"]).optional(),
+/** GET /api/outreach/whatsapp/accounts — every linked device with live state. */
+export const listWhatsAppAccountInfo = asyncHandler(async (req, res) => {
+  const accounts = await listWhatsAppAccounts();
+  res.json({ success: true, data: { accounts: accounts.map(whatsappAccountStatus) } });
+});
+
+export const whatsappAccountSchema = z.object({
+  label: z.string().trim().min(1).max(80),
 });
 
 /**
- * GET /api/outreach/whatsapp/session — connect or report. Returns
- * `connected` (+ user), `qr_required` (+ data-URL QR to scan), `initializing`,
- * or `disconnected`. `?forceNew=true` wipes the pairing and mints a fresh QR.
+ * POST /api/outreach/whatsapp/accounts — register a device slot.
+ *
+ * The row is created before pairing because the credential folder is keyed by
+ * its id; the phone number is learned from WhatsApp when the QR is scanned,
+ * never typed in.
+ */
+export const createWhatsAppAccountHandler = asyncHandler(async (req, res) => {
+  const account = await createWhatsAppAccount({ label: req.body.label });
+  res.status(201).json({
+    success: true,
+    message: `"${account.label}" added. Scan its QR code to link a phone.`,
+    data: { account: whatsappAccountStatus(account) },
+  });
+});
+
+/** POST /api/outreach/whatsapp/accounts/:id/default */
+export const setDefaultWhatsAppAccount = asyncHandler(async (req, res) => {
+  const existing = await getWhatsAppAccount(req.params.id);
+  if (!existing) throw createError(404, "WhatsApp device not found.");
+  await applyWhatsAppDefault(existing.id);
+  const account = await getWhatsAppAccount(existing.id);
+  res.json({
+    success: true,
+    message: `"${account.label}" is now the default WhatsApp sender.`,
+    data: { account: whatsappAccountStatus(account) },
+  });
+});
+
+/** DELETE /api/outreach/whatsapp/accounts/:id — unlink and forget a device. */
+export const deleteWhatsAppAccountHandler = asyncHandler(async (req, res) => {
+  const existing = await getWhatsAppAccount(req.params.id);
+  if (!existing) throw createError(404, "WhatsApp device not found.");
+  await deleteWhatsAppAccount(existing.id);
+  res.json({
+    success: true,
+    message: `"${existing.label}" unlinked. Its conversations are kept on the leads.`,
+  });
+});
+
+export const whatsappSessionQuerySchema = z.object({
+  forceNew: z.enum(["true", "false"]).optional(),
+  accountId: z.string().max(64).optional(),
+});
+
+/**
+ * GET /api/outreach/whatsapp/session — connect one device, or report on it.
+ * Returns `connected` (+ user), `qr_required` (+ data-URL QR to scan),
+ * `initializing`, or `disconnected`. `?forceNew=true` wipes that device's
+ * pairing and mints a fresh QR.
  */
 export const whatsappSession = asyncHandler(async (req, res) => {
-  const { forceNew } = req.validatedQuery || {};
-  const result = await checkSession({ forceNew: forceNew === "true" });
-  res.json({ success: true, data: result });
+  const { forceNew, accountId } = req.validatedQuery || {};
+  const account = await getWhatsAppAccount(accountId || null);
+  if (!account) throw createError(400, "Add a WhatsApp device in Settings before pairing.");
+  const result = await checkSession(account.id, { forceNew: forceNew === "true" });
+  res.json({ success: true, data: { ...result, accountId: account.id, label: account.label } });
 });
 
-/** GET /api/outreach/whatsapp/status — cheap poll, never initializes. */
+/** GET /api/outreach/whatsapp/status — cheap poll across every device. */
 export const whatsappStatusInfo = asyncHandler(async (req, res) => {
-  res.json({ success: true, data: whatsappStatus() });
+  res.json({ success: true, data: await whatsappStatusAll() });
 });
 
-/** POST /api/outreach/whatsapp/logout */
+export const whatsappLogoutSchema = z.object({ accountId: z.string().max(64).optional() });
+
+/** POST /api/outreach/whatsapp/logout — unpair one device, keep the row. */
 export const whatsappLogoutHandler = asyncHandler(async (req, res) => {
-  await whatsappLogout();
-  res.json({ success: true, message: "WhatsApp disconnected. Scan a new QR to pair again." });
+  const account = await getWhatsAppAccount(req.body?.accountId || null);
+  if (!account) throw createError(404, "No WhatsApp device to disconnect.");
+  await logoutWhatsApp(account.id);
+  res.json({ success: true, message: `"${account.label}" disconnected. Scan a new QR to pair it again.` });
 });
 
 export const whatsappSendSchema = z.object({
   leadId: z.string().min(1).max(64),
   phone: z.string().trim().min(7).max(30),
   message: z.string().trim().min(1).max(4000),
+  /// Which linked device sends. Omitted = the default one.
+  waAccountId: z.string().max(64).optional(),
+  /// Sign-off to append, in its two-line chat form. Explicit null = none.
+  signatureId: z.string().max(64).nullable().optional(),
 });
 
 /** POST /api/outreach/whatsapp/send */
 export const whatsappSend = asyncHandler(async (req, res) => {
-  const { leadId, phone, message } = req.body;
-  const result = await sendWhatsAppForLead({ leadId, phone, message });
+  const { leadId, phone, message, waAccountId, signatureId } = req.body;
+  const result = await sendWhatsAppForLead({
+    leadId, phone, message, waAccountId: waAccountId || null, signatureId,
+  });
   if (!result.ok) throw createError(400, result.error);
   res.status(201).json({ success: true, message: "WhatsApp message sent.", data: { thread: result.thread } });
 });

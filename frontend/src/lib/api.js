@@ -97,10 +97,25 @@ export const api = {
   sendFollowUpNow: (threadId) => request(`/outreach/threads/${threadId}/follow-up`, { method: "POST" }),
   composeBatch: (body) => request("/outreach/compose-batch", { method: "POST", body }),
 
-  // WhatsApp (one QR-paired device)
-  whatsappSession: (forceNew) => request(`/outreach/whatsapp/session${qs(forceNew ? { forceNew: "true" } : {})}`),
+  // ─── Signatures: reusable sign-offs ────────────────────────────────────────
+  // Each row comes back with server-rendered previews (text / html / whatsapp),
+  // so nothing here re-implements how a signature looks.
+  listSignatures: () => request("/signatures"),
+  createSignature: (body) => request("/signatures", { method: "POST", body }),
+  updateSignature: (id, body) => request(`/signatures/${id}`, { method: "PUT", body }),
+  setDefaultSignature: (id) => request(`/signatures/${id}/default`, { method: "POST" }),
+  deleteSignature: (id) => request(`/signatures/${id}`, { method: "DELETE" }),
+
+  // ─── WhatsApp: several QR-paired devices ───────────────────────────────────
+  listWhatsAppAccounts: () => request("/outreach/whatsapp/accounts"),
+  createWhatsAppAccount: (body) => request("/outreach/whatsapp/accounts", { method: "POST", body }),
+  setDefaultWhatsAppAccount: (id) => request(`/outreach/whatsapp/accounts/${id}/default`, { method: "POST" }),
+  deleteWhatsAppAccount: (id) => request(`/outreach/whatsapp/accounts/${id}`, { method: "DELETE" }),
+  whatsappSession: ({ accountId, forceNew } = {}) =>
+    request(`/outreach/whatsapp/session${qs({ accountId, ...(forceNew ? { forceNew: "true" } : {}) })}`),
   whatsappStatus: () => request("/outreach/whatsapp/status"),
-  whatsappLogout: () => request("/outreach/whatsapp/logout", { method: "POST" }),
+  whatsappLogout: (accountId) =>
+    request("/outreach/whatsapp/logout", { method: "POST", body: accountId ? { accountId } : {} }),
   sendWhatsApp: (body) => request("/outreach/whatsapp/send", { method: "POST", body }),
 
   dashboard: () => request("/stats/dashboard"),

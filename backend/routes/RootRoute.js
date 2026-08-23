@@ -8,6 +8,7 @@ import * as discovery from "../controllers/subControllers/discoveryController.js
 import * as stats from "../controllers/subControllers/statsController.js";
 import * as research from "../controllers/subControllers/researchController.js";
 import * as outreach from "../controllers/subControllers/outreachController.js";
+import * as signatures from "../controllers/subControllers/signatureController.js";
 
 const router = Router();
 const idParam = z.object({ id: z.string().min(1).max(64) });
@@ -59,10 +60,24 @@ router.get("/outreach/threads", validate({ query: outreach.threadsQuerySchema })
 router.post("/outreach/threads/:id/follow-up", writeLimiter, validate({ params: idParam }), outreach.followUpNow);
 router.post("/outreach/compose-batch", writeLimiter, validate({ body: outreach.composeBatchSchema }), outreach.composeBatch);
 
-// ─── WhatsApp (one QR-paired device) ─────────────────────────────────────────
+// ─── Signatures: reusable sign-offs, one selected per send ───────────────────
+router.get("/signatures", signatures.list);
+router.post("/signatures", writeLimiter, validate({ body: signatures.signatureSchema }), signatures.create);
+router.put("/signatures/:id", writeLimiter, validate({ params: idParam, body: signatures.signatureSchema }), signatures.update);
+router.post("/signatures/:id/default", writeLimiter, validate({ params: idParam }), signatures.setDefault);
+router.delete("/signatures/:id", writeLimiter, validate({ params: idParam }), signatures.remove);
+
+// ─── WhatsApp (several QR-paired devices) ────────────────────────────────────
+// The plural /accounts routes manage devices; the singular /session, /status
+// and /logout act on the default device and predate multi-device support.
+router.get("/outreach/whatsapp/accounts", outreach.listWhatsAppAccountInfo);
+router.post("/outreach/whatsapp/accounts", writeLimiter, validate({ body: outreach.whatsappAccountSchema }), outreach.createWhatsAppAccountHandler);
+router.post("/outreach/whatsapp/accounts/:id/default", writeLimiter, validate({ params: idParam }), outreach.setDefaultWhatsAppAccount);
+router.delete("/outreach/whatsapp/accounts/:id", writeLimiter, validate({ params: idParam }), outreach.deleteWhatsAppAccountHandler);
+
 router.get("/outreach/whatsapp/session", validate({ query: outreach.whatsappSessionQuerySchema }), outreach.whatsappSession);
 router.get("/outreach/whatsapp/status", outreach.whatsappStatusInfo);
-router.post("/outreach/whatsapp/logout", writeLimiter, outreach.whatsappLogoutHandler);
+router.post("/outreach/whatsapp/logout", writeLimiter, validate({ body: outreach.whatsappLogoutSchema }), outreach.whatsappLogoutHandler);
 router.post("/outreach/whatsapp/send", writeLimiter, validate({ body: outreach.whatsappSendSchema }), outreach.whatsappSend);
 
 // ─── Reference data & operations ──────────────────────────────────────────────

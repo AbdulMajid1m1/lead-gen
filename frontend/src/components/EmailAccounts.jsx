@@ -58,6 +58,7 @@ const emptyForm = (provider = "GMAIL") => ({
   displayName: "",
   replyTo: "",
   signature: "",
+  signatureId: "",
   autoFollowUp: true,
   maxFollowUps: 2,
   imapPassword: "",
@@ -71,6 +72,7 @@ const formFrom = (account) => ({
   displayName: account.displayName || "",
   replyTo: account.replyTo || "",
   signature: account.signature || "",
+  signatureId: account.signatureId || "",
   autoFollowUp: account.autoFollowUp,
   maxFollowUps: account.maxFollowUps,
   smtpHost: account.smtpHost || "",
@@ -99,6 +101,12 @@ const AccountEditor = ({ account, onDone }) => {
   const preset = PROVIDERS[form.provider];
   const isNew = !account;
 
+  const { data: signatureData } = useQuery({ queryKey: ["signatures"], queryFn: api.listSignatures });
+  const signatures = signatureData?.signatures || [];
+  const chosenSignature =
+    signatures.find((s) => s.id === form.signatureId) || (form.signatureId ? null : signatures.find((s) => s.isDefault));
+  const signaturePreview = chosenSignature?.preview?.text || null;
+
   const set = (key) => (value) => setForm((f) => ({ ...f, [key]: value }));
 
   const switchProvider = (provider) => {
@@ -121,6 +129,8 @@ const AccountEditor = ({ account, onDone }) => {
     imapUser: form.imapUser.trim(),
     ...(form.imapPassword ? { imapPassword: form.imapPassword } : {}),
     signature: form.signature,
+    // Explicit null clears the link; "" from the select means "none chosen".
+    signatureId: form.signatureId || null,
     autoFollowUp: form.autoFollowUp,
     maxFollowUps: Number(form.maxFollowUps),
   });
@@ -196,10 +206,26 @@ const AccountEditor = ({ account, onDone }) => {
       </div>
 
       <div className="mt-3">
-        <Labelled label="Signature (appended to every email from this mailbox)">
-          <Textarea className="min-h-16 w-full" value={form.signature} onChange={(e) => set("signature")(e.target.value)} placeholder={"Abdul Majid\nhttps://your-site.com"} />
+        <Labelled label="Default signature" hint="the composer can still pick another per email">
+          <Select className="w-full" value={form.signatureId} onChange={(e) => set("signatureId")(e.target.value)}>
+            <option value="">Use the global default</option>
+            {signatures.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}{s.isDefault ? " · default" : ""}</option>
+            ))}
+          </Select>
         </Labelled>
+        {signaturePreview && (
+          <pre className="mt-2 whitespace-pre-wrap rounded-lg border border-[var(--border)] bg-[var(--surface-raised)] p-3 font-[inherit] text-[12px] leading-snug text-[var(--text-muted)]">{signaturePreview}</pre>
+        )}
       </div>
+
+      {form.signature && (
+        <div className="mt-3">
+          <Labelled label="Legacy signature text" hint="only used when no signature above is selected">
+            <Textarea className="min-h-16 w-full" value={form.signature} onChange={(e) => set("signature")(e.target.value)} />
+          </Labelled>
+        </div>
+      )}
 
       <label className="mt-3 flex items-center gap-2 text-[13px]">
         <input type="checkbox" className="accent-[var(--accent)]" checked={form.autoFollowUp} onChange={(e) => set("autoFollowUp")(e.target.checked)} />

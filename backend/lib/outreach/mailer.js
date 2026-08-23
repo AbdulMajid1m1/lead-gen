@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { buildEmailHtml, signatureSuffix } from "./signature.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("outreach:mailer");
@@ -36,22 +37,44 @@ export const verifySmtp = async (account) => {
 };
 
 /**
- * Send one plain-text email. Returns the RFC Message-ID the message went out
- * with, which is what reply detection later matches In-Reply-To against.
+ * Send one email as multipart text + HTML.
+ *
+ * Both parts carry the same sign-off from the same Signature row: the text part
+ * gets `renderSignatureText`, the HTML part the styled block. Sending text-only
+ * would mean the styled signature never renders; sending HTML-only would break
+ * for clients set to plain text, so both go out and the client picks.
+ *
+ * The body itself arrives *without* a signature — the composer keeps the two
+ * separate so the sign-off can be swapped without editing the message. The
+ * `signatureSuffix` dedupe still guards the case where one was pasted in.
+ *
+ * Returns the RFC Message-ID the message went out with, which is what reply
+ * detection later matches In-Reply-To against.
  */
-export const sendMail = async ({ account, to, subject, body, inReplyTo = null, references = [] }) => {
+export const sendMail = async ({
+  account, to, subject, body, signature = null, inReplyTo = null, references = [],
+}) => {
   const transport = buildTransport(account);
   try {
-    const text = account.signature ? `${body}\n\n${account.signature}` : body;
+    // A mailbox configured before Signature rows existed still has its freeform
+    // string; it is the fallback when no structured signature was resolved.
+    const legacyText = signature ? null : account.signature || null;
+    const text = signature
+      ? `${body}${signatureSuffix(body, signature)}`
+      : legacyText ? `${body}\n\n${legacyText}` : body;
+
     const info = await transport.sendMail({
       from: account.displayName ? `"${account.displayName}" <${account.email}>` : account.email,
       to,
       subject,
       text,
+      html: buildEmailHtml({ body, signature, legacyText }),
       ...(account.replyTo ? { replyTo: account.replyTo } : {}),
       ...(inReplyTo ? { inReplyTo, references: [...references, inReplyTo] } : {}),
     });
-    return { ok: true, messageId: info.messageId };
+    // `text` comes back so the caller can store exactly what was sent — the
+    // thread history should match the recipient's inbox, signature included.
+    return { ok: true, messageId: info.messageId, text };
   } catch (err) {
     logger.error({ from: account.email, to, msg: err.message }, "send failed");
     return { ok: false, error: err.message };

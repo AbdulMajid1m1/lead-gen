@@ -72,7 +72,12 @@ model EmailAccount {
   autoFollowUp Boolean @default(true)
   followUpDays Json    @default("[3, 7]")
   maxFollowUps Int     @default(2)
+  /// Legacy freeform sign-off, kept as the last fallback when no Signature row
+  /// is selected anywhere. New setups should use `signatureId` instead.
   signature    String? @db.VarChar(2000)
+  /// The sign-off this mailbox uses unless the composer picks another.
+  signatureId      String?
+  defaultSignature Signature? @relation(fields: [signatureId], references: [id], onDelete: SetNull)
 
   lastSyncAt DateTime?
   createdAt  DateTime  @default(now())
@@ -90,10 +95,14 @@ model OutreachThread {
   id     String @id @default(cuid())
   leadId String
   lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  /// The sending mailbox — null for WhatsApp threads, which go through the
-  /// single QR-paired device instead of a mailbox.
+  /// The sending mailbox — null on WhatsApp threads, which go out through a
+  /// paired device instead.
   accountId String?
   account   EmailAccount? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  /// The paired device a WhatsApp thread belongs to. SetNull rather than
+  /// Cascade: unpairing a phone must not delete the conversations it held.
+  waAccountId String?
+  waAccount   WhatsAppAccount? @relation(fields: [waAccountId], references: [id], onDelete: SetNull)
 
   channel OutreachChannel @default(EMAIL)
   /// Email address for EMAIL threads; phone number for WHATSAPP threads.
@@ -113,6 +122,7 @@ model OutreachThread {
 
   @@index([leadId])
   @@index([status, nextFollowUpAt])
+  @@index([waAccountId, status])
 }
 
 model OutreachMessage {

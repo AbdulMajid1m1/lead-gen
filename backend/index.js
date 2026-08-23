@@ -9,6 +9,7 @@ import { errorHandler, notFoundHandler } from "./middlewares/errorHandler.js";
 import { generalLimiter } from "./middlewares/rateLimiter.js";
 import { PORT, NODE_ENV, ALLOWED_ORIGINS } from "./configs/envConfig.js";
 import { logger } from "./utils/logger.js";
+import { restoreSessions } from "./lib/outreach/whatsapp.js";
 import prisma from "./prismaClient.js";
 
 const app = express();
@@ -61,6 +62,11 @@ app.use(errorHandler);
 
 const server = app.listen(PORT, () => {
   logger.info({ port: PORT, env: NODE_ENV }, "LeadSignal API listening");
+  // Re-open the sockets for WhatsApp devices that were paired before this
+  // restart. Deliberately here and not on import of the module: the worker
+  // imports it too, and two processes holding a socket for the same device
+  // would keep evicting each other. Deferred so Prisma is connected first.
+  setTimeout(() => { restoreSessions().catch(() => {}); }, 3000);
 });
 
 // SSE streams hold connections open; give them a chance to close cleanly

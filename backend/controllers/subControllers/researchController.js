@@ -5,7 +5,9 @@ import { parseWithLlm } from "../../lib/nlquery/llmParser.js";
 import { buildResearchPlan } from "../../lib/nlquery/planner.js";
 import { buildBrief, saveBrief } from "../../lib/research/brief.js";
 import { getGrid } from "../../lib/research/grid.js";
-import { composeEmailForLead } from "../../lib/research/compose.js";
+import { composeEmailForLead, gatherFacts } from "../../lib/research/compose.js";
+import { initialTemplate } from "../../lib/research/templates.js";
+import { SERVICE_LABELS } from "../../lib/scoring/scoreEngine.js";
 import { createDiscoveryRun, startDiscoveryRun } from "../../lib/discovery/runner.js";
 import { isResearchAvailable, CostTracker } from "../../lib/llm/responses.js";
 import { createError } from "../../utils/createError.js";
@@ -138,6 +140,43 @@ export const getHistory = asyncHandler(async (req, res) => {
 });
 
 /** GET /api/leads/:id/email-drafts */
+/**
+ * Build a draft on the fly, without saving it or calling an AI.
+ *
+ * Only leads that went through a deep-research run have a stored
+ * LeadEmailDraft; a lead found by ordinary discovery has none, which is why the
+ * composer used to open with an empty subject and body and no way to tell that
+ * anything was wrong. This produces the same deterministic template the
+ * Regenerate button falls back to, from the same verified facts — instant, free
+ * and grounded — so the composer is never blank.
+ *
+ * Deliberately not persisted: it is a starting point, not a record of something
+ * that was written. Hitting Regenerate is what commits a real draft.
+ */
+const buildSuggestion = async (leadId) => {
+  const gathered = await gatherFacts(leadId);
+  if (!gathered) return null;
+  const { lead, company, facts } = gathered;
+  const serviceKey = lead.primaryOpportunity;
+  const draft = initialTemplate({
+    company, facts, serviceKey,
+    serviceLabel: SERVICE_LABELS[serviceKey] || "software development",
+  });
+  return {
+    // No id: this row does not exist, and `draftId` must stay null on send or
+    // the outbound message would point at a foreign key that was never written.
+    id: null,
+    subject: draft.subject,
+    body: draft.body,
+    aboutCompany: draft.aboutCompany,
+    generatedBy: "RULE",
+    confidenceLevel: "INFERRED",
+    groundingFacts: facts,
+    factIdsUsed: draft.factIdsUsed,
+    isSuggestion: true,
+  };
+};
+
 export const listEmailDrafts = asyncHandler(async (req, res) => {
   const drafts = await prisma.leadEmailDraft.findMany({
     where: { leadId: req.params.id },
@@ -152,7 +191,9 @@ export const listEmailDrafts = asyncHandler(async (req, res) => {
         generatedBy: d.generatedBy, confidenceLevel: d.confidenceLevel,
         groundingFacts: d.groundingFacts, factIdsUsed: d.factIdsUsed,
         model: d.model, promptVersion: d.promptVersion, createdAt: d.createdAt,
+        isSuggestion: false,
       })),
+      suggestion: drafts.length ? null : await buildSuggestion(req.params.id),
     },
   });
 });

@@ -15,52 +15,68 @@ import { log } from "../../utils/logger.js";
 const logger = log("outreach:whatsapp");
 
 /**
- * WhatsApp sending over Baileys — a pure WebSocket client, no browser needed,
- * ported from the SLIC_POS implementation. One device pairs by scanning a QR
- * code; credentials persist in AUTH_FOLDER so the session survives restarts.
+ * WhatsApp sending over Baileys — a pure WebSocket client, no browser needed.
  *
- * Improvements over the reference: incoming messages from contacts we have
- * open threads with are recorded as replies in real time (the reference was
- * send-only), and every send lands in the same OutreachThread/OutreachMessage
- * tables as email, so the UI shows one conversation history per lead.
+ * Several devices can be linked at once. Each WhatsAppAccount row owns a socket
+ * and a credential folder (.baileys_auth/<accountId>), held together in the
+ * `sessions` map below. This used to be a single module-level socket; the map
+ * is the whole difference, and it is why every function here takes an accountId.
+ *
+ * Two things follow from multi-device that are easy to get wrong:
+ *
+ *  · An incoming message must be matched only against threads belonging to the
+ *    device that received it. Matching globally would attribute a reply to
+ *    whichever thread happened to share the last nine digits, on any phone.
+ *  · A device's DB row is the source of truth for "is this paired", not the
+ *    in-memory socket — the process restarts, the pairing does not.
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const AUTH_FOLDER = process.env.WHATSAPP_AUTH_DIR || path.join(here, "../../.baileys_auth");
+const AUTH_ROOT = process.env.WHATSAPP_AUTH_DIR || path.join(here, "../../.baileys_auth");
 const MAX_RECONNECT_ATTEMPTS = 3;
+const QR_WAIT_MS = 60_000;
 
 const baileysLogger = pino({ level: "silent" });
 
-let sock = null;
-let isConnected = false;
-let currentQRCodeDataURL = null;
-let isIntentionalLogout = false;
-let initializationInProgress = false;
-let userInfo = null;
-let reconnectAttempts = 0;
+/** accountId → live socket state. Absent means "not connected right now". */
+const sessions = new Map();
 
-const cleanupAuthFolder = () => {
+const blankState = () => ({
+  sock: null,
+  connected: false,
+  qr: null,
+  user: null,
+  initializing: false,
+  intentionalLogout: false,
+  reconnectAttempts: 0,
+});
+
+const stateFor = (accountId) => {
+  if (!sessions.has(accountId)) sessions.set(accountId, blankState());
+  return sessions.get(accountId);
+};
+
+const authDir = (accountId) => path.join(AUTH_ROOT, accountId);
+const hasCreds = (accountId) => fs.existsSync(path.join(authDir(accountId), "creds.json"));
+
+const wipeCreds = (accountId) => {
   try {
-    fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
+    fs.rmSync(authDir(accountId), { recursive: true, force: true });
   } catch (err) {
-    logger.warn({ msg: err.message }, "could not clean auth folder");
+    logger.warn({ accountId, msg: err.message }, "could not clean auth folder");
   }
 };
 
-const hasExistingSession = () => fs.existsSync(path.join(AUTH_FOLDER, "creds.json"));
-
-const quickDisconnect = () => {
-  if (sock) {
+const dropSocket = (accountId) => {
+  const state = sessions.get(accountId);
+  if (!state) return;
+  if (state.sock) {
     try {
-      sock.ev.removeAllListeners();
-      sock.end();
+      state.sock.ev.removeAllListeners();
+      state.sock.end();
     } catch { /* already gone */ }
-    sock = null;
   }
-  isConnected = false;
-  currentQRCodeDataURL = null;
-  userInfo = null;
-  initializationInProgress = false;
+  sessions.set(accountId, { ...blankState(), reconnectAttempts: state.reconnectAttempts });
 };
 
 /** Digits only; a leading 0 with no country code cannot be routed. */
@@ -71,11 +87,69 @@ export const toJid = (phone) => {
 
 const numberFromJid = (jid) => String(jid || "").split(":")[0].split("@")[0];
 
+const markStatus = (accountId, data) =>
+  prisma.whatsAppAccount.update({ where: { id: accountId }, data }).catch((err) =>
+    logger.warn({ accountId, msg: err.message }, "could not persist WhatsApp account status"),
+  );
+
+// ─── Accounts ─────────────────────────────────────────────────────────────────
+
+export const listWhatsAppAccounts = () =>
+  prisma.whatsAppAccount.findMany({ orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }] });
+
+/** Only one device may be the default; clear the flag everywhere else. */
+export const applyWhatsAppDefault = async (accountId) => {
+  await prisma.whatsAppAccount.updateMany({ where: { id: { not: accountId } }, data: { isDefault: false } });
+  await prisma.whatsAppAccount.update({ where: { id: accountId }, data: { isDefault: true } });
+};
+
 /**
- * A message arriving from a number we have an open WhatsApp thread with is a
- * reply: record it and stop any follow-up.
+ * Resolve the device to send from: the one asked for, else the default, else
+ * the first connected one. Falls back to *any* row so the caller can produce a
+ * "pair it first" error rather than a confusing "no account".
  */
-const handleIncoming = async (messages) => {
+export const getWhatsAppAccount = async (accountId = null) => {
+  if (accountId) return prisma.whatsAppAccount.findUnique({ where: { id: accountId } });
+  const connectedIds = [...sessions.entries()].filter(([, s]) => s.connected).map(([id]) => id);
+  return (
+    (await prisma.whatsAppAccount.findFirst({ where: { isDefault: true } })) ||
+    (connectedIds.length
+      ? await prisma.whatsAppAccount.findFirst({ where: { id: { in: connectedIds } } })
+      : null) ||
+    prisma.whatsAppAccount.findFirst({ orderBy: { createdAt: "asc" } })
+  );
+};
+
+export const createWhatsAppAccount = async ({ label }) => {
+  const isFirst = (await prisma.whatsAppAccount.count()) === 0;
+  return prisma.whatsAppAccount.create({
+    data: { label: label.trim().slice(0, 80), isDefault: isFirst },
+  });
+};
+
+/** Unlink a device: log the socket out, wipe its credentials, drop the row. */
+export const deleteWhatsAppAccount = async (accountId) => {
+  await logoutWhatsApp(accountId).catch(() => {});
+  sessions.delete(accountId);
+  wipeCreds(accountId);
+  const account = await prisma.whatsAppAccount.findUnique({ where: { id: accountId } });
+  await prisma.whatsAppAccount.delete({ where: { id: accountId } });
+  if (account?.isDefault) {
+    const next = await prisma.whatsAppAccount.findFirst({ orderBy: { createdAt: "asc" } });
+    if (next) await applyWhatsAppDefault(next.id);
+  }
+};
+
+// ─── Incoming ─────────────────────────────────────────────────────────────────
+
+/**
+ * A message arriving from a number this device has an open thread with is a
+ * reply: record it and stop any follow-up.
+ *
+ * Scoped to `waAccountId` — see the module note. A thread opened on the sales
+ * phone must not be closed by a message that arrived on the personal one.
+ */
+const handleIncoming = async (accountId, messages) => {
   for (const msg of messages || []) {
     try {
       if (!msg?.key || msg.key.fromMe) continue;
@@ -93,6 +167,7 @@ const handleIncoming = async (messages) => {
         where: {
           channel: "WHATSAPP",
           status: "AWAITING_REPLY",
+          waAccountId: accountId,
           recipientEmail: { endsWith: fromNumber.slice(-9) },
         },
         orderBy: { updatedAt: "desc" },
@@ -123,46 +198,49 @@ const handleIncoming = async (messages) => {
           note: `WhatsApp reply from ${fromNumber}: "${(text || "").slice(0, 120)}"`,
         },
       });
-      logger.info({ threadId: thread.id, fromNumber }, "WhatsApp reply recorded");
+      logger.info({ accountId, threadId: thread.id, fromNumber }, "WhatsApp reply recorded");
     } catch (err) {
-      logger.warn({ msg: err.message }, "incoming WhatsApp message handling failed");
+      logger.warn({ accountId, msg: err.message }, "incoming WhatsApp message handling failed");
     }
   }
 };
 
+// ─── Connection ───────────────────────────────────────────────────────────────
+
 /**
- * Bring the socket up. Resolves with whichever happens first: a QR to scan,
- * a ready connection, a terminal close reason, or a 60s timeout.
+ * Bring one device's socket up. Resolves with whichever happens first: a QR to
+ * scan, a ready connection, a terminal close reason, or the QR timeout.
  */
-export const initializeConnection = async (forceNew = false) => {
-  if (initializationInProgress) return { status: "initializing" };
-  initializationInProgress = true;
+export const initializeConnection = async (accountId, forceNew = false) => {
+  const state = stateFor(accountId);
+  if (state.initializing) return { status: "initializing" };
+  state.initializing = true;
 
   try {
     if (forceNew) {
-      quickDisconnect();
-      cleanupAuthFolder();
+      dropSocket(accountId);
+      wipeCreds(accountId);
+      stateFor(accountId).initializing = true;
     }
-    fs.mkdirSync(AUTH_FOLDER, { recursive: true });
+    fs.mkdirSync(authDir(accountId), { recursive: true });
 
-    const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
+    const { state: authState, saveCreds } = await useMultiFileAuthState(authDir(accountId));
     const { version } = await fetchLatestBaileysVersion();
 
     return await new Promise((resolve) => {
       let resolved = false;
       const settle = (value) => {
-        if (!resolved) {
-          resolved = true;
-          initializationInProgress = false;
-          resolve(value);
-        }
+        if (resolved) return;
+        resolved = true;
+        stateFor(accountId).initializing = false;
+        resolve(value);
       };
 
-      sock = makeWASocket({
+      const sock = makeWASocket({
         version,
         logger: baileysLogger,
         printQRInTerminal: false,
-        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, baileysLogger) },
+        auth: { creds: authState.creds, keys: makeCacheableSignalKeyStore(authState.keys, baileysLogger) },
         browser: ["Ubuntu", "Chrome", "20.0.04"],
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
@@ -172,142 +250,229 @@ export const initializeConnection = async (forceNew = false) => {
         keepAliveIntervalMs: 30_000,
         getMessage: async () => ({ conversation: "" }),
       });
+      stateFor(accountId).sock = sock;
 
       sock.ev.on("creds.update", saveCreds);
-      sock.ev.on("messages.upsert", ({ messages }) => handleIncoming(messages));
+      sock.ev.on("messages.upsert", ({ messages }) => handleIncoming(accountId, messages));
 
       sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
+        const s = stateFor(accountId);
 
         if (qr) {
           try {
-            currentQRCodeDataURL = await QRCode.toDataURL(qr);
-            settle({ status: "qr", qrCode: currentQRCodeDataURL });
+            s.qr = await QRCode.toDataURL(qr);
+            await markStatus(accountId, { status: "PAIRING", lastError: null });
+            settle({ status: "qr", qrCode: s.qr });
           } catch (err) {
-            logger.error({ msg: err.message }, "QR encoding failed");
+            logger.error({ accountId, msg: err.message }, "QR encoding failed");
           }
         }
 
         if (connection === "open") {
-          isConnected = true;
-          currentQRCodeDataURL = null;
-          reconnectAttempts = 0;
+          s.connected = true;
+          s.qr = null;
+          s.reconnectAttempts = 0;
           if (sock.user) {
-            userInfo = {
+            s.user = {
               id: sock.user.id,
               name: sock.user.verifiedName || sock.user.notify || sock.user.name || "WhatsApp User",
               number: numberFromJid(sock.user.id),
             };
           }
-          logger.info({ number: userInfo?.number }, "WhatsApp connected");
-          settle({ status: "ready", user: userInfo });
+          // The number is discovered here, never typed by the user. Two rows
+          // may not claim the same phone, so a re-pair onto an already-linked
+          // number keeps the row and just refreshes what it knows.
+          await markStatus(accountId, {
+            status: "CONNECTED",
+            lastError: null,
+            lastConnectedAt: new Date(),
+            ...(s.user?.number ? { phoneNumber: s.user.number } : {}),
+            ...(s.user?.name ? { pushName: s.user.name.slice(0, 120) } : {}),
+          });
+          logger.info({ accountId, number: s.user?.number }, "WhatsApp connected");
+          settle({ status: "ready", user: s.user });
         }
 
         if (connection === "close") {
           const statusCode =
             lastDisconnect?.error?.output?.statusCode ||
             lastDisconnect?.error?.output?.payload?.statusCode;
-          isConnected = false;
-          currentQRCodeDataURL = null;
+          s.connected = false;
+          s.qr = null;
 
-          if (isIntentionalLogout) {
-            cleanupAuthFolder();
-            isIntentionalLogout = false;
-            reconnectAttempts = 0;
-            settle({ status: "logged_out", needsQR: true });
-            return;
-          }
-          if (statusCode === DisconnectReason.loggedOut) {
-            cleanupAuthFolder();
-            reconnectAttempts = 0;
+          if (s.intentionalLogout || statusCode === DisconnectReason.loggedOut) {
+            dropSocket(accountId);
+            wipeCreds(accountId);
+            await markStatus(accountId, { status: "DISCONNECTED", phoneNumber: null });
             settle({ status: "logged_out", needsQR: true });
             return;
           }
           if (statusCode === DisconnectReason.connectionReplaced) {
+            await markStatus(accountId, {
+              status: "ERROR",
+              lastError: "This device was linked somewhere else — pair it again to send from here.",
+            });
             settle({ status: "replaced" });
             return;
           }
           // Transient closes get a few automatic reconnects.
-          reconnectAttempts += 1;
-          if (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS) {
-            quickDisconnect();
-            setTimeout(() => { initializeConnection(false).catch(() => {}); }, 3000);
+          s.reconnectAttempts += 1;
+          if (s.reconnectAttempts <= MAX_RECONNECT_ATTEMPTS) {
+            const attempts = s.reconnectAttempts;
+            dropSocket(accountId);
+            stateFor(accountId).reconnectAttempts = attempts;
+            setTimeout(() => { initializeConnection(accountId, false).catch(() => {}); }, 3000);
           } else {
-            quickDisconnect();
+            dropSocket(accountId);
+            await markStatus(accountId, { status: "DISCONNECTED" });
             settle({ status: "disconnected", needsQR: true });
           }
         }
       });
 
-      setTimeout(() => settle({ status: "timeout", needsQR: true }), 60_000);
+      setTimeout(() => settle({ status: "timeout", needsQR: true }), QR_WAIT_MS);
     });
   } catch (err) {
-    initializationInProgress = false;
-    logger.error({ msg: err.message }, "WhatsApp initialization failed");
+    stateFor(accountId).initializing = false;
+    logger.error({ accountId, msg: err.message }, "WhatsApp initialization failed");
+    await markStatus(accountId, { status: "ERROR", lastError: String(err.message).slice(0, 500) });
     return { status: "error", error: err.message };
   }
 };
 
-/** The connect/QR endpoint's whole answer in one call. */
-export const checkSession = async ({ forceNew = false } = {}) => {
-  if (isConnected && sock && !forceNew) {
-    return { status: "connected", user: userInfo };
-  }
-  if (!forceNew && currentQRCodeDataURL) {
-    return { status: "qr_required", qrCode: currentQRCodeDataURL };
-  }
-  const result = await initializeConnection(forceNew || !hasExistingSession() ? forceNew : false);
-  if (result.status === "ready") return { status: "connected", user: userInfo };
+/** The connect/QR endpoint's whole answer for one device, in one call. */
+export const checkSession = async (accountId, { forceNew = false } = {}) => {
+  const state = stateFor(accountId);
+  if (state.connected && state.sock && !forceNew) return { status: "connected", user: state.user };
+  if (!forceNew && state.qr) return { status: "qr_required", qrCode: state.qr };
+
+  const result = await initializeConnection(accountId, forceNew);
+  if (result.status === "ready") return { status: "connected", user: stateFor(accountId).user };
   if (result.status === "qr") return { status: "qr_required", qrCode: result.qrCode };
   if (result.status === "initializing") return { status: "initializing" };
   return { status: "disconnected", detail: result.status, error: result.error || null };
 };
 
-export const logout = async () => {
-  isIntentionalLogout = true;
+export const logoutWhatsApp = async (accountId) => {
+  const state = stateFor(accountId);
+  state.intentionalLogout = true;
   try {
-    await sock?.logout();
+    await state.sock?.logout();
   } catch { /* session may already be dead */ }
-  quickDisconnect();
-  cleanupAuthFolder();
-  isIntentionalLogout = false;
+  dropSocket(accountId);
+  wipeCreds(accountId);
+  await markStatus(accountId, { status: "DISCONNECTED", phoneNumber: null }).catch(() => {});
   return { ok: true };
 };
 
-export const whatsappStatus = () => ({
-  connected: isConnected,
-  user: userInfo,
-  hasSession: hasExistingSession(),
-});
+/** Live state for one device, merged with what the DB row remembers. */
+export const whatsappAccountStatus = (account) => {
+  const state = sessions.get(account.id) || blankState();
+  return {
+    id: account.id,
+    label: account.label,
+    isDefault: account.isDefault,
+    phoneNumber: account.phoneNumber,
+    pushName: account.pushName,
+    status: account.status,
+    lastError: account.lastError,
+    lastConnectedAt: account.lastConnectedAt,
+    createdAt: account.createdAt,
+    connected: state.connected,
+    // A stored credential folder means the pairing survives a restart, so the
+    // UI can say "reconnecting" instead of "not paired" while it comes back up.
+    hasSession: hasCreds(account.id),
+    pendingQr: Boolean(state.qr),
+    user: state.user,
+  };
+};
 
-/** Send one text message. The caller owns thread bookkeeping. */
-export const sendWhatsAppText = async ({ phone, text }) => {
-  if (!isConnected || !sock) {
-    return { ok: false, error: "WhatsApp is not connected. Pair the device in Settings first." };
+/** Every device with its live state. */
+export const whatsappStatusAll = async () => {
+  const accounts = await listWhatsAppAccounts();
+  const devices = accounts.map(whatsappAccountStatus);
+  return {
+    accounts: devices,
+    // Kept for the pre-multi-device shape of this endpoint: true when *any*
+    // device can send right now.
+    connected: devices.some((d) => d.connected),
+    user: devices.find((d) => d.connected)?.user || null,
+    hasSession: devices.some((d) => d.hasSession),
+  };
+};
+
+/** Send one text message from one device. The caller owns thread bookkeeping. */
+export const sendWhatsAppText = async ({ accountId, phone, text }) => {
+  const state = sessions.get(accountId);
+  if (!state?.connected || !state.sock) {
+    return { ok: false, error: "That WhatsApp device is not connected. Pair it in Settings first." };
   }
   const jid = toJid(phone);
   if (!jid) return { ok: false, error: "That phone number cannot be used on WhatsApp (include the country code)." };
 
   try {
     // Verify the number is actually registered before sending into the void.
-    const [check] = await sock.onWhatsApp(jid);
+    const [check] = await state.sock.onWhatsApp(jid);
     if (!check?.exists) return { ok: false, error: `${phone} is not registered on WhatsApp.` };
-    const sent = await sock.sendMessage(check.jid, { text });
+    const sent = await state.sock.sendMessage(check.jid, { text });
     return { ok: true, messageId: sent?.key?.id || null, jid: check.jid };
   } catch (err) {
-    logger.error({ phone, msg: err.message }, "WhatsApp send failed");
+    logger.error({ accountId, phone, msg: err.message }, "WhatsApp send failed");
     return { ok: false, error: err.message };
   }
 };
 
-/** Restore the session on boot when the device was paired before. */
-if (hasExistingSession()) {
-  setTimeout(() => {
-    initializeConnection(false).catch((err) =>
-      logger.warn({ msg: err.message }, "WhatsApp auto-restore failed"),
-    );
-  }, 3000);
-}
+// ─── Boot ─────────────────────────────────────────────────────────────────────
 
-process.on("SIGINT", () => quickDisconnect());
-process.on("SIGTERM", () => quickDisconnect());
+/**
+ * Move a pre-multi-device credential folder into a real account.
+ *
+ * The old layout kept creds.json directly under .baileys_auth. Rehoming it
+ * under an account id means an existing pairing survives this change — the
+ * alternative is silently asking the user to re-scan a QR they already scanned.
+ */
+const migrateLegacySession = async () => {
+  const legacyCreds = path.join(AUTH_ROOT, "creds.json");
+  if (!fs.existsSync(legacyCreds)) return;
+
+  const account =
+    (await prisma.whatsAppAccount.findFirst({ orderBy: { createdAt: "asc" } })) ||
+    (await prisma.whatsAppAccount.create({ data: { label: "WhatsApp", isDefault: true } }));
+
+  if (hasCreds(account.id)) return; // already migrated; leave the stray files
+  fs.mkdirSync(authDir(account.id), { recursive: true });
+  for (const entry of fs.readdirSync(AUTH_ROOT, { withFileTypes: true })) {
+    if (entry.isDirectory()) continue;
+    fs.renameSync(path.join(AUTH_ROOT, entry.name), path.join(authDir(account.id), entry.name));
+  }
+  logger.info({ accountId: account.id }, "migrated the pre-multi-device WhatsApp session");
+};
+
+/**
+ * Restore every device that was paired before the process restarted.
+ *
+ * Called explicitly from index.js rather than on import, and *only* there. The
+ * worker imports this module too (through the outreach service), and if both
+ * processes opened a socket for the same device WhatsApp would keep evicting
+ * one with `connectionReplaced` while they fought over the pairing. The API
+ * owns the sockets; the worker only ever sends email.
+ */
+export const restoreSessions = async () => {
+  try {
+    fs.mkdirSync(AUTH_ROOT, { recursive: true });
+    await migrateLegacySession();
+    for (const account of await listWhatsAppAccounts()) {
+      if (!hasCreds(account.id)) continue;
+      initializeConnection(account.id, false).catch((err) =>
+        logger.warn({ accountId: account.id, msg: err.message }, "WhatsApp auto-restore failed"),
+      );
+    }
+  } catch (err) {
+    logger.warn({ msg: err.message }, "WhatsApp session restore skipped");
+  }
+};
+
+const shutdown = () => { for (const id of sessions.keys()) dropSocket(id); };
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
