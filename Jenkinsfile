@@ -107,7 +107,7 @@ pipeline {
                     extensions: [[$class: 'CloneOption', shallow: true, depth: 1, noTags: true]],
                     userRemoteConfigs: [[
                         credentialsId: 'abdulmajid-git-credentials',
-                        url: 'https://github.com/AbdulMajid1m1/leadsignal.git'
+                        url: 'https://github.com/AbdulMajid1m1/lead-gen.git'
                     ]]
                 )
                 script {

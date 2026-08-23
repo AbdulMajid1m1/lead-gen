@@ -88,8 +88,8 @@ Docker named volumes (survive everything short of `docker volume rm`):
 #     leadgenapi.deventiatech.com
 
 # 2 — Get the code onto the server once, just to run bootstrap.
-git clone -b prod https://github.com/AbdulMajid1m1/leadsignal.git /tmp/leadsignal
-sudo bash /tmp/leadsignal/deploy/scripts/bootstrap-server.sh
+git clone -b prod https://github.com/AbdulMajid1m1/lead-gen.git /tmp/lead-gen
+sudo bash /tmp/lead-gen/deploy/scripts/bootstrap-server.sh
 
 # 3 — TLS certificates.
 sudo certbot --nginx -d leadgen.deventiatech.com
@@ -112,7 +112,7 @@ New **Pipeline** job → *Pipeline script from SCM*:
 | Field | Value |
 |---|---|
 | SCM | Git |
-| Repository | `https://github.com/AbdulMajid1m1/leadsignal.git` |
+| Repository | `https://github.com/AbdulMajid1m1/lead-gen.git` |
 | Credentials | `abdulmajid-git-credentials` |
 | Branch | `*/prod` |
 | Script Path | `Jenkinsfile` |
