@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
-import { LayoutDashboard, Search, Users, Radar, Settings, Moon, Sun, Signal, Sparkles, LogOut } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { LayoutDashboard, Search, Users, Radar, Settings, Moon, Sun, Signal, Sparkles, LogOut, Inbox } from "lucide-react";
+import { api } from "./lib/api.js";
 import { cn } from "./lib/format.js";
 import SearchPage from "./pages/SearchPage.jsx";
 import ResearchPage from "./pages/ResearchPage.jsx";
@@ -10,6 +12,7 @@ import LeadsPage from "./pages/LeadsPage.jsx";
 import LeadDetailPage from "./pages/LeadDetailPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import DiscoveryPage from "./pages/DiscoveryPage.jsx";
+import InboxPage from "./pages/InboxPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import { useAuth } from "./lib/auth.jsx";
@@ -20,9 +23,30 @@ const NAV = [
   { to: "/research", label: "Deep research", icon: Sparkles },
   { to: "/search", label: "Quick search", icon: Search },
   { to: "/leads", label: "All leads", icon: Users },
+  // `badge` marks the one item that carries a count. Sits directly under the
+  // lead-finding screens because it is where a lead goes after you contact it.
+  { to: "/inbox", label: "Inbox", icon: Inbox, badge: true },
   { to: "/discovery", label: "Discovery runs", icon: Radar },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
+
+/**
+ * How many outreach threads are actually waiting on the user: replies nobody
+ * has judged, plus follow-ups that have come due.
+ *
+ * Shares its query key with the Inbox page, so opening the page costs nothing
+ * and acting on a thread updates the badge without a second request.
+ */
+const useAttentionCount = () => {
+  const { data } = useQuery({
+    queryKey: ["outreach-inbox", "", ""],
+    queryFn: () => api.outreachInbox({ bucket: "", channel: "" }),
+    refetchInterval: 60_000,
+    // A failed badge must never take the app down with it.
+    retry: false,
+  });
+  return (data?.counts?.replied || 0) + (data?.counts?.due || 0);
+};
 
 const useTheme = () => {
   const [theme, setTheme] = useState(() => localStorage.getItem("leadsignal-theme") || "dark");
@@ -37,6 +61,7 @@ export default function App() {
   const [theme, setTheme] = useTheme();
   const location = useLocation();
   const { user, checking, signOut } = useAuth();
+  const attention = useAttentionCount();
 
   // A route change should always start at the top of the new page.
   useEffect(() => { window.scrollTo(0, 0); }, [location.pathname]);
@@ -71,7 +96,7 @@ export default function App() {
         </div>
 
         <nav className="flex-1 space-y-0.5 px-3">
-          {NAV.map(({ to, label, icon: Icon, end }) => (
+          {NAV.map(({ to, label, icon: Icon, end, badge }) => (
             <NavLink
               key={to}
               to={to}
@@ -85,6 +110,14 @@ export default function App() {
                 )}
             >
               <Icon size={15} />{label}
+              {badge && attention > 0 && (
+                <span
+                  className="tnum ml-auto rounded-full bg-[var(--accent)] px-1.5 py-px text-[10px] font-semibold text-[var(--accent-fg)]"
+                  aria-label={`${attention} threads need attention`}
+                >
+                  {attention > 99 ? "99+" : attention}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
@@ -111,16 +144,24 @@ export default function App() {
 
       {/* Mobile navigation */}
       <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t border-[var(--border)] bg-[color-mix(in_oklch,var(--surface-raised)_86%,transparent)] backdrop-blur-lg md:hidden">
-        {NAV.map(({ to, label, icon: Icon, end }) => (
+        {NAV.map(({ to, label, icon: Icon, end, badge }) => (
           <NavLink
             key={to}
             to={to}
             end={end}
             className={({ isActive }) =>
-              cn("flex flex-1 flex-col items-center gap-1 py-2.5 text-[10px]",
+              cn("relative flex flex-1 flex-col items-center gap-1 py-2.5 text-[10px]",
                 isActive ? "text-[var(--accent)]" : "text-[var(--text-muted)]")}
           >
             <Icon size={17} />{label.split(" ")[0]}
+            {badge && attention > 0 && (
+              <span
+                className="tnum absolute right-1/2 top-1.5 -mr-3 rounded-full bg-[var(--accent)] px-1 py-px text-[9px] font-semibold text-[var(--accent-fg)]"
+                aria-label={`${attention} threads need attention`}
+              >
+                {attention > 9 ? "9+" : attention}
+              </span>
+            )}
           </NavLink>
         ))}
       </nav>
@@ -133,6 +174,7 @@ export default function App() {
           <Route path="/research/history" element={<ResearchHistoryPage />} />
           <Route path="/leads" element={<LeadsPage />} />
           <Route path="/leads/:id" element={<LeadDetailPage />} />
+          <Route path="/inbox" element={<InboxPage />} />
           <Route path="/discovery" element={<DiscoveryPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>

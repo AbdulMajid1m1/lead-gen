@@ -27,12 +27,72 @@ export const STATUS_LABELS = {
   QUALIFIED: "Qualified",
   CONTACTED: "Contacted",
   FOLLOW_UP: "Follow up",
+  REPLIED: "Replied",
   INTERESTED: "Interested",
   CONVERTED: "Converted",
   NOT_INTERESTED: "Not interested",
   DISQUALIFIED: "Disqualified",
   ARCHIVED: "Archived",
   DO_NOT_CONTACT: "Do not contact",
+};
+
+/**
+ * Status colour carries one meaning only: whose move is it?
+ *
+ * Accent = yours, right now (they replied). Positive = going well. Caution =
+ * waiting on them. Neutral = nothing owed by anyone. Critical = stop.
+ * Everything else on the page defers to this, so a scan of the list finds the
+ * accent rows first without reading a word.
+ */
+export const STATUS_TONE = {
+  NEW: "var(--text-subtle)",
+  QUALIFIED: "var(--color-info)",
+  CONTACTED: "var(--color-caution)",
+  FOLLOW_UP: "var(--color-caution)",
+  REPLIED: "var(--accent)",
+  INTERESTED: "var(--color-positive)",
+  CONVERTED: "var(--color-positive)",
+  NOT_INTERESTED: "var(--text-subtle)",
+  DISQUALIFIED: "var(--text-subtle)",
+  ARCHIVED: "var(--text-subtle)",
+  DO_NOT_CONTACT: "var(--color-critical)",
+};
+
+/**
+ * The Inbox buckets, in the order they are worked. `blurb` is what the empty
+ * state says — phrased as reassurance, since an empty bucket here is good news.
+ */
+export const INBOX_BUCKETS = {
+  replied: {
+    label: "Needs reply",
+    tone: "var(--accent)",
+    hint: "They answered. Nobody has decided anything yet.",
+    blurb: "No unanswered replies. Everything anyone sent you has been dealt with.",
+  },
+  due: {
+    label: "Follow-up due",
+    tone: "var(--color-caution)",
+    hint: "The next chase is scheduled for now or earlier.",
+    blurb: "Nothing is due. The next chase will appear here when its day arrives.",
+  },
+  waiting: {
+    label: "Waiting",
+    tone: "var(--color-info)",
+    hint: "Sent, no reply yet, next chase already booked.",
+    blurb: "Nothing is in flight. Send a first message from a lead to start a thread.",
+  },
+  silent: {
+    label: "Went quiet",
+    tone: "var(--text-subtle)",
+    hint: "Every follow-up spent and still no reply — worth a different angle, not another email.",
+    blurb: "No dead ends. Every thread is either live or resolved.",
+  },
+  closed: {
+    label: "Closed",
+    tone: "var(--text-subtle)",
+    hint: "Replied and judged, bounced, or closed out.",
+    blurb: "Nothing closed out yet.",
+  },
 };
 
 export const ACTION_LABELS = {
@@ -99,3 +159,45 @@ export const formatDateTime = (value) => {
 
 export const titleize = (value) =>
   String(value || "").toLowerCase().replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+
+/**
+ * "2h ago", "in 3 days", "just now" — the phrasing a person uses when asked
+ * when something happened. Past and future both, because the Inbox shows when
+ * a reply landed and when the next chase is due in the same column.
+ */
+export const relativeTime = (value) => {
+  if (!value) return "—";
+  const then = new Date(value).getTime();
+  if (Number.isNaN(then)) return "—";
+
+  const diff = then - Date.now();
+  const future = diff > 0;
+  const mins = Math.round(Math.abs(diff) / 60000);
+
+  if (mins < 1) return "just now";
+  const [amount, unit] =
+    mins < 60 ? [mins, "min"]
+    : mins < 1440 ? [Math.round(mins / 60), "hour"]
+    : mins < 43200 ? [Math.round(mins / 1440), "day"]
+    : [Math.round(mins / 43200), "month"];
+
+  const phrase = `${amount} ${unit}${amount === 1 ? "" : "s"}`;
+  return future ? `in ${phrase}` : `${phrase} ago`;
+};
+
+/** Same idea, compressed for a badge: "2h", "3d", "in 5d". */
+export const relativeShort = (value) => {
+  if (!value) return "—";
+  const then = new Date(value).getTime();
+  if (Number.isNaN(then)) return "—";
+  const diff = then - Date.now();
+  const mins = Math.round(Math.abs(diff) / 60000);
+
+  const compact =
+    mins < 1 ? "now"
+    : mins < 60 ? `${mins}m`
+    : mins < 1440 ? `${Math.round(mins / 60)}h`
+    : `${Math.round(mins / 1440)}d`;
+
+  return diff > 0 && compact !== "now" ? `in ${compact}` : compact;
+};

@@ -109,6 +109,8 @@ export const api = {
   sendOutreachEmail: (body) => request("/outreach/send", { method: "POST", body }),
   syncOutreach: (accountId) => request("/outreach/sync", { method: "POST", body: accountId ? { accountId } : {} }),
   listThreads: (leadId) => request(`/outreach/threads${qs({ leadId })}`),
+  // The working queue: who replied, what chase is due, what is still in flight.
+  outreachInbox: (params) => request(`/outreach/inbox${qs(params)}`),
   sendFollowUpNow: (threadId) => request(`/outreach/threads/${threadId}/follow-up`, { method: "POST" }),
   composeBatch: (body) => request("/outreach/compose-batch", { method: "POST", body }),
 
@@ -124,6 +126,7 @@ export const api = {
   // ─── WhatsApp: several QR-paired devices ───────────────────────────────────
   listWhatsAppAccounts: () => request("/outreach/whatsapp/accounts"),
   createWhatsAppAccount: (body) => request("/outreach/whatsapp/accounts", { method: "POST", body }),
+  updateWhatsAppAccount: (id, body) => request(`/outreach/whatsapp/accounts/${id}`, { method: "PUT", body }),
   setDefaultWhatsAppAccount: (id) => request(`/outreach/whatsapp/accounts/${id}/default`, { method: "POST" }),
   deleteWhatsAppAccount: (id) => request(`/outreach/whatsapp/accounts/${id}`, { method: "DELETE" }),
   whatsappSession: ({ accountId, forceNew } = {}) =>

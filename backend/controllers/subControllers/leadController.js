@@ -321,7 +321,7 @@ const contactDto = (c) => ({
 });
 
 export const statusSchema = z.object({
-  status: z.enum(["NEW", "QUALIFIED", "CONTACTED", "FOLLOW_UP", "INTERESTED", "CONVERTED", "NOT_INTERESTED", "DISQUALIFIED", "ARCHIVED", "DO_NOT_CONTACT"]),
+  status: z.enum(["NEW", "QUALIFIED", "CONTACTED", "FOLLOW_UP", "REPLIED", "INTERESTED", "CONVERTED", "NOT_INTERESTED", "DISQUALIFIED", "ARCHIVED", "DO_NOT_CONTACT"]),
   note: z.string().max(1000).optional(),
 });
 

@@ -78,6 +78,7 @@ router.post("/outreach/account/test", writeLimiter, outreach.testAccount);
 router.delete("/outreach/account", writeLimiter, outreach.deleteAccount);
 router.post("/outreach/send", writeLimiter, validate({ body: outreach.sendSchema }), outreach.send);
 router.post("/outreach/sync", writeLimiter, validate({ body: outreach.syncQuerySchema }), outreach.syncNow);
+router.get("/outreach/inbox", validate({ query: outreach.inboxQuerySchema }), outreach.inbox);
 router.get("/outreach/threads", validate({ query: outreach.threadsQuerySchema }), outreach.listThreads);
 router.post("/outreach/threads/:id/follow-up", writeLimiter, validate({ params: idParam }), outreach.followUpNow);
 router.post("/outreach/compose-batch", writeLimiter, validate({ body: outreach.composeBatchSchema }), outreach.composeBatch);
@@ -94,6 +95,7 @@ router.delete("/signatures/:id", writeLimiter, validate({ params: idParam }), si
 // and /logout act on the default device and predate multi-device support.
 router.get("/outreach/whatsapp/accounts", outreach.listWhatsAppAccountInfo);
 router.post("/outreach/whatsapp/accounts", writeLimiter, validate({ body: outreach.whatsappAccountSchema }), outreach.createWhatsAppAccountHandler);
+router.put("/outreach/whatsapp/accounts/:id", writeLimiter, validate({ params: idParam, body: outreach.whatsappAccountUpdateSchema }), outreach.updateWhatsAppAccountHandler);
 router.post("/outreach/whatsapp/accounts/:id/default", writeLimiter, validate({ params: idParam }), outreach.setDefaultWhatsAppAccount);
 router.delete("/outreach/whatsapp/accounts/:id", writeLimiter, validate({ params: idParam }), outreach.deleteWhatsAppAccountHandler);
 

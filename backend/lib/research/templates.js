@@ -159,6 +159,27 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel }) =>
  * Follow-ups when a thread has had no reply. Deliberately shorter each time;
  * the second is also the last.
  */
+/**
+ * The chat form of a follow-up: one short paragraph, no salutation, no sign-off
+ * block. An email-shaped message in a WhatsApp bubble reads as a broadcast and
+ * gets blocked, so this is deliberately not the same copy as the email chase.
+ */
+export const whatsappFollowUpTemplate = ({ company, serviceLabel, followUpNumber }) => {
+  if (followUpNumber <= 1) {
+    return {
+      body:
+        `Hi — just following up on my message about ${company.name}. `
+        + `If ${serviceLabel} is something you're looking at, happy to share a couple of ideas. `
+        + `If not, no problem at all.`,
+    };
+  }
+  return {
+    body:
+      `Last note from me — I won't keep messaging. `
+      + `If ${serviceLabel} for ${company.name} ever becomes useful, just reply here and it'll reach me.`,
+  };
+};
+
 export const followUpTemplate = ({ company, serviceLabel, followUpNumber }) => {
   if (followUpNumber <= 1) {
     return {

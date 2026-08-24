@@ -190,14 +190,11 @@ const handleIncoming = async (accountId, messages) => {
         where: { id: thread.id },
         data: { status: "REPLIED", repliedAt: new Date(), nextFollowUpAt: null },
       });
-      await prisma.leadStatusHistory.create({
-        data: {
-          leadId: thread.leadId,
-          fromStatus: null,
-          toStatus: "FOLLOW_UP",
-          note: `WhatsApp reply from ${fromNumber}: "${(text || "").slice(0, 120)}"`,
-        },
-      });
+      // Same rule as the email side — see lib/outreach/leadStatus.js. Imported
+      // lazily because whatsapp.js is loaded at boot to restore sockets, and a
+      // static import would pull the scoring engine into that path.
+      const { onReplyReceived } = await import("./leadStatus.js");
+      await onReplyReceived({ leadId: thread.leadId, channel: "WHATSAPP", from: fromNumber, snippet: text });
       logger.info({ accountId, threadId: thread.id, fromNumber }, "WhatsApp reply recorded");
     } catch (err) {
       logger.warn({ accountId, msg: err.message }, "incoming WhatsApp message handling failed");
@@ -379,6 +376,9 @@ export const whatsappAccountStatus = (account) => {
     lastError: account.lastError,
     lastConnectedAt: account.lastConnectedAt,
     createdAt: account.createdAt,
+    autoFollowUp: account.autoFollowUp,
+    followUpDays: account.followUpDays,
+    maxFollowUps: account.maxFollowUps,
     connected: state.connected,
     // A stored credential folder means the pairing survives a restart, so the
     // UI can say "reconnecting" instead of "not paired" while it comes back up.

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  MessageCircle, QrCode, LogOut, RefreshCw, CheckCircle2, Plus, Star, Trash2, Check,
+  MessageCircle, QrCode, LogOut, RefreshCw, CheckCircle2, Plus, Star, Trash2, Check, Clock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../lib/api.js";
@@ -81,6 +81,18 @@ const DeviceRow = ({ device }) => {
     onError: (err) => toast.error(err.message),
   });
 
+  const updateFollowUp = useMutation({
+    mutationFn: (body) => api.updateWhatsAppAccount(device.id, body),
+    onSuccess: () => { toast.success("Follow-up settings saved."); invalidate(); },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const cadence = Array.isArray(device.followUpDays) ? device.followUpDays : [3, 7];
+  const cadenceText = cadence
+    .slice(0, device.maxFollowUps)
+    .map((d, i) => (i === 0 ? `after ${d} days` : `then ${d} more`))
+    .join(", ");
+
   return (
     <li className="rounded-lg border border-[var(--border)] bg-[var(--surface-raised)]">
       <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-3">
@@ -134,6 +146,45 @@ const DeviceRow = ({ device }) => {
             <Trash2 size={12} />
           </Button>
         </div>
+      </div>
+
+      {/*
+        Chasing settings live on the device, not globally: a shared sales phone
+        and a personal one rarely want the same cadence, and WhatsApp is far
+        less forgiving than email about unattended messages to strangers.
+      */}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-[var(--border)] px-3.5 py-2.5">
+        <label className="flex items-center gap-2 text-[12px] text-[var(--text-muted)]">
+          <input
+            type="checkbox"
+            className="accent-[var(--accent)]"
+            checked={device.autoFollowUp ?? true}
+            disabled={updateFollowUp.isPending}
+            onChange={(e) => updateFollowUp.mutate({ autoFollowUp: e.target.checked })}
+          />
+          <span className="text-[var(--text)]">Chase automatically when there is no reply</span>
+          {device.autoFollowUp && device.maxFollowUps > 0 && (
+            <span className="inline-flex items-center gap-1 text-[var(--text-subtle)]">
+              <Clock size={10} />{cadenceText}
+            </span>
+          )}
+        </label>
+
+        <label className="flex items-center gap-2 text-[12px] text-[var(--text-muted)]">
+          Max follow-ups
+          <Input
+            type="number" min="0" max="5"
+            className="w-16 px-2 py-1 text-[12px]"
+            defaultValue={device.maxFollowUps ?? 2}
+            disabled={updateFollowUp.isPending}
+            onBlur={(e) => {
+              const next = Number(e.target.value);
+              if (Number.isInteger(next) && next >= 0 && next <= 5 && next !== device.maxFollowUps) {
+                updateFollowUp.mutate({ maxFollowUps: next });
+              }
+            }}
+          />
+        </label>
       </div>
 
       {qr && !device.connected && (

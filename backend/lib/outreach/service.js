@@ -1,15 +1,36 @@
 import prisma from "../../prismaClient.js";
 import { sendMail } from "./mailer.js";
 import { findReplies, canReceive } from "./inbox.js";
-import { sendWhatsAppText, getWhatsAppAccount } from "./whatsapp.js";
+import { sendWhatsAppText, getWhatsAppAccount, listWhatsAppAccounts } from "./whatsapp.js";
 import { resolveSignature, signatureSuffix } from "./signature.js";
-import { followUpTemplate } from "../research/templates.js";
+import { followUpTemplate, whatsappFollowUpTemplate } from "../research/templates.js";
+import { onInitialSent, onFollowUpSent, onReplyReceived, onFollowUpsExhausted } from "./leadStatus.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("outreach:service");
 
 const ACTIVE = { status: { not: "DISABLED" } };
+
+const DAY_MS = 86_400_000;
+
+/**
+ * When the next chase on this thread is due, or null when the sequence is spent.
+ *
+ * `followUpDays` is the gap *before* each follow-up: [3, 7] means chase 3 days
+ * after the initial message, then 7 days after that one. Shared by email and
+ * WhatsApp so both channels honour one definition of the cadence.
+ *
+ * @param {{followUpDays: unknown, maxFollowUps: number}} config
+ * @param {number} followUpsSent how many chases have already gone out
+ */
+export const nextFollowUpDate = (config, followUpsSent = 0) => {
+  const days = Array.isArray(config?.followUpDays) ? config.followUpDays : [3, 7];
+  const max = Number.isFinite(config?.maxFollowUps) ? config.maxFollowUps : 2;
+  if (followUpsSent >= max) return null;
+  const gap = Number(days[followUpsSent]);
+  return Number.isFinite(gap) && gap > 0 ? new Date(Date.now() + gap * DAY_MS) : null;
+};
 
 /** Every usable mailbox, default first, then oldest first. */
 export const listAccounts = () =>
@@ -107,17 +128,29 @@ export const sendWhatsAppForLead = async ({ leadId, phone, message, waAccountId 
 
   let thread;
   if (existing) {
+    // Messaging an open thread by hand *is* a follow-up, and it resets the
+    // clock — the scheduler must not fire again three days after the original
+    // message when a human already chased today. Messaging a thread that was
+    // replied to or closed starts a fresh round instead.
+    const isManualFollowUp = existing.status === "AWAITING_REPLY";
+    const followUpsSent = isManualFollowUp ? existing.followUpsSent + 1 : 0;
+
     await prisma.outreachMessage.create({
       data: {
         threadId: existing.id, direction: "OUTBOUND",
-        kind: existing.status === "AWAITING_REPLY" ? "FOLLOW_UP" : "INITIAL",
+        kind: isManualFollowUp ? "FOLLOW_UP" : "INITIAL",
         subject: "WhatsApp message", body: text.slice(0, 8000),
         messageId: sent.messageId, sentAt: new Date(),
       },
     });
     thread = await prisma.outreachThread.update({
       where: { id: existing.id },
-      data: { status: "AWAITING_REPLY", lastOutboundAt: new Date() },
+      data: {
+        status: "AWAITING_REPLY",
+        lastOutboundAt: new Date(),
+        followUpsSent,
+        nextFollowUpAt: nextFollowUpDate(device, followUpsSent),
+      },
     });
   } else {
     thread = await prisma.outreachThread.create({
@@ -125,6 +158,7 @@ export const sendWhatsAppForLead = async ({ leadId, phone, message, waAccountId 
         leadId, channel: "WHATSAPP", waAccountId: device.id,
         recipientEmail: digits, subject: `WhatsApp — ${lead.company.name}`.slice(0, 255),
         status: "AWAITING_REPLY", lastOutboundAt: new Date(),
+        nextFollowUpAt: nextFollowUpDate(device, 0),
         messages: {
           create: {
             direction: "OUTBOUND", kind: "INITIAL",
@@ -136,14 +170,12 @@ export const sendWhatsAppForLead = async ({ leadId, phone, message, waAccountId 
     });
   }
 
-  if (!["CONTACTED", "FOLLOW_UP", "INTERESTED", "CONVERTED"].includes(lead.status)) {
-    await prisma.lead.update({ where: { id: leadId }, data: { status: "CONTACTED" } });
-    await prisma.leadStatusHistory.create({
-      data: { leadId, fromStatus: lead.status, toStatus: "CONTACTED", note: `WhatsApp message sent to ${digits}.` },
-    });
-  }
+  await onInitialSent({
+    leadId, currentStatus: lead.status, channel: "WHATSAPP",
+    recipient: digits, via: device.label,
+  });
 
-  logger.info({ leadId, phone: digits, threadId: thread.id }, "WhatsApp outreach sent");
+  logger.info({ leadId, phone: digits, threadId: thread.id, nextFollowUpAt: thread.nextFollowUpAt }, "WhatsApp outreach sent");
   return { ok: true, thread };
 };
 
@@ -164,10 +196,7 @@ export const sendInitialEmail = async ({
   const sent = await sendMail({ account, to, subject, body, signature });
   if (!sent.ok) return { ok: false, error: `Sending failed: ${sent.error}` };
 
-  const followUpDays = Array.isArray(account.followUpDays) ? account.followUpDays : [3, 7];
-  const nextFollowUpAt = account.maxFollowUps > 0 && followUpDays[0]
-    ? new Date(Date.now() + followUpDays[0] * 86_400_000)
-    : null;
+  const nextFollowUpAt = nextFollowUpDate(account, 0);
 
   const thread = await prisma.outreachThread.create({
     data: {
@@ -187,14 +216,12 @@ export const sendInitialEmail = async ({
     include: { messages: true },
   });
 
-  if (!["CONTACTED", "FOLLOW_UP", "INTERESTED", "CONVERTED"].includes(lead.status)) {
-    await prisma.lead.update({ where: { id: leadId }, data: { status: "CONTACTED" } });
-    await prisma.leadStatusHistory.create({
-      data: { leadId, fromStatus: lead.status, toStatus: "CONTACTED", note: `Email sent to ${to} via ${account.email}.` },
-    });
-  }
+  await onInitialSent({
+    leadId, currentStatus: lead.status, channel: "EMAIL",
+    recipient: to, via: account.email,
+  });
 
-  logger.info({ leadId, to, threadId: thread.id }, "outreach email sent");
+  logger.info({ leadId, to, threadId: thread.id, nextFollowUpAt }, "outreach email sent");
   return { ok: true, thread };
 };
 
@@ -228,8 +255,7 @@ export const sendFollowUp = async ({ account, threadId }) => {
   });
   if (!sent.ok) return { ok: false, error: `Sending failed: ${sent.error}` };
 
-  const followUpDays = Array.isArray(account.followUpDays) ? account.followUpDays : [3, 7];
-  const nextGapDays = followUpDays[followUpNumber] || null;
+  const nextFollowUpAt = nextFollowUpDate(account, followUpNumber);
 
   await prisma.outreachMessage.create({
     data: {
@@ -240,16 +266,73 @@ export const sendFollowUp = async ({ account, threadId }) => {
   });
   const updated = await prisma.outreachThread.update({
     where: { id: threadId },
-    data: {
-      followUpsSent: followUpNumber,
-      lastOutboundAt: new Date(),
-      nextFollowUpAt: followUpNumber < account.maxFollowUps && nextGapDays
-        ? new Date(Date.now() + nextGapDays * 86_400_000)
-        : null,
-    },
+    data: { followUpsSent: followUpNumber, lastOutboundAt: new Date(), nextFollowUpAt },
   });
 
-  logger.info({ threadId, followUpNumber }, "follow-up sent");
+  await onFollowUpSent({
+    leadId: thread.leadId, channel: "EMAIL",
+    followUpNumber, recipient: thread.recipientEmail,
+  });
+  if (!nextFollowUpAt) {
+    await onFollowUpsExhausted({ leadId: thread.leadId, channel: "EMAIL", recipient: thread.recipientEmail });
+  }
+
+  logger.info({ threadId, followUpNumber, nextFollowUpAt }, "follow-up sent");
+  return { ok: true, thread: updated };
+};
+
+/**
+ * Send one WhatsApp follow-up on a thread. The email twin above, minus the
+ * reply-chain headers WhatsApp has no equivalent of — continuity there comes
+ * from the chat itself, so the message just has to be short and human.
+ */
+export const sendWhatsAppFollowUp = async ({ device, threadId }) => {
+  const thread = await prisma.outreachThread.findUnique({
+    where: { id: threadId },
+    include: { lead: { include: { company: true } } },
+  });
+  if (!thread) return { ok: false, error: "Thread not found." };
+  if (thread.channel !== "WHATSAPP") return { ok: false, error: "Not a WhatsApp thread." };
+  if (thread.status !== "AWAITING_REPLY") return { ok: false, error: `Thread is ${thread.status.toLowerCase()} — no follow-up needed.` };
+  if (thread.followUpsSent >= device.maxFollowUps) return { ok: false, error: "Follow-up limit reached for this thread." };
+
+  const blocked = await phoneSendIsBlocked({ lead: thread.lead, phone: thread.recipientEmail });
+  if (blocked) return { ok: false, error: blocked };
+
+  const followUpNumber = thread.followUpsSent + 1;
+  const serviceLabel = SERVICE_LABELS[thread.lead.primaryOpportunity] || "software development";
+  const { body } = whatsappFollowUpTemplate({ company: thread.lead.company, serviceLabel, followUpNumber });
+
+  // The same sign-off the first message used, so the chat reads as one person.
+  const signature = await resolveSignature({});
+  const text = `${body}${signatureSuffix(body, signature, { channel: "WHATSAPP" })}`;
+
+  const sent = await sendWhatsAppText({ accountId: device.id, phone: thread.recipientEmail, text });
+  if (!sent.ok) return { ok: false, error: `Sending failed: ${sent.error}` };
+
+  const nextFollowUpAt = nextFollowUpDate(device, followUpNumber);
+
+  await prisma.outreachMessage.create({
+    data: {
+      threadId, direction: "OUTBOUND", kind: "FOLLOW_UP",
+      subject: "WhatsApp follow-up", body: text.slice(0, 8000),
+      messageId: sent.messageId, generatedBy: "RULE", sentAt: new Date(),
+    },
+  });
+  const updated = await prisma.outreachThread.update({
+    where: { id: threadId },
+    data: { followUpsSent: followUpNumber, lastOutboundAt: new Date(), nextFollowUpAt },
+  });
+
+  await onFollowUpSent({
+    leadId: thread.leadId, channel: "WHATSAPP",
+    followUpNumber, recipient: thread.recipientEmail,
+  });
+  if (!nextFollowUpAt) {
+    await onFollowUpsExhausted({ leadId: thread.leadId, channel: "WHATSAPP", recipient: thread.recipientEmail });
+  }
+
+  logger.info({ threadId, followUpNumber, nextFollowUpAt }, "WhatsApp follow-up sent");
   return { ok: true, thread: updated };
 };
 
@@ -316,11 +399,11 @@ export const syncReplies = async ({ account }) => {
       where: { id: hit.threadId },
       data: { status: "REPLIED", repliedAt: hit.date, nextFollowUpAt: null },
     });
-    await prisma.leadStatusHistory.create({
-      data: {
-        leadId: thread.leadId, fromStatus: null, toStatus: "FOLLOW_UP",
-        note: `Reply received from ${hit.from}: "${(hit.snippet || hit.subject || "").slice(0, 120)}"`,
-      },
+    // Moves Lead.status itself, not just the timeline. Until this call existed
+    // a replied-to lead still read as CONTACTED everywhere outside the thread.
+    await onReplyReceived({
+      leadId: thread.leadId, channel: "EMAIL",
+      from: hit.from, snippet: hit.snippet || hit.subject,
     });
     replies += 1;
   }
@@ -331,6 +414,42 @@ export const syncReplies = async ({ account }) => {
   });
   logger.info({ checked: open.length, replies }, "reply sync complete");
   return { checked: open.length, replies };
+};
+
+/**
+ * How a failed scheduled send is handled.
+ *
+ * The distinction matters: a suppressed contact must never be retried, but a
+ * mailbox that was briefly unreachable — or a WhatsApp socket reconnecting —
+ * must not silently cost the lead its whole follow-up sequence. Cancelling on
+ * every failure is what the first version of this did, and it meant one flaky
+ * minute quietly ended outreach to that company for good.
+ */
+const TRANSIENT_PATTERNS = [
+  /not connected/i,
+  /timed?\s?-?\s?out/i,
+  /econn|enotfound|eai_again|epipe|etimedout/i,
+  /socket|network|unreachable/i,
+  /temporar|try again|rate.?limit|too many/i,
+  /\b4\.\d\.\d\b/, // SMTP 4.x.x — transient by definition
+];
+
+/** Give up retrying a thread that has been stuck this long; something is wrong. */
+const RETRY_WINDOW_MS = 14 * DAY_MS;
+const RETRY_GAP_MS = 60 * 60 * 1000;
+
+/**
+ * When to try this thread again after a failed send, or null to stop trying.
+ * @param {string} error the failure message from the sender
+ * @param {Date|null} lastOutboundAt when we last successfully sent on this thread
+ */
+export const retryAfterFailure = (error, lastOutboundAt) => {
+  const transient = TRANSIENT_PATTERNS.some((re) => re.test(String(error || "")));
+  if (!transient) return null;
+  // Bounded so an unpaired device or a dead mailbox cannot retry forever.
+  const since = lastOutboundAt ? Date.now() - new Date(lastOutboundAt).getTime() : 0;
+  if (since > RETRY_WINDOW_MS) return null;
+  return new Date(Date.now() + RETRY_GAP_MS);
 };
 
 /** Send every follow-up that has come due. Respects the account toggle. */
@@ -350,22 +469,68 @@ export const processDueFollowUps = async ({ account, force = false }) => {
     const res = await sendFollowUp({ account, threadId: thread.id });
     if (res.ok) sent += 1;
     else {
-      // A blocked or failed thread must not be retried forever.
-      await prisma.outreachThread.update({ where: { id: thread.id }, data: { nextFollowUpAt: null } });
-      logger.warn({ threadId: thread.id, msg: res.error }, "scheduled follow-up skipped");
+      const nextFollowUpAt = retryAfterFailure(res.error, thread.lastOutboundAt);
+      await prisma.outreachThread.update({ where: { id: thread.id }, data: { nextFollowUpAt } });
+      logger.warn(
+        { threadId: thread.id, msg: res.error, retryAt: nextFollowUpAt },
+        nextFollowUpAt ? "scheduled follow-up deferred" : "scheduled follow-up cancelled",
+      );
     }
   }
   return { sent, due: due.length };
 };
 
 /**
- * One pass of the outreach automation across every connected mailbox: pull
- * replies first (so a thread that was answered an hour ago never gets a
- * follow-up), then send what is due. One failing mailbox never stops the rest.
+ * The WhatsApp twin of processDueFollowUps.
+ *
+ * Kept separate rather than generalised because the two channels genuinely
+ * differ: email chases are matched to a mailbox by `accountId` and can be sent
+ * through any relay, while WhatsApp chases can only leave through the one
+ * paired device that opened the thread — and only while that device's socket is
+ * actually connected. Sending into a dead socket would burn the follow-up.
+ */
+export const processDueWhatsAppFollowUps = async ({ device, force = false }) => {
+  if (!device.autoFollowUp && !force) return { sent: 0, skipped: "auto follow-up disabled" };
+  if (device.status !== "CONNECTED") return { sent: 0, skipped: `device is ${device.status.toLowerCase()}` };
+
+  const due = await prisma.outreachThread.findMany({
+    where: {
+      waAccountId: device.id,
+      channel: "WHATSAPP",
+      status: "AWAITING_REPLY",
+      nextFollowUpAt: { not: null, lte: new Date() },
+      followUpsSent: { lt: device.maxFollowUps },
+    },
+    take: 20,
+  });
+  let sent = 0;
+  for (const thread of due) {
+    const res = await sendWhatsAppFollowUp({ device, threadId: thread.id });
+    if (res.ok) sent += 1;
+    else {
+      const nextFollowUpAt = retryAfterFailure(res.error, thread.lastOutboundAt);
+      await prisma.outreachThread.update({ where: { id: thread.id }, data: { nextFollowUpAt } });
+      logger.warn(
+        { threadId: thread.id, msg: res.error, retryAt: nextFollowUpAt },
+        nextFollowUpAt ? "scheduled WhatsApp follow-up deferred" : "scheduled WhatsApp follow-up cancelled",
+      );
+    }
+  }
+  return { sent, due: due.length };
+};
+
+/**
+ * One pass of the outreach automation across every channel: pull replies first
+ * (so a thread that was answered an hour ago never gets a follow-up), then send
+ * what is due. One failing mailbox or device never stops the rest.
+ *
+ * WhatsApp needs no reply-pulling step — its socket pushes incoming messages
+ * into handleIncoming the moment they land, so by the time this runs the
+ * replied threads have already had their follow-ups cancelled.
  */
 export const runOutreachMaintenance = async () => {
-  const accounts = await listAccounts();
-  if (!accounts.length) return { skipped: "no email account connected" };
+  const [accounts, devices] = await Promise.all([listAccounts(), listWhatsAppAccounts()]);
+  if (!accounts.length && !devices.length) return { skipped: "no email account or WhatsApp device connected" };
 
   const perAccount = [];
   let replies = 0;
@@ -375,7 +540,136 @@ export const runOutreachMaintenance = async () => {
     replies += sync.replies || 0;
     const followUps = sync.error ? { sent: 0, skipped: "sync failed" } : await processDueFollowUps({ account });
     sent += followUps.sent || 0;
-    perAccount.push({ accountId: account.id, email: account.email, sync, followUps });
+    perAccount.push({ channel: "EMAIL", accountId: account.id, email: account.email, sync, followUps });
   }
-  return { accounts: perAccount.length, replies, followUpsSent: sent, perAccount };
+
+  let whatsappSent = 0;
+  for (const device of devices) {
+    const followUps = await processDueWhatsAppFollowUps({ device }).catch((err) => {
+      logger.warn({ deviceId: device.id, msg: err.message }, "WhatsApp follow-up pass failed");
+      return { sent: 0, error: err.message };
+    });
+    whatsappSent += followUps.sent || 0;
+    perAccount.push({ channel: "WHATSAPP", accountId: device.id, label: device.label, followUps });
+  }
+
+  return {
+    accounts: accounts.length,
+    devices: devices.length,
+    replies,
+    followUpsSent: sent + whatsappSent,
+    emailFollowUps: sent,
+    whatsappFollowUps: whatsappSent,
+    perAccount,
+  };
+};
+
+// ─── Inbox: what actually needs a human today ────────────────────────────────
+
+/**
+ * A thread carries just enough of its lead to render a row without a second
+ * round-trip: who it is, how hot, and the last thing either side said.
+ */
+const INBOX_SELECT = {
+  id: true,
+  leadId: true,
+  channel: true,
+  recipientEmail: true,
+  subject: true,
+  status: true,
+  lastOutboundAt: true,
+  repliedAt: true,
+  followUpsSent: true,
+  nextFollowUpAt: true,
+  updatedAt: true,
+  account: { select: { email: true } },
+  waAccount: { select: { label: true } },
+  lead: {
+    select: {
+      id: true,
+      score: true,
+      status: true,
+      primaryOpportunity: true,
+      company: { select: { name: true, city: true, countryCode: true } },
+    },
+  },
+  messages: {
+    orderBy: { createdAt: "desc" },
+    take: 1,
+    select: { direction: true, kind: true, body: true, subject: true, createdAt: true },
+  },
+};
+
+/**
+ * Where a thread belongs in the day's work.
+ *
+ * Derived rather than stored, because every input already exists and a stored
+ * bucket would be one more thing that can go stale. The order matters: a thread
+ * is tested against these top to bottom and takes the first that fits.
+ *
+ *   replied → they answered and nobody has decided anything yet. Yours to act on.
+ *   due     → the chase is scheduled for now or earlier.
+ *   waiting → sent, chase is booked for later. Nothing to do.
+ *   silent  → every chase spent, still nothing. Needs a different angle, not another email.
+ *   closed  → done with, one way or another.
+ */
+export const bucketFor = (thread, now = new Date()) => {
+  if (thread.status === "REPLIED") {
+    // Once a human has judged the lead the reply is no longer an open question.
+    return thread.lead?.status === "REPLIED" ? "replied" : "closed";
+  }
+  if (thread.status === "BOUNCED" || thread.status === "CLOSED") return "closed";
+  if (thread.nextFollowUpAt && thread.nextFollowUpAt <= now) return "due";
+  if (thread.nextFollowUpAt) return "waiting";
+  return thread.followUpsSent > 0 ? "silent" : "waiting";
+};
+
+const BUCKET_ORDER = ["replied", "due", "waiting", "silent", "closed"];
+
+/**
+ * Everything the Inbox screen renders, in one query.
+ *
+ * Sorted so the most valuable unanswered thing is first: replies before chases,
+ * then by lead score. A 500-thread ceiling keeps this a single fast read — this
+ * is a working queue, not an archive, and anything past that is in All leads.
+ */
+export const outreachInbox = async ({ channel = null, bucket = null } = {}) => {
+  const threads = await prisma.outreachThread.findMany({
+    where: channel ? { channel } : {},
+    orderBy: { updatedAt: "desc" },
+    take: 500,
+    select: INBOX_SELECT,
+  });
+
+  const now = new Date();
+  const withBucket = threads.map((t) => ({ ...t, bucket: bucketFor(t, now) }));
+
+  const counts = Object.fromEntries(BUCKET_ORDER.map((b) => [b, 0]));
+  for (const t of withBucket) counts[t.bucket] += 1;
+
+  const visible = (bucket ? withBucket.filter((t) => t.bucket === bucket) : withBucket).sort((a, b) => {
+    const rank = BUCKET_ORDER.indexOf(a.bucket) - BUCKET_ORDER.indexOf(b.bucket);
+    if (rank !== 0) return rank;
+    if (a.bucket === "replied") return (b.repliedAt?.getTime() || 0) - (a.repliedAt?.getTime() || 0);
+    if (a.bucket === "due") return (a.nextFollowUpAt?.getTime() || 0) - (b.nextFollowUpAt?.getTime() || 0);
+    return (b.lead?.score || 0) - (a.lead?.score || 0);
+  });
+
+  // Whether any automation is actually armed. Without this the UI cannot tell
+  // "nothing is due" from "nothing will ever be sent because it is all off".
+  const [autoEmail, autoWhatsApp, connectedDevices] = await Promise.all([
+    prisma.emailAccount.count({ where: { ...ACTIVE, autoFollowUp: true } }),
+    prisma.whatsAppAccount.count({ where: { autoFollowUp: true, status: "CONNECTED" } }),
+    prisma.whatsAppAccount.count({ where: { status: "CONNECTED" } }),
+  ]);
+
+  return {
+    counts,
+    threads: visible,
+    automation: {
+      emailAccountsAutoFollowUp: autoEmail,
+      whatsappDevicesAutoFollowUp: autoWhatsApp,
+      whatsappDevicesConnected: connectedDevices,
+    },
+  };
 };

@@ -6,7 +6,7 @@ import { verifySmtp } from "../../lib/outreach/mailer.js";
 import { verifyImap, canReceive } from "../../lib/outreach/inbox.js";
 import {
   getAccount, listAccounts, sendInitialEmail, sendFollowUp, syncReplies, processDueFollowUps,
-  sendWhatsAppForLead,
+  sendWhatsAppForLead, sendWhatsAppFollowUp, processDueWhatsAppFollowUps, outreachInbox,
 } from "../../lib/outreach/service.js";
 import {
   checkSession, logoutWhatsApp, whatsappStatusAll, whatsappAccountStatus,
@@ -307,11 +307,19 @@ export const syncQuerySchema = z.object({ accountId: z.string().max(64).optional
 export const syncNow = asyncHandler(async (req, res) => {
   const accountId = req.body?.accountId || null;
   const accounts = accountId ? [await getAccount(accountId)].filter(Boolean) : await listAccounts();
-  if (!accounts.length) throw createError(400, "Connect a mailbox in Settings first.");
+  // WhatsApp replies arrive over a live socket, so there is nothing to poll —
+  // but a manual sync should still flush any chase that has come due, or the
+  // button would silently do half the job when only a phone is linked.
+  const devices = accountId ? [] : await listWhatsAppAccounts();
+
+  if (!accounts.length && !devices.length) {
+    throw createError(400, "Connect a mailbox or link a WhatsApp device in Settings first.");
+  }
 
   let checked = 0;
   let replies = 0;
   let followUpsSent = 0;
+  let whatsappFollowUps = 0;
   const errors = [];
   for (const account of accounts) {
     const sync = await syncReplies({ account });
@@ -321,14 +329,28 @@ export const syncNow = asyncHandler(async (req, res) => {
     const followUps = await processDueFollowUps({ account });
     followUpsSent += followUps.sent || 0;
   }
-  if (errors.length === accounts.length) throw createError(502, `Reply sync failed: ${errors.join("; ")}`);
+  for (const device of devices) {
+    const followUps = await processDueWhatsAppFollowUps({ device });
+    whatsappFollowUps += followUps.sent || 0;
+  }
 
+  // Only a total email failure is an error — a WhatsApp-only setup has no
+  // mailbox to fail, and one dead mailbox out of three is a warning, not a 502.
+  if (accounts.length && errors.length === accounts.length && !devices.length) {
+    throw createError(502, `Reply sync failed: ${errors.join("; ")}`);
+  }
+
+  const totalFollowUps = followUpsSent + whatsappFollowUps;
   res.json({
     success: true,
     message: `Checked ${checked} open thread(s) across ${accounts.length} mailbox(es): ${replies} new repl${replies === 1 ? "y" : "ies"}`
-      + `${followUpsSent ? `, ${followUpsSent} follow-up(s) sent` : ""}`
+      + `${totalFollowUps ? `, ${totalFollowUps} follow-up(s) sent` : ""}`
       + `${errors.length ? ` — ${errors.length} mailbox(es) failed: ${errors.join("; ")}` : ""}.`,
-    data: { sync: { checked, replies }, followUps: { sent: followUpsSent }, errors },
+    data: {
+      sync: { checked, replies },
+      followUps: { sent: totalFollowUps, email: followUpsSent, whatsapp: whatsappFollowUps },
+      errors,
+    },
   });
 });
 
@@ -348,16 +370,51 @@ export const listThreads = asyncHandler(async (req, res) => {
   res.json({ success: true, data: { threads } });
 });
 
-/** POST /api/outreach/threads/:id/follow-up — send one now, manually. */
+/**
+ * POST /api/outreach/threads/:id/follow-up — send one now, manually.
+ *
+ * Always goes out on the channel and identity the thread was opened with: the
+ * mailbox that sent the first email, or the phone that sent the first message.
+ * A chase arriving from a second identity reads as a different person.
+ */
 export const followUpNow = asyncHandler(async (req, res) => {
-  // Follow up from the mailbox the thread was opened with, so the reply chain
-  // stays on one identity even when several are connected.
-  const thread = await prisma.outreachThread.findUnique({ where: { id: req.params.id }, select: { accountId: true } });
-  const account = await getAccount(thread?.accountId || null);
+  const thread = await prisma.outreachThread.findUnique({
+    where: { id: req.params.id },
+    select: { accountId: true, waAccountId: true, channel: true },
+  });
+  if (!thread) throw createError(404, "Thread not found.");
+
+  if (thread.channel === "WHATSAPP") {
+    const device = await getWhatsAppAccount(thread.waAccountId || null);
+    if (!device) throw createError(400, "The WhatsApp device this thread was sent from is no longer linked.");
+    if (device.status !== "CONNECTED") {
+      throw createError(400, `"${device.label}" is ${device.status.toLowerCase()} — reconnect it in Settings to send.`);
+    }
+    const result = await sendWhatsAppFollowUp({ device, threadId: req.params.id });
+    if (!result.ok) throw createError(400, result.error);
+    return res.json({ success: true, message: "WhatsApp follow-up sent.", data: { thread: result.thread } });
+  }
+
+  const account = await getAccount(thread.accountId || null);
   if (!account) throw createError(400, "The mailbox this thread was sent from is no longer connected.");
   const result = await sendFollowUp({ account, threadId: req.params.id });
   if (!result.ok) throw createError(400, result.error);
   res.json({ success: true, message: "Follow-up sent.", data: { thread: result.thread } });
+});
+
+export const inboxQuerySchema = z.object({
+  channel: z.enum(["EMAIL", "WHATSAPP"]).optional(),
+  bucket: z.enum(["replied", "due", "waiting", "silent", "closed"]).optional(),
+});
+
+/**
+ * GET /api/outreach/inbox — the working queue: who replied, what is due, what
+ * is still waiting. Counts are always for the whole set so the filter chips can
+ * show totals even while one bucket is selected.
+ */
+export const inbox = asyncHandler(async (req, res) => {
+  const { channel, bucket } = req.validatedQuery || {};
+  res.json({ success: true, data: await outreachInbox({ channel: channel || null, bucket: bucket || null }) });
 });
 
 export const composeBatchSchema = z.object({
@@ -395,6 +452,35 @@ export const createWhatsAppAccountHandler = asyncHandler(async (req, res) => {
     message: `"${account.label}" added. Scan its QR code to link a phone.`,
     data: { account: whatsappAccountStatus(account) },
   });
+});
+
+export const whatsappAccountUpdateSchema = z.object({
+  label: z.string().trim().min(1).max(80).optional(),
+  autoFollowUp: z.boolean().optional(),
+  maxFollowUps: z.number().int().min(0).max(5).optional(),
+  // Gaps in days before each chase. Ascending is not enforced — a [1, 14]
+  // cadence is unusual but legitimate.
+  followUpDays: z.array(z.number().int().min(1).max(90)).max(5).optional(),
+});
+
+/**
+ * PUT /api/outreach/whatsapp/accounts/:id — rename a device, or change how it
+ * chases. Pairing is untouched: none of these fields affect the credentials.
+ */
+export const updateWhatsAppAccountHandler = asyncHandler(async (req, res) => {
+  const existing = await prisma.whatsAppAccount.findUnique({ where: { id: req.params.id } });
+  if (!existing) throw createError(404, "Device not found.");
+
+  const account = await prisma.whatsAppAccount.update({
+    where: { id: existing.id },
+    data: {
+      ...(req.body.label !== undefined ? { label: req.body.label } : {}),
+      ...(req.body.autoFollowUp !== undefined ? { autoFollowUp: req.body.autoFollowUp } : {}),
+      ...(req.body.maxFollowUps !== undefined ? { maxFollowUps: req.body.maxFollowUps } : {}),
+      ...(req.body.followUpDays !== undefined ? { followUpDays: req.body.followUpDays } : {}),
+    },
+  });
+  res.json({ success: true, message: `"${account.label}" updated.`, data: { account: whatsappAccountStatus(account) } });
 });
 
 /** POST /api/outreach/whatsapp/accounts/:id/default */

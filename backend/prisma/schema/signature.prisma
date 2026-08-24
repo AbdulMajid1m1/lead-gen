@@ -53,6 +53,13 @@ model WhatsAppAccount {
   status    WhatsAppAccountStatus @default(DISCONNECTED)
   lastError String?               @db.VarChar(500)
 
+  /// Follow-up automation, mirroring EmailAccount so one scheduler drives both
+  /// channels. Kept per-device because a shared sales phone and a personal one
+  /// rarely want the same chase cadence.
+  autoFollowUp Boolean @default(true)
+  followUpDays Json    @default("[3, 7]")
+  maxFollowUps Int     @default(2)
+
   lastConnectedAt DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt

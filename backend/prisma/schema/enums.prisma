@@ -113,11 +113,18 @@ enum LeadType {
   EXPANSION
 }
 
+/// The outreach lifecycle, in the order a lead normally travels it.
+///
+/// CONTACTED and FOLLOW_UP are both "the ball is in our court, waiting on
+/// them"; REPLIED is the one state that means the opposite — a human answered
+/// on email or WhatsApp and is waiting on us. It is kept distinct from
+/// INTERESTED because a reply is not yet a verdict: "no thanks" is a reply too.
 enum LeadStatus {
   NEW
   QUALIFIED
   CONTACTED
   FOLLOW_UP
+  REPLIED
   INTERESTED
   CONVERTED
   NOT_INTERESTED
@@ -139,8 +146,12 @@ enum ActionType {
   DO_NOT_CONTACT
 }
 
+/// How we reached a lead. WHATSAPP is a real channel, not a kind of SOCIAL:
+/// its threads are keyed by phone number, sent through a paired device, and
+/// have their own reply path, so nothing about them behaves like a social link.
 enum OutreachChannel {
   EMAIL
+  WHATSAPP
   PHONE
   CONTACT_FORM
   SOCIAL
