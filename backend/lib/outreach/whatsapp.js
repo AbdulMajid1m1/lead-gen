@@ -211,10 +211,27 @@ const handleIncoming = async (accountId, messages, sock) => {
         orderBy: { updatedAt: "desc" },
       });
       if (!thread) {
-        // Not an error: most incoming WhatsApp traffic is unrelated to outreach.
-        // Logged anyway, because a *missed* reply looks exactly like this and
-        // was previously invisible.
-        logger.debug({ accountId, fromNumber }, "incoming WhatsApp message with no open thread — ignored");
+        // A linked phone receives plenty of traffic that has nothing to do with
+        // outreach, so the ordinary case stays at debug. The exception is a
+        // number we hold *some* thread with on this device: that is a real
+        // prospect whose message we are about to ignore, and it must be visible
+        // at the level production actually runs at.
+        const known = await prisma.outreachThread.findFirst({
+          where: {
+            channel: "WHATSAPP",
+            waAccountId: accountId,
+            recipientEmail: { endsWith: fromNumber.slice(-9) },
+          },
+          select: { id: true, status: true },
+        });
+        if (known) {
+          logger.info(
+            { accountId, fromNumber, threadId: known.id, threadStatus: known.status },
+            "WhatsApp message from a known contact, but its thread is not awaiting a reply — not recorded",
+          );
+        } else {
+          logger.debug({ accountId, fromNumber }, "incoming WhatsApp message with no open thread — ignored");
+        }
         continue;
       }
 
