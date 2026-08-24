@@ -24,7 +24,7 @@ const emptyForm = () => ({
   email: "",
   phone: "",
   tagline: "",
-  accentColor: "#4f39f6",
+  accentColor: "#d97757",
   isDefault: false,
 });
 
@@ -37,7 +37,7 @@ const formFrom = (s) => ({
   email: s.email || "",
   phone: s.phone || "",
   tagline: s.tagline || "",
-  accentColor: s.accentColor || "#4f39f6",
+  accentColor: s.accentColor || "#d97757",
   isDefault: s.isDefault,
 });
 

@@ -36,7 +36,7 @@ const esc = (s) =>
     .replace(/"/g, "&quot;");
 
 /** A hex colour we are willing to interpolate into a style attribute. */
-const safeColor = (c) => (/^#[0-9a-f]{3,8}$/i.test(String(c || "")) ? c : "#4f39f6");
+const safeColor = (c) => (/^#[0-9a-f]{3,8}$/i.test(String(c || "")) ? c : "#d97757");
 
 /**
  * The plain-text sign-off.
@@ -118,7 +118,7 @@ export const bodyToHtml = (body) => {
   const linkify = (text) =>
     esc(text).replace(
       /\bhttps?:\/\/[^\s<>"']+/g,
-      (url) => `<a href="${url}" style="color:#4f39f6;">${url}</a>`,
+      (url) => `<a href="${url}" style="color:#b8563a;">${url}</a>`,
     );
 
   const paragraphs = String(body || "")

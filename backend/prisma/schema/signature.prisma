@@ -23,7 +23,7 @@ model Signature {
   /// One free line under the block — a tagline, a booking link, a disclaimer.
   tagline  String? @db.VarChar(300)
   /// Accent for the rule and the name in the HTML rendering.
-  accentColor String @default("#4f39f6") @db.VarChar(9)
+  accentColor String @default("#d97757") @db.VarChar(9)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

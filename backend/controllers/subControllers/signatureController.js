@@ -48,7 +48,7 @@ export const signatureSchema = z.object({
   phone: optionalText(40),
   tagline: optionalText(300),
   // Anything else would end up interpolated into a style attribute.
-  accentColor: z.string().regex(/^#[0-9a-fA-F]{3,8}$/, "Use a hex colour like #4f39f6").optional(),
+  accentColor: z.string().regex(/^#[0-9a-fA-F]{3,8}$/, "Use a hex colour like #d97757").optional(),
   isDefault: z.boolean().optional(),
 });
 
