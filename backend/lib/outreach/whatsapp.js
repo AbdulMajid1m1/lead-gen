@@ -87,6 +87,41 @@ export const toJid = (phone) => {
 
 const numberFromJid = (jid) => String(jid || "").split(":")[0].split("@")[0];
 
+const isLid = (jid) => String(jid || "").includes("@lid");
+
+/**
+ * The real phone number behind an incoming message.
+ *
+ * WhatsApp is migrating to LID addressing: a chat that used to arrive as
+ * `923189809338@s.whatsapp.net` now arrives as `244735927128289@lid`, where the
+ * digits are an opaque account id and not a phone number at all. Reading the
+ * number straight off `remoteJid` therefore silently stopped matching threads
+ * for any contact WhatsApp had already migrated.
+ *
+ * `MessageKey` carries no phone-number field, so the only reliable route back is
+ * the socket's own LID→PN store, which Baileys populates when the session is
+ * established. Group messages additionally carry `participantPn`.
+ *
+ * Returns bare digits, or null when the LID cannot be resolved — in which case
+ * the caller logs rather than dropping the message in silence.
+ */
+export const senderNumber = async (sock, msg) => {
+  const raw = msg?.key?.remoteJid;
+  if (!raw) return null;
+  if (!isLid(raw)) return numberFromJid(raw) || null;
+
+  // Group fan-out puts the sender's phone number on the event itself.
+  if (msg.participantPn) return numberFromJid(msg.participantPn) || null;
+
+  try {
+    const pn = await sock?.signalRepository?.lidMapping?.getPNForLID?.(raw);
+    if (pn) return numberFromJid(pn) || null;
+  } catch (err) {
+    logger.debug({ jid: raw, msg: err.message }, "LID → phone lookup failed");
+  }
+  return null;
+};
+
 const markStatus = (accountId, data) =>
   prisma.whatsAppAccount.update({ where: { id: accountId }, data }).catch((err) =>
     logger.warn({ accountId, msg: err.message }, "could not persist WhatsApp account status"),
@@ -149,12 +184,15 @@ export const deleteWhatsAppAccount = async (accountId) => {
  * Scoped to `waAccountId` — see the module note. A thread opened on the sales
  * phone must not be closed by a message that arrived on the personal one.
  */
-const handleIncoming = async (accountId, messages) => {
+const handleIncoming = async (accountId, messages, sock) => {
   for (const msg of messages || []) {
     try {
       if (!msg?.key || msg.key.fromMe) continue;
-      const fromNumber = numberFromJid(msg.key.remoteJid);
-      if (!fromNumber) continue;
+      const fromNumber = await senderNumber(sock, msg);
+      if (!fromNumber) {
+        logger.warn({ accountId, jid: msg.key.remoteJid }, "incoming WhatsApp message from an unresolvable address — reply not matched");
+        continue;
+      }
       const text =
         msg.message?.conversation ||
         msg.message?.extendedTextMessage?.text ||
@@ -172,7 +210,13 @@ const handleIncoming = async (accountId, messages) => {
         },
         orderBy: { updatedAt: "desc" },
       });
-      if (!thread) continue;
+      if (!thread) {
+        // Not an error: most incoming WhatsApp traffic is unrelated to outreach.
+        // Logged anyway, because a *missed* reply looks exactly like this and
+        // was previously invisible.
+        logger.debug({ accountId, fromNumber }, "incoming WhatsApp message with no open thread — ignored");
+        continue;
+      }
 
       await prisma.outreachMessage.create({
         data: {
@@ -250,7 +294,7 @@ export const initializeConnection = async (accountId, forceNew = false) => {
       stateFor(accountId).sock = sock;
 
       sock.ev.on("creds.update", saveCreds);
-      sock.ev.on("messages.upsert", ({ messages }) => handleIncoming(accountId, messages));
+      sock.ev.on("messages.upsert", ({ messages }) => handleIncoming(accountId, messages, sock));
 
       sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
