@@ -16,3 +16,10 @@ deploy/env/*.env
 
 # WhatsApp pairing state
 .baileys_auth/
+
+# Database dumps. These carry real business contact data and the admin password
+# hash, so they are produced locally and moved to the server by hand — never
+# through the repo. deploy/scripts/backup-db.sh writes the same shape on prod.
+deploy/dumps/
+*.sql.gz
+*.sql.gz.partial
