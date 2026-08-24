@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Signal, Lock, Mail, Eye, EyeOff } from "lucide-react";
+import { Lock, Mail, Eye, EyeOff } from "lucide-react";
+import { LogoMark } from "../components/Logo.jsx";
 import { Button, Input, Spinner } from "../components/ui.jsx";
 import { useAuth } from "../lib/auth.jsx";
 
@@ -38,9 +39,7 @@ export default function LoginPage() {
     <div className="flex min-h-dvh items-center justify-center bg-[var(--surface)] px-5 py-10">
       <div className="w-full max-w-sm">
         <div className="mb-7 flex flex-col items-center gap-3 text-center">
-          <div className="flex size-11 items-center justify-center rounded-xl [background-image:var(--accent-gradient)] shadow-[0_2px_16px_var(--accent-glow)]">
-            <Signal size={22} className="text-[var(--accent-fg)]" />
-          </div>
+          <LogoMark size={44} />
           <div>
             <h1 className="text-lg font-semibold tracking-tight">Sign in to LeadSignal</h1>
             <p className="mt-1 text-[13px] text-[var(--text-muted)]">

@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { LayoutDashboard, Search, Users, Radar, Settings, Moon, Sun, Signal, Sparkles, LogOut, Inbox } from "lucide-react";
+import { Logo } from "./components/Logo.jsx";
+import { LayoutDashboard, Search, Users, Radar, Settings, Moon, Sun, Sparkles, LogOut, Inbox } from "lucide-react";
 import { api } from "./lib/api.js";
 import { cn } from "./lib/format.js";
 import SearchPage from "./pages/SearchPage.jsx";
@@ -88,11 +89,8 @@ export default function App() {
   return (
     <div className="flex min-h-full">
       <aside className="fixed inset-y-0 left-0 hidden w-56 flex-col border-r border-[var(--border)] bg-[var(--surface-raised)] md:flex">
-        <div className="flex items-center gap-2.5 px-5 py-5">
-          <div className="flex size-7 items-center justify-center rounded-lg [background-image:var(--accent-gradient)] shadow-[0_2px_10px_var(--accent-glow)]">
-            <Signal size={15} className="text-[var(--accent-fg)]" />
-          </div>
-          <span className="text-sm font-semibold tracking-tight">LeadSignal</span>
+        <div className="px-5 py-5">
+          <Logo size={28} />
         </div>
 
         <nav className="flex-1 space-y-0.5 px-3">

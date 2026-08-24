@@ -52,6 +52,16 @@
    * critical pushed red so neither can be mistaken for a primary action now
    * that the primary is orange.
    */
+  /*
+   * Brand constants. Unlike --accent these do NOT flip between themes: the mark
+   * has to be the same object in the sidebar, on the login screen and in the
+   * browser tab. Kept in step by hand with public/favicon.svg, which cannot
+   * read custom properties.
+   */
+  --color-brand-from: oklch(0.688 0.128 42);
+  --color-brand-to: oklch(0.565 0.135 35);
+  --color-brand-fg: oklch(0.985 0.008 60);
+
   --color-positive: oklch(0.63 0.14 152);
   --color-caution: oklch(0.76 0.14 85);
   --color-critical: oklch(0.577 0.212 20);
@@ -74,6 +84,8 @@
   --accent-fg: oklch(0.995 0.004 90);
   --accent-glow: oklch(0.672 0.131 39 / 0.3);
   --accent-gradient: linear-gradient(135deg, oklch(0.598 0.136 45), oklch(0.532 0.128 33));
+
+  --brand-gradient: linear-gradient(135deg, var(--color-brand-from), var(--color-brand-to));
 
   --scrim: oklch(0.24 0.01 100 / 0.4);
   --shadow-xs: 0 1px 2px oklch(0.22 0.01 100 / 0.05);
