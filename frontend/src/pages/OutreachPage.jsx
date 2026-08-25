@@ -290,7 +290,9 @@ const CampaignCard = ({ campaign, defaultOpen = false }) => {
           <span className="min-w-0">
             <span className="block truncate text-[13px] font-medium">{campaign.name}</span>
             <span className="block text-[11px] text-[var(--text-subtle)]">
-              {campaign.total} leads · every {campaign.paceSeconds}s · started {formatDateTime(campaign.createdAt)}
+              {campaign.total} leads · {campaign.mode === "AUTO"
+                ? `auto · ≤${campaign.dailyLimit}/day, ${String(campaign.windowStart).padStart(2, "0")}:00–${String(campaign.windowEnd).padStart(2, "0")}:00`
+                : `every ${campaign.paceSeconds}s`} · started {formatDateTime(campaign.createdAt)}
             </span>
           </span>
         </button>

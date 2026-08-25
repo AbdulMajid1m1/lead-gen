@@ -169,6 +169,15 @@ enum CampaignSendState {
   FAILED  // the transport said no
 }
 
+/// How a campaign paces itself. DIRECT drains at a fixed paceSeconds from the
+/// moment it starts. AUTO spreads sends across a daily hours window under a
+/// per-day limit — mailbox providers score bounce/spam partly on burstiness
+/// and off-hours volume, so the schedule itself is deliverability protection.
+enum CampaignMode {
+  DIRECT
+  AUTO
+}
+
 /// One bulk send: a set of leads, the channels to reach them on, and pacing.
 ///
 /// A campaign never blasts. The worker drains it one lead at a time with
@@ -187,6 +196,16 @@ model OutreachCampaign {
   status      CampaignStatus @default(RUNNING)
   paceSeconds Int            @default(45)
   lastSentAt  DateTime?
+
+  mode            CampaignMode @default(DIRECT)
+  /// AUTO only: max leads reached per local day. Null = the mode's default.
+  dailyLimit      Int?
+  /// AUTO only: local hours window sends are allowed in (start inclusive,
+  /// end exclusive), interpreted with tzOffsetMinutes.
+  windowStart     Int          @default(9)
+  windowEnd       Int          @default(18)
+  /// Minutes east of UTC where the campaign was created (JS -getTimezoneOffset()).
+  tzOffsetMinutes Int          @default(0)
 
   createdAt   DateTime  @default(now())
   completedAt DateTime?

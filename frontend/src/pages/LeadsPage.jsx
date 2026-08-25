@@ -67,6 +67,9 @@ export default function LeadsPage() {
   const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["leads", filters, countries, page],
     queryFn: () => api.listLeads({ ...filters, country: countries.join(","), page, pageSize: 25 }),
+    // Keep the previous page rendered during a page flip so ticked selections
+    // visibly carry across pages instead of the list blinking away.
+    placeholderData: (prev) => prev,
   });
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
@@ -83,34 +86,34 @@ export default function LeadsPage() {
   const pageLeads = data?.leads || [];
   const pageAllSelected = pageLeads.length > 0 && pageLeads.every((l) => selectedIds.has(l.id));
 
-  const recount = (ids, leads) => {
-    // Meta only needs to be roughly right for page-level selection; the
-    // server re-checks every lead at send time anyway.
-    const known = leads.filter((l) => ids.has(l.id));
-    return {
-      withEmail: known.filter((l) => l.contact.hasEmail).length,
-      withPhone: known.filter((l) => l.contact.hasPhone).length,
-    };
-  };
+  // Meta is adjusted lead-by-lead as the selection changes, never recounted
+  // from the visible page — a recount would erase what was ticked on other
+  // pages. It only needs to be roughly right; the server re-checks every lead
+  // at send time anyway.
+  const bump = (lead, dir) => setSelectionMeta((m) => ({
+    withEmail: Math.max(0, m.withEmail + (lead.contact.hasEmail ? dir : 0)),
+    withPhone: Math.max(0, m.withPhone + (lead.contact.hasPhone ? dir : 0)),
+  }));
 
   const toggleLead = (lead) => {
+    const wasSelected = selectedIds.has(lead.id);
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(lead.id)) next.delete(lead.id);
-      else next.add(lead.id);
-      setSelectionMeta(recount(next, pageLeads));
+      if (wasSelected) next.delete(lead.id); else next.add(lead.id);
       return next;
     });
+    bump(lead, wasSelected ? -1 : +1);
   };
 
   const togglePage = () => {
+    const adding = !pageAllSelected;
+    const affected = pageLeads.filter((l) => selectedIds.has(l.id) !== adding);
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (pageAllSelected) pageLeads.forEach((l) => next.delete(l.id));
-      else pageLeads.forEach((l) => next.add(l.id));
-      setSelectionMeta(recount(next, pageLeads));
+      affected.forEach((l) => (adding ? next.add(l.id) : next.delete(l.id)));
       return next;
     });
+    affected.forEach((l) => bump(l, adding ? +1 : -1));
   };
 
   // "Select all N matching" pulls the full id list (capped at 500 — the same
@@ -280,7 +283,7 @@ export default function LeadsPage() {
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-strong)] bg-[var(--surface-raised)] px-4 py-2.5 shadow-[var(--shadow-lg)]">
             <Badge tone="var(--accent)">{selectedIds.size} selected</Badge>
             <span className="hidden text-[11px] text-[var(--text-subtle)] sm:inline">
-              {selectionMeta.withEmail} with email · {selectionMeta.withPhone} with phone
+              {selectionMeta.withEmail} with email · {selectionMeta.withPhone} with phone · kept across pages
             </span>
             <span className="mx-1 hidden h-4 w-px bg-[var(--border)] sm:inline" />
             <Button size="sm" onClick={() => setSheet({ channels: ["EMAIL"] })}>

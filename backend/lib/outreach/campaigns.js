@@ -35,6 +35,51 @@ const startOfToday = () => {
   return d;
 };
 
+// ── AUTO-mode scheduling ─────────────────────────────────────────────────────
+// All pure and exported so the timezone math is unit-testable without a clock.
+
+export const AUTO_DEFAULT_DAILY_LIMIT = 40;
+
+/** Hour-of-day (fractional, 0–23.99) at the campaign's timezone offset. */
+export const localHour = (tzOffsetMinutes, now = new Date()) => {
+  const mins = (((now.getUTCHours() * 60 + now.getUTCMinutes() + tzOffsetMinutes) % 1440) + 1440) % 1440;
+  return mins / 60;
+};
+
+/** DIRECT campaigns send around the clock; AUTO only inside its local window. */
+export const isWithinSendWindow = (campaign, now = new Date()) => {
+  if (campaign.mode !== "AUTO") return true;
+  const h = localHour(campaign.tzOffsetMinutes, now);
+  return h >= campaign.windowStart && h < campaign.windowEnd;
+};
+
+/**
+ * AUTO gap between sends: the day's quota spread evenly across the window,
+ * jittered ±25% so the cadence never looks machine-regular to a spam filter.
+ */
+export const autoGapSeconds = (campaign, rand = Math.random()) => {
+  const windowSeconds = Math.max(1, campaign.windowEnd - campaign.windowStart) * 3600;
+  const base = windowSeconds / Math.max(1, campaign.dailyLimit || AUTO_DEFAULT_DAILY_LIMIT);
+  return Math.max(60, Math.round(base * (0.75 + rand * 0.5)));
+};
+
+/** Midnight of the campaign's *local* day, as a UTC instant. */
+export const startOfLocalToday = (tzOffsetMinutes, now = new Date()) => {
+  const shifted = new Date(now.getTime() + tzOffsetMinutes * 60_000);
+  shifted.setUTCHours(0, 0, 0, 0);
+  return new Date(shifted.getTime() - tzOffsetMinutes * 60_000);
+};
+
+/** Leads this campaign has actually reached since its local midnight. */
+const campaignSentToday = (campaign, now = new Date()) =>
+  prisma.campaignRecipient.count({
+    where: {
+      campaignId: campaign.id,
+      processedAt: { gte: startOfLocalToday(campaign.tzOffsetMinutes, now) },
+      OR: [{ emailState: "SENT" }, { waState: "SENT" }],
+    },
+  });
+
 /** How many messages an account/device has sent since midnight. */
 export const sentTodayCount = (channel, senderId) =>
   prisma.outreachMessage.count({
@@ -71,7 +116,10 @@ export const pickWhatsAppNumber = (contacts) => {
  * locked) are marked SKIPPED at creation so the progress bar is honest from
  * second one, rather than discovering half the list is unreachable mid-drain.
  */
-export const createCampaign = async ({ name, leadIds, channels, accountId = null, waAccountId = null, paceSeconds = 45 }) => {
+export const createCampaign = async ({
+  name, leadIds, channels, accountId = null, waAccountId = null, paceSeconds = 45,
+  mode = "DIRECT", dailyLimit = null, windowStart = 9, windowEnd = 18, tzOffsetMinutes = 0,
+}) => {
   const wantEmail = channels.includes("EMAIL");
   const wantWa = channels.includes("WHATSAPP");
 
@@ -133,6 +181,9 @@ export const createCampaign = async ({ name, leadIds, channels, accountId = null
       name: (name || `Bulk send · ${new Date().toLocaleDateString("en-GB")}`).slice(0, 160),
       channels, accountId: wantEmail ? accountId : null, waAccountId: wantWa ? waAccountId : null,
       paceSeconds: Math.max(20, Math.min(600, paceSeconds)),
+      mode,
+      dailyLimit: mode === "AUTO" ? (dailyLimit || AUTO_DEFAULT_DAILY_LIMIT) : null,
+      windowStart, windowEnd, tzOffsetMinutes,
       status: sendable.length ? "RUNNING" : "COMPLETED",
       completedAt: sendable.length ? null : new Date(),
       recipients: { create: recipients },
@@ -204,8 +255,15 @@ export const runCampaignTick = async () => {
   const summary = { campaigns: campaigns.length, sent: 0, skipped: 0, failed: 0, completed: 0 };
 
   for (const campaign of campaigns) {
+    // AUTO campaigns sleep outside their local working-hours window and stop
+    // for the day once the daily quota is reached; rows simply stay PENDING.
+    if (!isWithinSendWindow(campaign)) continue;
+    if (campaign.mode === "AUTO" && campaign.dailyLimit
+      && (await campaignSentToday(campaign)) >= campaign.dailyLimit) continue;
+
+    const gapSeconds = campaign.mode === "AUTO" ? autoGapSeconds(campaign) : campaign.paceSeconds;
     const sinceLast = campaign.lastSentAt ? Date.now() - campaign.lastSentAt.getTime() : Infinity;
-    if (sinceLast < campaign.paceSeconds * 1000) continue;
+    if (sinceLast < gapSeconds * 1000) continue;
 
     let sentThisTick = false;
     // Bounded loop: burn through skips quickly, stop after the first real send.
@@ -273,6 +331,9 @@ export const campaignWithProgress = async (campaignId) => {
   return {
     id: campaign.id, name: campaign.name, channels: campaign.channels,
     status: campaign.status, paceSeconds: campaign.paceSeconds,
+    mode: campaign.mode, dailyLimit: campaign.dailyLimit,
+    windowStart: campaign.windowStart, windowEnd: campaign.windowEnd,
+    tzOffsetMinutes: campaign.tzOffsetMinutes,
     accountId: campaign.accountId, waAccountId: campaign.waAccountId,
     createdAt: campaign.createdAt, completedAt: campaign.completedAt, lastSentAt: campaign.lastSentAt,
     total,

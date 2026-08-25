@@ -16,12 +16,23 @@ export const campaignCreateSchema = z.object({
   accountId: z.string().max(64).optional(),
   waAccountId: z.string().max(64).optional(),
   paceSeconds: z.coerce.number().int().min(20).max(600).default(45),
+  // AUTO = spread sends across a daily local-hours window under a per-day
+  // limit (deliverability protection); DIRECT = start now at paceSeconds.
+  mode: z.enum(["DIRECT", "AUTO"]).default("DIRECT"),
+  dailyLimit: z.coerce.number().int().min(5).max(150).optional(),
+  windowStart: z.coerce.number().int().min(0).max(22).default(9),
+  windowEnd: z.coerce.number().int().min(1).max(23).default(18),
+  tzOffsetMinutes: z.coerce.number().int().min(-720).max(840).default(0),
+}).refine((v) => v.windowEnd > v.windowStart, {
+  message: "The sending window must end after it starts.", path: ["windowEnd"],
 });
 
 /** POST /api/outreach/campaigns — start a paced bulk send. */
 export const create = asyncHandler(async (req, res) => {
-  const { name, leadIds, channels, accountId, waAccountId, paceSeconds } = req.body;
-  const result = await createCampaign({ name, leadIds, channels, accountId, waAccountId, paceSeconds });
+  const { name, leadIds, channels, accountId, waAccountId, paceSeconds,
+    mode, dailyLimit, windowStart, windowEnd, tzOffsetMinutes } = req.body;
+  const result = await createCampaign({ name, leadIds, channels, accountId, waAccountId, paceSeconds,
+    mode, dailyLimit, windowStart, windowEnd, tzOffsetMinutes });
   if (!result.ok) throw createError(400, result.error);
   res.status(201).json({
     success: true,

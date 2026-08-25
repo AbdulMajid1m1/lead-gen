@@ -13,6 +13,14 @@ const PACE_OPTIONS = [
   { value: 25, label: "Fast — ~2 per minute", hint: "Only for warmed-up senders." },
 ];
 
+const DAILY_LIMIT_OPTIONS = [
+  { value: 20, label: "20 / day — warm-up", hint: "New mailbox or WhatsApp number. Build reputation first." },
+  { value: 40, label: "40 / day — standard", hint: "Safe steady volume for an established sender." },
+  { value: 80, label: "80 / day — established", hint: "Only for senders with a clean history." },
+];
+
+const HOURS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: `${String(h).padStart(2, "0")}:00` }));
+
 /**
  * The one confirmation between "leads selected" and "messages going out".
  *
@@ -27,6 +35,12 @@ export const BulkSendSheet = ({ open, onClose, selection, initialChannels = ["EM
   const [accountId, setAccountId] = useState("");
   const [waAccountId, setWaAccountId] = useState("");
   const [paceSeconds, setPaceSeconds] = useState(45);
+  // AUTO is the default: schedule-shaped sending is the deliverability-safe
+  // path; "send now" is the explicit opt-out.
+  const [mode, setMode] = useState("AUTO");
+  const [dailyLimit, setDailyLimit] = useState(40);
+  const [windowStart, setWindowStart] = useState(9);
+  const [windowEnd, setWindowEnd] = useState(18);
   const [name, setName] = useState("");
 
   useEffect(() => { if (open) setChannels(initialChannels); }, [open, initialChannels]);
@@ -58,9 +72,16 @@ export const BulkSendSheet = ({ open, onClose, selection, initialChannels = ["EM
       accountId: wantEmail && accountId ? accountId : undefined,
       waAccountId: wantWa && waAccountId ? waAccountId : undefined,
       paceSeconds,
+      mode,
+      ...(mode === "AUTO" ? { dailyLimit, windowStart, windowEnd } : {}),
+      // Minutes east of UTC, so the server can interpret the window in the
+      // user's local clock (JS offset is west-positive, hence the negation).
+      tzOffsetMinutes: -new Date().getTimezoneOffset(),
     }),
     onSuccess: (data) => {
-      toast.success("Campaign started — messages go out one by one from now.");
+      toast.success(mode === "AUTO"
+        ? "Campaign scheduled — sends spread across your daily window from now."
+        : "Campaign started — messages go out one by one from now.");
       onClose();
       navigate(`/outreach?campaign=${data.campaign.id}`);
     },
@@ -72,10 +93,13 @@ export const BulkSendSheet = ({ open, onClose, selection, initialChannels = ["EM
     if (channels.length === 0) list.push("Pick at least one channel.");
     if (wantEmail && accounts.length === 0) list.push("No email account is connected — add one in Settings → Outreach.");
     if (wantWa && devices.length === 0) list.push("No WhatsApp device is linked — pair one in Settings → WhatsApp.");
+    if (mode === "AUTO" && windowEnd <= windowStart) list.push("The sending window must end after it starts.");
     return list;
-  }, [channels, wantEmail, wantWa, accounts.length, devices.length]);
+  }, [channels, wantEmail, wantWa, accounts.length, devices.length, mode, windowStart, windowEnd]);
 
   const estimateMinutes = Math.ceil((selection.ids.length * paceSeconds) / 60);
+  const estimateDays = Math.max(1, Math.ceil(selection.ids.length / dailyLimit));
+  const windowValid = windowEnd > windowStart;
 
   useEffect(() => {
     if (!open) return undefined;
@@ -160,27 +184,87 @@ export const BulkSendSheet = ({ open, onClose, selection, initialChannels = ["EM
             </section>
           )}
 
-          {/* Pace */}
+          {/* Delivery mode */}
           <section>
-            <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">Sending pace</p>
+            <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">Delivery</p>
             <div className="space-y-1.5">
-              {PACE_OPTIONS.map((o) => (
-                <label key={o.value} className={cn(
+              {[
+                ["AUTO", "Auto schedule — recommended", "Sends only inside working hours, spread naturally through the day. Protects your bounce rate and sender reputation."],
+                ["DIRECT", "Send now", "Starts immediately and drains at a fixed pace until done."],
+              ].map(([value, label, hint]) => (
+                <label key={value} className={cn(
                   "flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 transition-colors",
-                  paceSeconds === o.value ? "border-[var(--accent)] bg-[var(--accent-soft)]" : "border-[var(--border)] hover:border-[var(--border-strong)]",
+                  mode === value ? "border-[var(--accent)] bg-[var(--accent-soft)]" : "border-[var(--border)] hover:border-[var(--border-strong)]",
                 )}>
-                  <input type="radio" name="pace" checked={paceSeconds === o.value} onChange={() => setPaceSeconds(o.value)} className="mt-1 accent-[var(--accent)]" />
+                  <input type="radio" name="mode" checked={mode === value} onChange={() => setMode(value)} className="mt-1 accent-[var(--accent)]" />
                   <span>
-                    <span className="block text-[13px] font-medium">{o.label}</span>
-                    <span className="block text-[11px] text-[var(--text-subtle)]">{o.hint}</span>
+                    <span className="block text-[13px] font-medium">{label}</span>
+                    <span className="block text-[11px] text-[var(--text-subtle)]">{hint}</span>
                   </span>
                 </label>
               ))}
             </div>
-            <p className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-[var(--text-subtle)]">
-              <Clock size={10} />Roughly {estimateMinutes} min to drain {selection.ids.length} leads at this pace, within daily caps.
-            </p>
           </section>
+
+          {mode === "AUTO" ? (
+            <section>
+              <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">Daily volume</p>
+              <div className="space-y-1.5">
+                {DAILY_LIMIT_OPTIONS.map((o) => (
+                  <label key={o.value} className={cn(
+                    "flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 transition-colors",
+                    dailyLimit === o.value ? "border-[var(--accent)] bg-[var(--accent-soft)]" : "border-[var(--border)] hover:border-[var(--border-strong)]",
+                  )}>
+                    <input type="radio" name="dailyLimit" checked={dailyLimit === o.value} onChange={() => setDailyLimit(o.value)} className="mt-1 accent-[var(--accent)]" />
+                    <span>
+                      <span className="block text-[13px] font-medium">{o.label}</span>
+                      <span className="block text-[11px] text-[var(--text-subtle)]">{o.hint}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="mt-2.5 flex items-center gap-2">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">Between</span>
+                <select value={windowStart} onChange={(e) => setWindowStart(Number(e.target.value))}
+                  className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface-raised)] px-2 py-1.5 text-[13px] outline-none focus:border-[var(--accent)]">
+                  {HOURS.slice(0, 23).map((h) => <option key={h.value} value={h.value}>{h.label}</option>)}
+                </select>
+                <span className="text-[11px] text-[var(--text-subtle)]">and</span>
+                <select value={windowEnd} onChange={(e) => setWindowEnd(Number(e.target.value))}
+                  className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface-raised)] px-2 py-1.5 text-[13px] outline-none focus:border-[var(--accent)]">
+                  {HOURS.slice(1).map((h) => <option key={h.value} value={h.value}>{h.label}</option>)}
+                </select>
+                <span className="text-[11px] text-[var(--text-subtle)]">your time</span>
+              </div>
+              {windowValid && (
+                <p className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-[var(--text-subtle)]">
+                  <Clock size={10} />≈ {estimateDays} sending day{estimateDays === 1 ? "" : "s"} for {selection.ids.length} leads
+                  at up to {dailyLimit}/day, {String(windowStart).padStart(2, "0")}:00–{String(windowEnd).padStart(2, "0")}:00.
+                </p>
+              )}
+            </section>
+          ) : (
+            <section>
+              <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">Sending pace</p>
+              <div className="space-y-1.5">
+                {PACE_OPTIONS.map((o) => (
+                  <label key={o.value} className={cn(
+                    "flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 transition-colors",
+                    paceSeconds === o.value ? "border-[var(--accent)] bg-[var(--accent-soft)]" : "border-[var(--border)] hover:border-[var(--border-strong)]",
+                  )}>
+                    <input type="radio" name="pace" checked={paceSeconds === o.value} onChange={() => setPaceSeconds(o.value)} className="mt-1 accent-[var(--accent)]" />
+                    <span>
+                      <span className="block text-[13px] font-medium">{o.label}</span>
+                      <span className="block text-[11px] text-[var(--text-subtle)]">{o.hint}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-[var(--text-subtle)]">
+                <Clock size={10} />Roughly {estimateMinutes} min to drain {selection.ids.length} leads at this pace, within daily caps.
+              </p>
+            </section>
+          )}
 
           {/* Name */}
           <section>
