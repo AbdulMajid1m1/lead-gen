@@ -1,0 +1,310 @@
+import prisma from "../../prismaClient.js";
+import { getAccount, sendInitialEmail, sendWhatsAppForLead } from "./service.js";
+import { getWhatsAppAccount } from "./whatsapp.js";
+import { composeEmailForLead, gatherFacts } from "../research/compose.js";
+import { whatsappInitialTemplate } from "../research/templates.js";
+import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
+import { log } from "../../utils/logger.js";
+
+const logger = log("outreach:campaigns");
+
+/**
+ * Bulk outreach without the blast.
+ *
+ * A campaign is a queue, not a loop: the worker drains it one lead at a time,
+ * spaced by `paceSeconds`, under a per-account daily cap. That pacing is not
+ * cosmetic — Gmail and WhatsApp both score senders on burst behaviour, and the
+ * cheapest way to lose a mailbox or get a number banned is to send 300
+ * identical messages in one minute. Slow *is* the feature.
+ *
+ * Every individual send goes through the exact same functions as a manual
+ * one-off (`sendInitialEmail` / `sendWhatsAppForLead`), so suppression checks,
+ * thread creation, signatures, status funnels and reply tracking are inherited
+ * rather than re-implemented.
+ */
+
+const DAY_MS = 86_400_000;
+export const DAILY_EMAIL_CAP = Number(process.env.OUTREACH_DAILY_EMAIL_CAP || 150);
+// Unofficial WhatsApp transport — stay conservative or the number gets banned.
+export const DAILY_WA_CAP = Number(process.env.OUTREACH_DAILY_WA_CAP || 60);
+const MAX_RECIPIENTS = 500;
+
+const startOfToday = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+/** How many messages an account/device has sent since midnight. */
+export const sentTodayCount = (channel, senderId) =>
+  prisma.outreachMessage.count({
+    where: {
+      direction: "OUTBOUND",
+      sentAt: { gte: startOfToday() },
+      thread: channel === "EMAIL" ? { channel: "EMAIL", accountId: senderId } : { channel: "WHATSAPP", waAccountId: senderId },
+    },
+  });
+
+/** Best usable email on a lead's company, source-authored proof first. */
+export const pickEmailContact = (contacts) => {
+  const usable = contacts.filter((c) => c.kind === "EMAIL" && !c.isSuppressed && c.roleHint !== "NON_OUTREACH");
+  const rank = (c) => (c.confidenceLevel === "VERIFIED" ? 2 : 1) + (c.roleHint === "ROLE" ? 1 : 0);
+  return usable.sort((a, b) => rank(b) - rank(a))[0] || null;
+};
+
+/** Best number to WhatsApp: an explicit WhatsApp contact beats a plain phone. */
+export const pickWhatsAppNumber = (contacts) => {
+  const wa = contacts.find((c) => c.kind === "SOCIAL" && c.roleHint === "WHATSAPP" && !c.isSuppressed);
+  if (wa) {
+    const digits = String(wa.value).replace(/\D/g, "");
+    if (digits.length >= 7) return { number: digits, source: "WHATSAPP_LINK" };
+  }
+  const phone = contacts.filter((c) => c.kind === "PHONE" && !c.isSuppressed)
+    .sort((a, b) => (b.confidenceLevel === "VERIFIED" ? 1 : 0) - (a.confidenceLevel === "VERIFIED" ? 1 : 0))[0];
+  return phone ? { number: phone.value, source: "PHONE" } : null;
+};
+
+/**
+ * Create a campaign over a set of leads.
+ *
+ * Obvious dead recipients (no address for the channel, or a status a human has
+ * locked) are marked SKIPPED at creation so the progress bar is honest from
+ * second one, rather than discovering half the list is unreachable mid-drain.
+ */
+export const createCampaign = async ({ name, leadIds, channels, accountId = null, waAccountId = null, paceSeconds = 45 }) => {
+  const wantEmail = channels.includes("EMAIL");
+  const wantWa = channels.includes("WHATSAPP");
+
+  // Fail fast when the requested transport is not configured at all.
+  if (wantEmail) {
+    const account = await getAccount(accountId);
+    if (!account) return { ok: false, error: "No connected email account. Add one in Settings → Outreach first." };
+    accountId = account.id;
+  }
+  if (wantWa) {
+    const device = await getWhatsAppAccount(waAccountId);
+    if (!device) return { ok: false, error: "No linked WhatsApp device. Pair one in Settings → WhatsApp first." };
+    waAccountId = device.id;
+  }
+
+  const uniqueIds = [...new Set(leadIds)].slice(0, MAX_RECIPIENTS);
+  const leads = await prisma.lead.findMany({
+    where: { id: { in: uniqueIds } },
+    include: {
+      company: { include: { contacts: { where: { isSuppressed: false } } } },
+      // An existing conversation means this campaign must not pitch again.
+      threads: { select: { channel: true } },
+    },
+  });
+  if (leads.length === 0) return { ok: false, error: "None of the selected leads exist any more." };
+
+  const LOCKED = new Set(["DO_NOT_CONTACT", "ARCHIVED", "DISQUALIFIED", "NOT_INTERESTED", "CONVERTED"]);
+
+  const recipients = leads.map((lead) => {
+    const locked = LOCKED.has(lead.status);
+    const email = pickEmailContact(lead.company.contacts);
+    const wa = pickWhatsAppNumber(lead.company.contacts);
+    const hasEmailThread = lead.threads.some((t) => t.channel === "EMAIL");
+    const hasWaThread = lead.threads.some((t) => t.channel === "WHATSAPP");
+
+    const emailState = !wantEmail ? ["SKIPPED", "Channel not in this campaign."]
+      : locked ? ["SKIPPED", `Lead status is ${lead.status} — locked by a human decision.`]
+      : hasEmailThread ? ["SKIPPED", "Already in an email conversation."]
+      : !email ? ["SKIPPED", "No usable email address on this lead."]
+      : ["PENDING", email.value];
+
+    const waState = !wantWa ? ["SKIPPED", "Channel not in this campaign."]
+      : locked ? ["SKIPPED", `Lead status is ${lead.status} — locked by a human decision.`]
+      : hasWaThread ? ["SKIPPED", "Already in a WhatsApp conversation."]
+      : !wa ? ["SKIPPED", "No usable phone number on this lead."]
+      : ["PENDING", wa.number];
+
+    return {
+      leadId: lead.id,
+      emailState: emailState[0], emailDetail: emailState[1].slice(0, 300),
+      waState: waState[0], waDetail: waState[1].slice(0, 300),
+    };
+  });
+
+  const sendable = recipients.filter((r) => r.emailState === "PENDING" || r.waState === "PENDING");
+
+  const campaign = await prisma.outreachCampaign.create({
+    data: {
+      name: (name || `Bulk send · ${new Date().toLocaleDateString("en-GB")}`).slice(0, 160),
+      channels, accountId: wantEmail ? accountId : null, waAccountId: wantWa ? waAccountId : null,
+      paceSeconds: Math.max(20, Math.min(600, paceSeconds)),
+      status: sendable.length ? "RUNNING" : "COMPLETED",
+      completedAt: sendable.length ? null : new Date(),
+      recipients: { create: recipients },
+    },
+  });
+
+  logger.info({ campaignId: campaign.id, leads: leads.length, sendable: sendable.length, channels }, "campaign created");
+  return { ok: true, campaign: await campaignWithProgress(campaign.id), skippedUpfront: recipients.length - sendable.length };
+};
+
+/** One send attempt for one recipient on one channel. Never throws. */
+const attemptEmail = async (campaign, recipient) => {
+  try {
+    const account = await getAccount(campaign.accountId);
+    if (!account) return ["FAILED", "The sending account is gone or disabled."];
+
+    if ((await sentTodayCount("EMAIL", account.id)) >= DAILY_EMAIL_CAP) {
+      return ["PENDING", `Daily cap of ${DAILY_EMAIL_CAP} reached — resumes tomorrow.`];
+    }
+
+    // The freshest draft wins; a lead without one gets the deterministic
+    // template through the same composer the research flow uses.
+    let draft = await prisma.leadEmailDraft.findFirst({ where: { leadId: recipient.leadId }, orderBy: { createdAt: "desc" } });
+    if (!draft) draft = await composeEmailForLead({ leadId: recipient.leadId });
+    if (!draft) return ["SKIPPED", "No email could be composed for this lead."];
+
+    const res = await sendInitialEmail({
+      account, leadId: recipient.leadId,
+      to: recipient.emailDetail, subject: draft.subject, body: draft.body, draftId: draft.id,
+    });
+    return res.ok ? ["SENT", recipient.emailDetail] : [/failed/i.test(res.error) ? "FAILED" : "SKIPPED", res.error.slice(0, 300)];
+  } catch (err) {
+    return ["FAILED", String(err.message).slice(0, 300)];
+  }
+};
+
+const attemptWhatsApp = async (campaign, recipient) => {
+  try {
+    const device = await getWhatsAppAccount(campaign.waAccountId);
+    if (!device) return ["FAILED", "The sending device is gone or unpaired."];
+
+    if ((await sentTodayCount("WHATSAPP", device.id)) >= DAILY_WA_CAP) {
+      return ["PENDING", `Daily cap of ${DAILY_WA_CAP} reached — resumes tomorrow.`];
+    }
+
+    const gathered = await gatherFacts(recipient.leadId);
+    if (!gathered) return ["SKIPPED", "Lead vanished before sending."];
+    const serviceLabel = SERVICE_LABELS[gathered.lead.primaryOpportunity] || "software development";
+    const message = whatsappInitialTemplate({ company: gathered.company, facts: gathered.facts, serviceLabel }).body;
+
+    const res = await sendWhatsAppForLead({
+      leadId: recipient.leadId, phone: recipient.waDetail, message, waAccountId: device.id,
+    });
+    return res.ok ? ["SENT", recipient.waDetail] : [/not (?:connected|linked)|device/i.test(res.error) ? "FAILED" : "SKIPPED", res.error.slice(0, 300)];
+  } catch (err) {
+    return ["FAILED", String(err.message).slice(0, 300)];
+  }
+};
+
+/**
+ * Drain step, called by the worker every minute.
+ *
+ * Per campaign: honour the pace, then process recipients until one *actual
+ * send* happens (skips don't count against the pace — a run of dead rows
+ * should not stall the queue for an hour).
+ */
+export const runCampaignTick = async () => {
+  const campaigns = await prisma.outreachCampaign.findMany({ where: { status: "RUNNING" }, orderBy: { createdAt: "asc" } });
+  const summary = { campaigns: campaigns.length, sent: 0, skipped: 0, failed: 0, completed: 0 };
+
+  for (const campaign of campaigns) {
+    const sinceLast = campaign.lastSentAt ? Date.now() - campaign.lastSentAt.getTime() : Infinity;
+    if (sinceLast < campaign.paceSeconds * 1000) continue;
+
+    let sentThisTick = false;
+    // Bounded loop: burn through skips quickly, stop after the first real send.
+    for (let i = 0; i < 10 && !sentThisTick; i += 1) {
+      const recipient = await prisma.campaignRecipient.findFirst({
+        where: { campaignId: campaign.id, OR: [{ emailState: "PENDING" }, { waState: "PENDING" }] },
+        orderBy: { id: "asc" },
+      });
+      if (!recipient) break;
+
+      const patch = { processedAt: new Date() };
+
+      if (recipient.emailState === "PENDING") {
+        const [state, detail] = await attemptEmail(campaign, recipient);
+        // A cap-hit leaves the row PENDING for tomorrow and stops this campaign.
+        if (state === "PENDING") { logger.info({ campaignId: campaign.id, detail }, "email cap reached"); break; }
+        patch.emailState = state;
+        patch.emailDetail = detail;
+        if (state === "SENT") sentThisTick = true;
+        summary[state === "SENT" ? "sent" : state === "FAILED" ? "failed" : "skipped"] += 1;
+      }
+
+      if (recipient.waState === "PENDING" && (patch.emailState === undefined || patch.emailState !== "PENDING")) {
+        const [state, detail] = await attemptWhatsApp(campaign, recipient);
+        if (state === "PENDING") { await prisma.campaignRecipient.update({ where: { id: recipient.id }, data: patch }); break; }
+        patch.waState = state;
+        patch.waDetail = detail;
+        if (state === "SENT") sentThisTick = true;
+        summary[state === "SENT" ? "sent" : state === "FAILED" ? "failed" : "skipped"] += 1;
+      }
+
+      await prisma.campaignRecipient.update({ where: { id: recipient.id }, data: patch });
+    }
+
+    if (sentThisTick) {
+      await prisma.outreachCampaign.update({ where: { id: campaign.id }, data: { lastSentAt: new Date() } });
+    }
+
+    const remaining = await prisma.campaignRecipient.count({
+      where: { campaignId: campaign.id, OR: [{ emailState: "PENDING" }, { waState: "PENDING" }] },
+    });
+    if (remaining === 0) {
+      await prisma.outreachCampaign.update({ where: { id: campaign.id }, data: { status: "COMPLETED", completedAt: new Date() } });
+      summary.completed += 1;
+      logger.info({ campaignId: campaign.id, name: campaign.name }, "campaign completed");
+    }
+  }
+
+  return summary;
+};
+
+const STATE_KEYS = ["PENDING", "SENT", "SKIPPED", "FAILED"];
+
+export const campaignWithProgress = async (campaignId) => {
+  const campaign = await prisma.outreachCampaign.findUnique({ where: { id: campaignId } });
+  if (!campaign) return null;
+
+  const [emailStates, waStates, total] = await Promise.all([
+    prisma.campaignRecipient.groupBy({ by: ["emailState"], where: { campaignId }, _count: { _all: true } }),
+    prisma.campaignRecipient.groupBy({ by: ["waState"], where: { campaignId }, _count: { _all: true } }),
+    prisma.campaignRecipient.count({ where: { campaignId } }),
+  ]);
+  const shape = (rows, key) => Object.fromEntries(STATE_KEYS.map((s) => [s.toLowerCase(), rows.find((r) => r[key] === s)?._count._all || 0]));
+
+  return {
+    id: campaign.id, name: campaign.name, channels: campaign.channels,
+    status: campaign.status, paceSeconds: campaign.paceSeconds,
+    accountId: campaign.accountId, waAccountId: campaign.waAccountId,
+    createdAt: campaign.createdAt, completedAt: campaign.completedAt, lastSentAt: campaign.lastSentAt,
+    total,
+    email: shape(emailStates, "emailState"),
+    whatsapp: shape(waStates, "waState"),
+  };
+};
+
+export const listCampaigns = async ({ take = 25 } = {}) => {
+  const rows = await prisma.outreachCampaign.findMany({ orderBy: { createdAt: "desc" }, take });
+  return Promise.all(rows.map((c) => campaignWithProgress(c.id)));
+};
+
+export const setCampaignStatus = async (campaignId, status) => {
+  const campaign = await prisma.outreachCampaign.findUnique({ where: { id: campaignId } });
+  if (!campaign) return { ok: false, error: "Campaign not found." };
+  if (["COMPLETED", "CANCELLED"].includes(campaign.status)) return { ok: false, error: `Campaign is already ${campaign.status.toLowerCase()}.` };
+
+  if (status === "CANCELLED") {
+    // Pending rows are closed out so the numbers still add up afterwards.
+    await prisma.campaignRecipient.updateMany({
+      where: { campaignId, emailState: "PENDING" },
+      data: { emailState: "SKIPPED", emailDetail: "Campaign cancelled before this lead was reached." },
+    });
+    await prisma.campaignRecipient.updateMany({
+      where: { campaignId, waState: "PENDING" },
+      data: { waState: "SKIPPED", waDetail: "Campaign cancelled before this lead was reached." },
+    });
+  }
+  await prisma.outreachCampaign.update({
+    where: { id: campaignId },
+    data: { status, ...(status === "CANCELLED" ? { completedAt: new Date() } : {}) },
+  });
+  return { ok: true, campaign: await campaignWithProgress(campaignId) };
+};

@@ -3,9 +3,10 @@ import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { Logo } from "./components/Logo.jsx";
-import { LayoutDashboard, Search, Users, Radar, Settings, Moon, Sun, Sparkles, LogOut, Inbox } from "lucide-react";
+import { LayoutDashboard, Search, Users, Radar, Settings, Moon, Sun, Sparkles, LogOut, Inbox, SendHorizonal } from "lucide-react";
 import { api } from "./lib/api.js";
 import { cn } from "./lib/format.js";
+import OutreachPage from "./pages/OutreachPage.jsx";
 import SearchPage from "./pages/SearchPage.jsx";
 import ResearchPage from "./pages/ResearchPage.jsx";
 import ResearchHistoryPage from "./pages/ResearchHistoryPage.jsx";
@@ -26,6 +27,7 @@ const NAV = [
   { to: "/leads", label: "All leads", icon: Users },
   // `badge` marks the one item that carries a count. Sits directly under the
   // lead-finding screens because it is where a lead goes after you contact it.
+  { to: "/outreach", label: "Outreach", icon: SendHorizonal },
   { to: "/inbox", label: "Inbox", icon: Inbox, badge: true },
   { to: "/discovery", label: "Discovery runs", icon: Radar },
   { to: "/settings", label: "Settings", icon: Settings },
@@ -172,6 +174,7 @@ export default function App() {
           <Route path="/research/history" element={<ResearchHistoryPage />} />
           <Route path="/leads" element={<LeadsPage />} />
           <Route path="/leads/:id" element={<LeadDetailPage />} />
+          <Route path="/outreach" element={<OutreachPage />} />
           <Route path="/inbox" element={<InboxPage />} />
           <Route path="/discovery" element={<DiscoveryPage />} />
           <Route path="/settings" element={<SettingsPage />} />

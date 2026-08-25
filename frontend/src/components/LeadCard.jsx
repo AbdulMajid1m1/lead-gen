@@ -10,13 +10,33 @@ import {
  * The unit of the product. It has to answer four questions at a glance:
  * how good, why, how fresh, and what to do next.
  */
-export const LeadCard = ({ lead }) => {
+export const LeadCard = ({ lead, selectable = false, selected = false, onToggleSelect }) => {
   const tone = scoreTone(lead.score);
   const fresh = freshnessTone(lead.freshness.bucket);
 
   return (
-    <Surface className="group transition-colors hover:border-[var(--border-strong)]">
-      <Link to={`/leads/${lead.id}`} className="block p-4 focus-visible:outline-none">
+    <Surface
+      className={cn(
+        "group relative transition-colors hover:border-[var(--border-strong)]",
+        selected && "border-[var(--accent)] ring-1 ring-[color-mix(in_oklch,var(--accent)_35%,transparent)]",
+      )}
+    >
+      {/* Selection sits outside the Link so ticking a lead never navigates. */}
+      {selectable && (
+        <label
+          className="absolute right-3 top-3 z-10 flex size-8 cursor-pointer items-center justify-center rounded-lg hover:bg-[var(--surface-sunken)]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggleSelect?.(lead)}
+            aria-label={`Select ${lead.company.name}`}
+            className="size-4 cursor-pointer accent-[var(--accent)]"
+          />
+        </label>
+      )}
+      <Link to={`/leads/${lead.id}`} className={cn("block p-4 focus-visible:outline-none", selectable && "pr-12")}>
         <div className="flex gap-4">
           <ScoreRing score={lead.score} tone={tone} />
 

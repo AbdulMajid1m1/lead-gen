@@ -200,3 +200,23 @@ export const followUpTemplate = ({ company, serviceLabel, followUpNumber }) => {
     ].join("\n\n"),
   };
 };
+
+/**
+ * The chat form of a first touch. Same discipline as the follow-up version:
+ * one short paragraph, one concrete observation, a permission-shaped close.
+ * Long pitches and link lists in a first WhatsApp message read as broadcast
+ * spam and get the sender reported.
+ */
+export const whatsappInitialTemplate = ({ company, facts = [], serviceLabel }) => {
+  const observation = pickObservation(facts);
+  const hook = observation?.text
+    ? ` — I noticed ${observation.text.charAt(0).toLowerCase()}${observation.text.slice(1).replace(/\.$/, "")}`
+    : "";
+  return {
+    body:
+      `Hello! I came across ${company.name}${hook}. `
+      + `We help businesses with ${serviceLabel}, and I think there's a quick win here. `
+      + `Would it be okay to share a short idea?`,
+    factIdsUsed: [observation?.id].filter(Boolean),
+  };
+};

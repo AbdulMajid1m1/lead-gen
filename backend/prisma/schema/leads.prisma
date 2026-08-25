@@ -32,6 +32,7 @@ model Lead {
   outreach      OutreachRecommendation[]
   history       LeadStatusHistory[]
   emailDrafts   LeadEmailDraft[]
+  campaignRecipients CampaignRecipient[]
   threads       OutreachThread[]
 
   @@index([score(sort: Desc)])

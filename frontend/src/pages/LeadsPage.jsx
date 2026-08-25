@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Users, SlidersHorizontal } from "lucide-react";
+import { Users, SlidersHorizontal, Mail, MessageCircle, CheckSquare, X } from "lucide-react";
 import { PageBody, PageHeader } from "../App.jsx";
 import { api } from "../lib/api.js";
 import { LeadCard } from "../components/LeadCard.jsx";
-import { Button, EmptyState, ErrorState, MultiSelect, SkeletonCard, Surface } from "../components/ui.jsx";
+import { Badge, Button, EmptyState, ErrorState, MultiSelect, SkeletonCard, Surface } from "../components/ui.jsx";
+import { BulkSendSheet } from "../components/BulkSendSheet.jsx";
+import { toast } from "sonner";
 import { SERVICE_LABELS, STATUS_LABELS, FRESHNESS_LABELS, cn } from "../lib/format.js";
 
 const Select = ({ label, value, onChange, options }) => (
@@ -20,15 +22,34 @@ const Select = ({ label, value, onChange, options }) => (
   </label>
 );
 
+/**
+ * The pipeline, as tabs. Each tab is nothing more than a saved status filter —
+ * the counts come from the same where-clause as the list, so the badge numbers
+ * and the rows can never disagree.
+ */
+const TABS = [
+  { key: "pending", label: "Pending", status: "NEW,QUALIFIED", hint: "Not yet contacted" },
+  { key: "contacted", label: "Contacted", status: "CONTACTED,FOLLOW_UP", hint: "Sent, awaiting a reply" },
+  { key: "replied", label: "Replied", status: "REPLIED", hint: "They answered — your move" },
+  { key: "all", label: "All", status: "", hint: "Everything active" },
+];
+
 export default function LeadsPage() {
   // `sort: "created"` is the default on purpose — the newest lead is the first
   // row until the user asks for something else.
-  const [filters, setFilters] = useState({ service: "", status: "", freshness: "", sort: "created", minScore: "", city: "" });
+  const [filters, setFilters] = useState({ service: "", status: "NEW,QUALIFIED", freshness: "", sort: "created", minScore: "", city: "" });
   const [countries, setCountries] = useState([]);
   const [page, setPage] = useState(1);
+  // Selection for bulk send: a Set of lead ids plus what we know about their
+  // reachability (used by the sheet's summary line).
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [selectionMeta, setSelectionMeta] = useState({ withEmail: 0, withPhone: 0 });
+  const [sheet, setSheet] = useState(null); // null | { channels: [...] }
+  const [selectingAll, setSelectingAll] = useState(false);
 
-  const set = (key) => (value) => { setFilters((f) => ({ ...f, [key]: value })); setPage(1); };
-  const setCountry = (next) => { setCountries(next); setPage(1); };
+  const clearSelection = () => { setSelectedIds(new Set()); setSelectionMeta({ withEmail: 0, withPhone: 0 }); };
+  const set = (key) => (value) => { setFilters((f) => ({ ...f, [key]: value })); setPage(1); clearSelection(); };
+  const setCountry = (next) => { setCountries(next); setPage(1); clearSelection(); };
 
   // The dropdown is built from the countries the leads actually have, so it can
   // never offer a country that returns nothing.
@@ -50,6 +71,64 @@ export default function LeadsPage() {
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
 
+  // Tab badges: same filters, status ignored, every stage counted.
+  const { data: counts } = useQuery({
+    queryKey: ["lead-status-counts", filters, countries],
+    queryFn: () => api.leadStatusCounts({ ...filters, status: undefined, country: countries.join(",") }),
+    staleTime: 15_000,
+  });
+  const tabCount = { pending: counts?.pending, contacted: counts?.contacted, replied: counts?.replied, all: counts?.all };
+  const activeTab = TABS.find((t) => t.status === filters.status)?.key ?? null;
+
+  const pageLeads = data?.leads || [];
+  const pageAllSelected = pageLeads.length > 0 && pageLeads.every((l) => selectedIds.has(l.id));
+
+  const recount = (ids, leads) => {
+    // Meta only needs to be roughly right for page-level selection; the
+    // server re-checks every lead at send time anyway.
+    const known = leads.filter((l) => ids.has(l.id));
+    return {
+      withEmail: known.filter((l) => l.contact.hasEmail).length,
+      withPhone: known.filter((l) => l.contact.hasPhone).length,
+    };
+  };
+
+  const toggleLead = (lead) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(lead.id)) next.delete(lead.id);
+      else next.add(lead.id);
+      setSelectionMeta(recount(next, pageLeads));
+      return next;
+    });
+  };
+
+  const togglePage = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (pageAllSelected) pageLeads.forEach((l) => next.delete(l.id));
+      else pageLeads.forEach((l) => next.add(l.id));
+      setSelectionMeta(recount(next, pageLeads));
+      return next;
+    });
+  };
+
+  // "Select all N matching" pulls the full id list (capped at 500 — the same
+  // cap a campaign has) so bulk send is one click, not thirteen pages of ticks.
+  const selectAllMatching = async () => {
+    setSelectingAll(true);
+    try {
+      const res = await api.listLeadIds({ ...filters, country: countries.join(",") });
+      setSelectedIds(new Set(res.ids));
+      setSelectionMeta({ withEmail: res.withEmail, withPhone: res.withPhone });
+      if (res.capped) toast.info("Selection capped at 500 leads — the campaign limit.");
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSelectingAll(false);
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -58,6 +137,34 @@ export default function LeadsPage() {
       />
 
       <PageBody className="space-y-4">
+        <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Pipeline stage">
+          {TABS.map((tab) => (
+            <button
+              key={tab.key}
+              role="tab"
+              aria-selected={activeTab === tab.key}
+              title={tab.hint}
+              onClick={() => { set("status")(tab.status); }}
+              className={cn(
+                "inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-[13px] font-medium transition-colors",
+                activeTab === tab.key
+                  ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                  : "border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text)]",
+              )}
+            >
+              {tab.label}
+              {tabCount[tab.key] !== undefined && (
+                <span className={cn(
+                  "tnum rounded-md px-1.5 py-px text-[11px]",
+                  activeTab === tab.key ? "bg-[color-mix(in_oklch,var(--accent)_18%,transparent)]" : "bg-[var(--surface-sunken)]",
+                )}>
+                  {tabCount[tab.key]}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
         <Surface className="p-4">
           <div className="mb-3 flex items-center gap-2">
             <SlidersHorizontal size={14} className="text-[var(--text-subtle)]" />
@@ -112,9 +219,26 @@ export default function LeadsPage() {
 
         {data && (
           <>
-            <p className="text-sm text-[var(--text-muted)]">
-              <span className="font-semibold text-[var(--text)]">{data.total}</span> {data.total === 1 ? "lead" : "leads"}
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-[var(--text-muted)]">
+                <span className="font-semibold text-[var(--text)]">{data.total}</span> {data.total === 1 ? "lead" : "leads"}
+              </p>
+              {data.leads.length > 0 && (
+                <div className="flex items-center gap-3 text-[13px]">
+                  <label className="inline-flex cursor-pointer items-center gap-2 text-[var(--text-muted)]">
+                    <input type="checkbox" checked={pageAllSelected} onChange={togglePage} className="size-4 accent-[var(--accent)]" />
+                    Select page
+                  </label>
+                  <button
+                    onClick={selectAllMatching}
+                    disabled={selectingAll}
+                    className="inline-flex items-center gap-1.5 text-[var(--accent)] hover:underline disabled:opacity-50"
+                  >
+                    <CheckSquare size={13} />{selectingAll ? "Selecting…" : `Select all ${Math.min(data.total, 500)} matching`}
+                  </button>
+                </div>
+              )}
+            </div>
 
             {data.leads.length === 0 ? (
               <Surface className="border-dashed">
@@ -125,7 +249,17 @@ export default function LeadsPage() {
                 />
               </Surface>
             ) : (
-              <div className="space-y-3">{data.leads.map((lead) => <LeadCard key={lead.id} lead={lead} />)}</div>
+              <div className="space-y-3">
+                {data.leads.map((lead) => (
+                  <LeadCard
+                    key={lead.id}
+                    lead={lead}
+                    selectable
+                    selected={selectedIds.has(lead.id)}
+                    onToggleSelect={toggleLead}
+                  />
+                ))}
+              </div>
             )}
 
             {totalPages > 1 && (
@@ -138,6 +272,39 @@ export default function LeadsPage() {
           </>
         )}
       </PageBody>
+
+      {/* Bulk action bar — appears with the first ticked lead, stays out of the
+          way otherwise. Floats above the mobile bottom nav. */}
+      {selectedIds.size > 0 && (
+        <div className="fixed inset-x-0 bottom-16 z-40 flex justify-center px-4 md:bottom-5 md:pl-60">
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-strong)] bg-[var(--surface-raised)] px-4 py-2.5 shadow-[var(--shadow-lg)]">
+            <Badge tone="var(--accent)">{selectedIds.size} selected</Badge>
+            <span className="hidden text-[11px] text-[var(--text-subtle)] sm:inline">
+              {selectionMeta.withEmail} with email · {selectionMeta.withPhone} with phone
+            </span>
+            <span className="mx-1 hidden h-4 w-px bg-[var(--border)] sm:inline" />
+            <Button size="sm" onClick={() => setSheet({ channels: ["EMAIL"] })}>
+              <Mail size={13} />Email
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => setSheet({ channels: ["WHATSAPP"] })}>
+              <MessageCircle size={13} />WhatsApp
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => setSheet({ channels: ["EMAIL", "WHATSAPP"] })}>
+              Both
+            </Button>
+            <Button size="sm" variant="ghost" onClick={clearSelection} aria-label="Clear selection">
+              <X size={13} />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <BulkSendSheet
+        open={Boolean(sheet)}
+        onClose={() => setSheet(null)}
+        initialChannels={sheet?.channels || ["EMAIL"]}
+        selection={{ ids: [...selectedIds], ...selectionMeta }}
+      />
     </div>
   );
 }

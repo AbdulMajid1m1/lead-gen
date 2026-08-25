@@ -8,6 +8,7 @@ import * as discovery from "../controllers/subControllers/discoveryController.js
 import * as stats from "../controllers/subControllers/statsController.js";
 import * as research from "../controllers/subControllers/researchController.js";
 import * as outreach from "../controllers/subControllers/outreachController.js";
+import * as campaigns from "../controllers/subControllers/campaignController.js";
 import * as signatures from "../controllers/subControllers/signatureController.js";
 import * as auth from "../controllers/subControllers/authController.js";
 import { requireAuth } from "../middlewares/requireAuth.js";
@@ -56,6 +57,8 @@ router.get("/research-runs/:id/grid", validate({ params: idParam }), research.ge
 router.get("/leads", validate({ query: leads.listSchema }), leads.listLeads);
 // Must be registered before /leads/:id — otherwise "countries" is read as an id.
 router.get("/leads/countries", leads.listCountries);
+router.get("/leads/ids", validate({ query: leads.listSchema }), leads.listLeadIds);
+router.get("/leads/status-counts", validate({ query: leads.listSchema }), leads.statusCounts);
 router.get("/leads/:id", validate({ params: idParam }), leads.getLead);
 router.get("/leads/:id/provenance", validate({ params: idParam }), leads.getProvenance);
 router.get("/leads/:id/email-drafts", validate({ params: idParam }), research.listEmailDrafts);
@@ -76,6 +79,15 @@ router.get("/outreach/account", outreach.getAccountInfo);
 router.put("/outreach/account", writeLimiter, validate({ body: outreach.accountSchema }), outreach.saveAccount);
 router.post("/outreach/account/test", writeLimiter, outreach.testAccount);
 router.delete("/outreach/account", writeLimiter, outreach.deleteAccount);
+// ─── Bulk campaigns & outreach stats ─────────────────────────────────────────
+router.post("/outreach/campaigns", writeLimiter, validate({ body: campaigns.campaignCreateSchema }), campaigns.create);
+router.get("/outreach/campaigns", campaigns.list);
+router.get("/outreach/campaigns/:id", validate({ params: idParam }), campaigns.detail);
+router.post("/outreach/campaigns/:id/pause", writeLimiter, validate({ params: idParam }), campaigns.pause);
+router.post("/outreach/campaigns/:id/resume", writeLimiter, validate({ params: idParam }), campaigns.resume);
+router.post("/outreach/campaigns/:id/cancel", writeLimiter, validate({ params: idParam }), campaigns.cancel);
+router.get("/outreach/stats", validate({ query: campaigns.statsSchema }), campaigns.stats);
+
 router.post("/outreach/send", writeLimiter, validate({ body: outreach.sendSchema }), outreach.send);
 router.post("/outreach/sync", writeLimiter, validate({ body: outreach.syncQuerySchema }), outreach.syncNow);
 router.get("/outreach/inbox", validate({ query: outreach.inboxQuerySchema }), outreach.inbox);

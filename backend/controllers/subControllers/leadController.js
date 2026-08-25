@@ -27,12 +27,19 @@ export const listSchema = z.object({
 const FRESHNESS_DAYS = { NEW_TODAY: 1, NEW_THIS_WEEK: 7, THIS_MONTH: 30, THIS_QUARTER: 90 };
 
 /** GET /api/leads */
-export const listLeads = asyncHandler(async (req, res) => {
-  const q = req.validatedQuery;
+/**
+ * The list filters, shared by the list itself, the tab counts and bulk
+ * selection — one construction so the three can never disagree about what
+ * "matching leads" means. `ignoreStatus` powers the tab counters, which need
+ * every status counted under the *other* active filters.
+ */
+const buildListWhere = (q, { ignoreStatus = false } = {}) => {
   const where = { AND: [] };
 
-  if (q.status) where.AND.push({ status: { in: q.status.split(",") } });
-  else where.AND.push({ status: { notIn: ["DO_NOT_CONTACT", "ARCHIVED"] } });
+  if (!ignoreStatus) {
+    if (q.status) where.AND.push({ status: { in: q.status.split(",") } });
+    else where.AND.push({ status: { notIn: ["DO_NOT_CONTACT", "ARCHIVED"] } });
+  }
 
   if (q.service) where.AND.push({ primaryOpportunity: { in: q.service.split(",") } });
   if (q.type) where.AND.push({ type: { in: q.type.split(",") } });
@@ -64,6 +71,13 @@ export const listLeads = asyncHandler(async (req, res) => {
   } else if (q.freshness === "OLDER") {
     where.AND.push({ newestEvidenceAt: { lt: new Date(Date.now() - 90 * 86_400_000) } });
   }
+
+  return where;
+};
+
+export const listLeads = asyncHandler(async (req, res) => {
+  const q = req.validatedQuery;
+  const where = buildListWhere(q);
 
   // "created" is the default: the newest lead is always the first row. The id
   // tiebreak matters because a discovery run writes its whole batch inside the
@@ -514,4 +528,60 @@ const crawlDto = (result) => ({
   bytes: result.bytes,
   totalMs: result.totalMs,
   fetchedAt: result.fetchedAt,
+});
+
+
+/**
+ * GET /api/leads/ids — every lead id matching the current filters, capped.
+ * This is what makes "select all 324 matching" one click instead of thirteen
+ * pages of checkboxes; the cap mirrors the campaign recipient limit.
+ */
+export const listLeadIds = asyncHandler(async (req, res) => {
+  const q = req.validatedQuery;
+  const where = buildListWhere(q);
+
+  const rows = await prisma.lead.findMany({
+    where,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: 500,
+    select: {
+      id: true,
+      company: { select: { contacts: { where: { isSuppressed: false }, select: { kind: true, roleHint: true } } } },
+    },
+  });
+
+  res.json({
+    success: true,
+    data: {
+      ids: rows.map((r) => r.id),
+      withEmail: rows.filter((r) => r.company.contacts.some((c) => c.kind === "EMAIL" && c.roleHint !== "NON_OUTREACH")).length,
+      withPhone: rows.filter((r) => r.company.contacts.some((c) => c.kind === "PHONE" || (c.kind === "SOCIAL" && c.roleHint === "WHATSAPP"))).length,
+      capped: rows.length === 500,
+    },
+  });
+});
+
+/**
+ * GET /api/leads/status-counts — how many leads sit in each pipeline stage
+ * under the current filters (status excluded). Drives the tab badges.
+ */
+export const statusCounts = asyncHandler(async (req, res) => {
+  const q = req.validatedQuery;
+  const where = buildListWhere(q, { ignoreStatus: true });
+
+  const grouped = await prisma.lead.groupBy({ by: ["status"], where, _count: { _all: true } });
+  const counts = Object.fromEntries(grouped.map((g) => [g.status, g._count._all]));
+  const of = (...keys) => keys.reduce((acc, k) => acc + (counts[k] || 0), 0);
+
+  res.json({
+    success: true,
+    data: {
+      pending: of("NEW", "QUALIFIED"),
+      contacted: of("CONTACTED", "FOLLOW_UP"),
+      replied: of("REPLIED"),
+      working: of("INTERESTED"),
+      all: of("NEW", "QUALIFIED", "CONTACTED", "FOLLOW_UP", "REPLIED", "INTERESTED", "CONVERTED", "NOT_INTERESTED"),
+      raw: counts,
+    },
+  });
 });

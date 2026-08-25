@@ -100,6 +100,17 @@ export const api = {
   regenerateEmailDraft: (leadId) => request(`/leads/${leadId}/email-drafts`, { method: "POST" }),
 
   // ─── Outreach: mailbox, sending, reply tracking, follow-ups ────────────────
+  // ─── Bulk campaigns & stats ─────────────────────────────────────────────────
+  listLeadIds: (params) => request(`/leads/ids${qs(params)}`),
+  leadStatusCounts: (params) => request(`/leads/status-counts${qs(params)}`),
+  createCampaign: (body) => request("/outreach/campaigns", { method: "POST", body }),
+  listCampaigns: () => request("/outreach/campaigns"),
+  getCampaign: (id) => request(`/outreach/campaigns/${id}`),
+  pauseCampaign: (id) => request(`/outreach/campaigns/${id}/pause`, { method: "POST" }),
+  resumeCampaign: (id) => request(`/outreach/campaigns/${id}/resume`, { method: "POST" }),
+  cancelCampaign: (id) => request(`/outreach/campaigns/${id}/cancel`, { method: "POST" }),
+  outreachStats: (params) => request(`/outreach/stats${qs(params)}`),
+
   listEmailAccounts: () => request("/outreach/accounts"),
   createEmailAccount: (body) => request("/outreach/accounts", { method: "POST", body }),
   updateEmailAccount: (id, body) => request(`/outreach/accounts/${id}`, { method: "PUT", body }),

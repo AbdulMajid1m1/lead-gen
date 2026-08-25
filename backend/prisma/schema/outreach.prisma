@@ -151,3 +151,67 @@ model OutreachMessage {
 
   @@index([threadId, createdAt])
 }
+
+// ─── Bulk campaigns ───────────────────────────────────────────────────────────
+
+enum CampaignStatus {
+  RUNNING
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+/// Per-channel outcome for one lead inside a campaign.
+enum CampaignSendState {
+  PENDING
+  SENT
+  SKIPPED // no usable address, already in conversation, or suppressed
+  FAILED  // the transport said no
+}
+
+/// One bulk send: a set of leads, the channels to reach them on, and pacing.
+///
+/// A campaign never blasts. The worker drains it one lead at a time with
+/// `paceSeconds` between sends and a per-account daily cap, because both inbox
+/// providers and WhatsApp treat sudden bursts as spam — the fastest way to
+/// lose a sending identity is to use it like a cannon.
+model OutreachCampaign {
+  id   String @id @default(cuid())
+  name String @db.VarChar(160)
+
+  /// ["EMAIL"], ["WHATSAPP"] or both.
+  channels    Json
+  accountId   String? // sending mailbox; null = the default account at send time
+  waAccountId String? // sending device;  null = the default device at send time
+
+  status      CampaignStatus @default(RUNNING)
+  paceSeconds Int            @default(45)
+  lastSentAt  DateTime?
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  recipients CampaignRecipient[]
+
+  @@index([status, createdAt])
+}
+
+model CampaignRecipient {
+  id         String           @id @default(cuid())
+  campaignId String
+  campaign   OutreachCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  leadId     String
+  lead       Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  /// State per channel; a channel not in the campaign stays SKIPPED from birth.
+  emailState  CampaignSendState @default(PENDING)
+  emailDetail String?           @db.VarChar(300)
+  waState     CampaignSendState @default(PENDING)
+  waDetail    String?           @db.VarChar(300)
+
+  processedAt DateTime?
+
+  @@unique([campaignId, leadId])
+  @@index([campaignId, emailState])
+  @@index([campaignId, waState])
+}

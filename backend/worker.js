@@ -12,6 +12,7 @@ import { lookupDomain } from "./lib/adapters/crtsh.js";
 import { recordFact } from "./lib/provenance/recorder.js";
 import { evaluateCompanySignals } from "./lib/signals/signalEngine.js";
 import { scoreCompany } from "./lib/scoring/scoreEngine.js";
+import { runCampaignTick } from "./lib/outreach/campaigns.js";
 import { runOutreachMaintenance } from "./lib/outreach/service.js";
 import { resolveCompanyDomain } from "./lib/ingest/domainResolver.js";
 import { REDIS_URL, WORKER_HEALTH_PORT } from "./configs/envConfig.js";
@@ -36,6 +37,22 @@ const connection = new IORedis(REDIS_URL, { maxRetriesPerRequest: null });
 const QUEUE_NAME = "leadsignal-maintenance";
 const queue = new Queue(QUEUE_NAME, { connection });
 
+// Outreach runs on its own queue with its own worker slot. Maintenance jobs
+// crawl politely and can hold their slot for many minutes; a bulk campaign's
+// one-minute drain tick must never sit behind them — pacing IS the product.
+const OUTREACH_QUEUE_NAME = "leadsignal-outreach";
+const outreachQueue = new Queue(OUTREACH_QUEUE_NAME, { connection });
+
+const OUTREACH_REPEATABLE = [
+  { name: "outreach-campaigns", pattern: "* * * * *" },      // paced bulk-send drain
+  { name: "outreach-maintenance", pattern: "*/30 * * * *" }, // replies + follow-ups
+];
+
+const outreachHandlers = {
+  "outreach-campaigns": async () => runCampaignTick(),
+  "outreach-maintenance": async () => runOutreachMaintenance(),
+};
+
 const REPEATABLE = [
   { name: "verify-ats-boards", pattern: "0 */6 * * *" },   // every 6 hours
   { name: "verify-loose-jobs", pattern: "30 3 * * *" },    // nightly
@@ -43,7 +60,6 @@ const REPEATABLE = [
   { name: "rescore-leads", pattern: "0 */4 * * *" },       // every 4 hours
   { name: "enrich-domain-age", pattern: "15 2 * * *" },    // nightly, best-effort
   { name: "prune-payloads", pattern: "0 5 * * 0" },        // weekly
-  { name: "outreach-maintenance", pattern: "*/30 * * * *" }, // replies + follow-ups
   { name: "resolve-missing-domains", pattern: "45 1 * * *" }, // nightly repair
 ];
 
@@ -52,7 +68,6 @@ const handlers = {
    * Pull replies for open outreach threads, then send any follow-up that has
    * come due. No-op until a mailbox is connected in Settings.
    */
-  "outreach-maintenance": async () => runOutreachMaintenance(),
 
   /**
    * Companies with leads but no known website get another resolution attempt.
@@ -258,6 +273,23 @@ const worker = new Worker(
 
 worker.on("failed", (job, err) => logger.error({ job: job?.name, err }, "maintenance job failed"));
 
+const outreachWorker = new Worker(
+  OUTREACH_QUEUE_NAME,
+  async (job) => {
+    const handler = outreachHandlers[job.name];
+    if (!handler) throw new Error(`No handler for job ${job.name}`);
+    const startedAt = Date.now();
+    const result = await handler(job);
+    // The every-minute tick is silent when idle; only real activity is logged.
+    if (job.name !== "outreach-campaigns" || result?.sent || result?.failed || result?.completed) {
+      logger.info({ job: job.name, ms: Date.now() - startedAt, ...result }, "outreach job complete");
+    }
+    return result;
+  },
+  { connection, concurrency: 1 },
+);
+outreachWorker.on("failed", (job, err) => logger.error({ job: job?.name, err }, "outreach job failed"));
+
 const registerSchedules = async () => {
   // Clear previously-registered schedulers so a changed cron takes effect.
   for (const existing of await queue.getJobSchedulers()) {
@@ -265,6 +297,12 @@ const registerSchedules = async () => {
   }
   for (const { name, pattern } of REPEATABLE) {
     await queue.upsertJobScheduler(name, { pattern }, { name });
+  }
+  for (const existing of await outreachQueue.getJobSchedulers()) {
+    await outreachQueue.removeJobScheduler(existing.key);
+  }
+  for (const { name, pattern } of OUTREACH_REPEATABLE) {
+    await outreachQueue.upsertJobScheduler(name, { pattern }, { name });
   }
   logger.info({ jobs: REPEATABLE.map((r) => r.name) }, "maintenance schedules registered");
 };
@@ -299,7 +337,9 @@ registerSchedules()
 
 const shutdown = async () => {
   await worker.close();
+  await outreachWorker.close();
   await queue.close();
+  await outreachQueue.close();
   await connection.quit();
   await prisma.$disconnect();
   healthServer.close();
