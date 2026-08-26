@@ -6,6 +6,8 @@ import {
 } from "../../lib/outreach/campaigns.js";
 import { listAccounts } from "../../lib/outreach/service.js";
 import { listWhatsAppAccounts } from "../../lib/outreach/whatsapp.js";
+import { regenerateDrafts } from "../../lib/research/compose.js";
+import { runContactHygiene } from "../../lib/outreach/hygiene.js";
 import { createError } from "../../utils/createError.js";
 import { asyncHandler } from "../../middlewares/validate.js";
 
@@ -85,6 +87,37 @@ const transition = (status) => asyncHandler(async (req, res) => {
 export const pause = transition("PAUSED");
 export const resume = transition("RUNNING");
 export const cancel = transition("CANCELLED");
+
+/**
+ * POST /api/outreach/drafts/regenerate — rebuild every contactable lead's
+ * draft with the current prompts and templates. Drafts are snapshots; copy
+ * improvements change nothing until this runs. AI writes where a provider is
+ * up (spend-capped), templates cover the rest.
+ */
+export const regenerate = asyncHandler(async (req, res) => {
+  req.setTimeout(0); // an AI-assisted pass over hundreds of leads outlives the default timeout
+  const summary = await regenerateDrafts({});
+  res.json({
+    success: true,
+    message: `Rewrote ${summary.written} drafts (${summary.aiWritten} by AI, ${summary.templated} from templates).`,
+    data: summary,
+  });
+});
+
+/**
+ * POST /api/outreach/contacts/hygiene — suppress unsendable addresses
+ * (broker domains, extraction-mangled locals, domains with no MX) before
+ * they cost a bounce.
+ */
+export const hygiene = asyncHandler(async (req, res) => {
+  req.setTimeout(0); // one MX lookup per unique domain can take a while on a large list
+  const summary = await runContactHygiene({});
+  res.json({
+    success: true,
+    message: `Checked ${summary.checked} addresses, suppressed ${summary.suppressed}.`,
+    data: summary,
+  });
+});
 
 /**
  * GET /api/outreach/stats — the numbers behind the outreach page.

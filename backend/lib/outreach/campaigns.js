@@ -1,6 +1,7 @@
 import prisma from "../../prismaClient.js";
 import { getAccount, sendInitialEmail, sendWhatsAppForLead } from "./service.js";
 import { getWhatsAppAccount } from "./whatsapp.js";
+import { domainHasMx, emailLooksMangled, BROKER_DOMAIN_RE } from "./hygiene.js";
 import { composeEmailForLead, gatherFacts } from "../research/compose.js";
 import { whatsappInitialTemplate } from "../research/templates.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
@@ -202,6 +203,16 @@ const attemptEmail = async (campaign, recipient) => {
 
     if ((await sentTodayCount("EMAIL", account.id)) >= DAILY_EMAIL_CAP) {
       return ["PENDING", `Daily cap of ${DAILY_EMAIL_CAP} reached — resumes tomorrow.`];
+    }
+
+    // Verification gate: a bounce costs sender reputation the whole domain
+    // pays for, so an address that cannot receive mail is skipped, not tried.
+    const domain = recipient.emailDetail.split("@")[1]?.toLowerCase() || "";
+    if (emailLooksMangled(recipient.emailDetail) || BROKER_DOMAIN_RE.test(domain)) {
+      return ["SKIPPED", "Address failed verification (malformed or broker domain)."];
+    }
+    if (!(await domainHasMx(domain))) {
+      return ["SKIPPED", `${domain} has no mail server — the address would bounce.`];
     }
 
     // The freshest draft wins; a lead without one gets the deterministic

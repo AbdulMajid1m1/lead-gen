@@ -16,7 +16,7 @@ const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}\b/g;
 // whose parking pages advertise their own sales address on every domain they
 // hold. Without that last group, a business whose name happens to match a
 // parked domain acquires the broker's inbox as its "business email".
-const EMAIL_BLOCKLIST_RE = /(?:^|@)(?:example|test|domain|yourdomain|email|sentry|wixpress|godaddy|squarespace|shopify|placeholder|localhost)\b|@(?:domainster|hugedomains|brandbucket|sedo|afternic|dan|undeveloped|namecheap|dynadot|sav|epik|escrow)\.|\.(?:png|jpe?g|gif|webp|svg|css|js|woff2?|ico)$|^(?:user|name|your|someone)@/i;
+const EMAIL_BLOCKLIST_RE = /(?:^|@)(?:example|test|domain|yourdomain|email|sentry|wixpress|godaddy|squarespace|shopify|placeholder|localhost)\b|@(?:domainster|domainmarket|hugedomains|brandbucket|sedo|afternic|dan|undeveloped|namecheap|dynadot|sav|epik|escrow)\.|\.(?:png|jpe?g|gif|webp|svg|css|js|woff2?|ico)$|^(?:user|name|your|someone)@/i;
 
 const ROLE_PREFIXES = new Set([
   "info", "contact", "hello", "hi", "sales", "support", "enquiries", "enquiry",

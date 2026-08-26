@@ -1,5 +1,5 @@
 import prisma from "../../prismaClient.js";
-import { parseStructured, isResearchAvailable } from "../llm/responses.js";
+import { parseStructured, isResearchAvailable, CostTracker } from "../llm/responses.js";
 import {
   COMPOSE_SYSTEM, buildComposeUser, COMPOSE_SCHEMA,
   BATCH_COMPOSE_SYSTEM, buildBatchComposeUser, BATCH_COMPOSE_SCHEMA,
@@ -104,7 +104,10 @@ export const composeEmailForLead = async ({ leadId, runId = null, tracker = null
   if (isResearchAvailable()) {
     const result = await parseStructured({
       system: COMPOSE_SYSTEM,
-      user: buildComposeUser({ companyName: company.name, serviceLabel, recipientHint, facts }),
+      user: buildComposeUser({
+        companyName: company.name, serviceLabel, recipientHint, facts,
+        city: company.city, countryCode: company.countryCode, industry: company.industry,
+      }),
       schema: COMPOSE_SCHEMA,
       schemaName: "outreach_email",
       model: AI_FAST_MODEL,
@@ -204,6 +207,7 @@ export const composeForRun = async ({ runId, leadIds, tracker, serviceOverride =
             serviceLabel: SERVICE_LABELS[serviceOverride || g.lead.primaryOpportunity] || "software development",
             recipientHint: g.recipientHint,
             facts: g.facts,
+            city: g.company.city, countryCode: g.company.countryCode, industry: g.company.industry,
           })),
         }),
         schema: BATCH_COMPOSE_SCHEMA,
@@ -242,4 +246,35 @@ export const composeForRun = async ({ runId, leadIds, tracker, serviceOverride =
   }
 
   return { written, templated, aiWritten: written - templated };
+};
+
+/**
+ * Rewrite the outreach draft for every contactable lead.
+ *
+ * Used after the copy system improves: drafts are snapshots, so better
+ * templates or prompts change nothing until the drafts are rebuilt. AI writes
+ * where a provider is up (bounded by its own budget); everything else gets the
+ * deterministic template. Old drafts stay as history — campaigns always pick
+ * the newest.
+ */
+export const regenerateDrafts = async ({ budgetUsd = 2 } = {}) => {
+  const leads = await prisma.lead.findMany({
+    where: { status: { notIn: ["ARCHIVED", "DO_NOT_CONTACT", "DISQUALIFIED"] } },
+    select: { id: true },
+    orderBy: { score: "desc" },
+  });
+  const tracker = new CostTracker(budgetUsd);
+  let written = 0;
+  let templated = 0;
+
+  for (let i = 0; i < leads.length; i += AI_COMPOSE_MAX_LEADS) {
+    const chunk = leads.slice(i, i + AI_COMPOSE_MAX_LEADS).map((l) => l.id);
+    const res = await composeForRun({ runId: null, leadIds: chunk, tracker });
+    written += res.written;
+    templated += res.templated;
+  }
+
+  const summary = { leads: leads.length, written, aiWritten: written - templated, templated, cost: tracker.toJSON() };
+  logger.info(summary, "draft regeneration complete");
+  return summary;
 };
