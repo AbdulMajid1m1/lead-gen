@@ -248,6 +248,53 @@ export const composeForRun = async ({ runId, leadIds, tracker, serviceOverride =
   return { written, templated, aiWritten: written - templated };
 };
 
+const CONTACTABLE = { status: { notIn: ["ARCHIVED", "DO_NOT_CONTACT", "DISQUALIFIED"] } };
+
+/**
+ * The fact bundle for every contactable lead — what an external author (a
+ * human, or an assistant session standing in for the AI API) needs to write
+ * each lead its own email. Same facts, same grounding rules as the AI path.
+ */
+export const exportComposeContext = async () => {
+  const leads = await prisma.lead.findMany({ where: CONTACTABLE, select: { id: true }, orderBy: { score: "desc" } });
+  const out = [];
+  for (const { id } of leads) {
+    const g = await gatherFacts(id);
+    if (!g) continue;
+    out.push({
+      leadId: id,
+      company: { name: g.company.name, city: g.company.city, countryCode: g.company.countryCode, industry: g.company.industry },
+      serviceLabel: SERVICE_LABELS[g.lead.primaryOpportunity] || "software development",
+      recipientHint: g.recipientHint,
+      facts: g.facts.map(({ id: fid, text, confidenceLevel }) => ({ id: fid, text, confidenceLevel })),
+    });
+  }
+  return out;
+};
+
+/**
+ * Accept externally-authored drafts. Every body is re-checked against the
+ * lead's own facts with the same grounding guard the AI path uses — an
+ * imported email that mentions a phone, address or URL the facts don't
+ * contain is rejected, whoever wrote it.
+ */
+export const importDrafts = async ({ drafts, author = "external" }) => {
+  const summary = { imported: 0, rejected: [] };
+  for (const d of drafts) {
+    const gathered = await gatherFacts(d.leadId);
+    if (!gathered) { summary.rejected.push({ leadId: d.leadId, reason: "lead not found" }); continue; }
+    const grounded = bodyIsGrounded(d.body, gathered.facts);
+    if (!grounded.ok) { summary.rejected.push({ leadId: d.leadId, reason: `invented "${grounded.offending}"` }); continue; }
+    await saveDraft({
+      leadId: d.leadId, runId: null,
+      draft: { subject: d.subject, body: d.body, aboutCompany: d.aboutCompany || "", factIdsUsed: d.factIdsUsed || [] },
+      facts: gathered.facts, generatedBy: "LLM", model: author,
+    });
+    summary.imported += 1;
+  }
+  return summary;
+};
+
 /**
  * Rewrite the outreach draft for every contactable lead.
  *

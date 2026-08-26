@@ -88,6 +88,8 @@ router.post("/outreach/campaigns/:id/resume", writeLimiter, validate({ params: i
 router.post("/outreach/campaigns/:id/cancel", writeLimiter, validate({ params: idParam }), campaigns.cancel);
 router.get("/outreach/stats", validate({ query: campaigns.statsSchema }), campaigns.stats);
 router.post("/outreach/drafts/regenerate", writeLimiter, campaigns.regenerate);
+router.get("/outreach/drafts/context", campaigns.draftContext);
+router.post("/outreach/drafts/import", writeLimiter, validate({ body: campaigns.draftImportSchema }), campaigns.draftImport);
 router.post("/outreach/contacts/hygiene", writeLimiter, campaigns.hygiene);
 
 router.post("/outreach/send", writeLimiter, validate({ body: outreach.sendSchema }), outreach.send);

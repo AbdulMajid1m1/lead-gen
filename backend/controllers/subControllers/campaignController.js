@@ -6,7 +6,7 @@ import {
 } from "../../lib/outreach/campaigns.js";
 import { listAccounts } from "../../lib/outreach/service.js";
 import { listWhatsAppAccounts } from "../../lib/outreach/whatsapp.js";
-import { regenerateDrafts } from "../../lib/research/compose.js";
+import { regenerateDrafts, exportComposeContext, importDrafts } from "../../lib/research/compose.js";
 import { runContactHygiene } from "../../lib/outreach/hygiene.js";
 import { createError } from "../../utils/createError.js";
 import { asyncHandler } from "../../middlewares/validate.js";
@@ -100,6 +100,41 @@ export const regenerate = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     message: `Rewrote ${summary.written} drafts (${summary.aiWritten} by AI, ${summary.templated} from templates).`,
+    data: summary,
+  });
+});
+
+/**
+ * GET /api/outreach/drafts/context — fact bundles for every contactable lead,
+ * so an external author can write per-lead emails from verified data only.
+ */
+export const draftContext = asyncHandler(async (req, res) => {
+  req.setTimeout(0);
+  const leads = await exportComposeContext();
+  res.json({ success: true, data: { leads } });
+});
+
+export const draftImportSchema = z.object({
+  author: z.string().trim().max(100).default("external"),
+  drafts: z.array(z.object({
+    leadId: z.string().min(1).max(64),
+    subject: z.string().trim().min(1).max(200),
+    body: z.string().trim().min(1).max(4000),
+    aboutCompany: z.string().trim().max(1000).optional(),
+    factIdsUsed: z.array(z.number().int()).optional(),
+  })).min(1).max(500),
+});
+
+/**
+ * POST /api/outreach/drafts/import — store externally-authored drafts. Each
+ * body passes the same grounding guard as an AI draft before it is saved.
+ */
+export const draftImport = asyncHandler(async (req, res) => {
+  req.setTimeout(0);
+  const summary = await importDrafts(req.body);
+  res.json({
+    success: true,
+    message: `Imported ${summary.imported} drafts, rejected ${summary.rejected.length}.`,
     data: summary,
   });
 });
