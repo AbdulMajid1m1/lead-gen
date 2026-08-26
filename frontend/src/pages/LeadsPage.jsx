@@ -139,7 +139,9 @@ export default function LeadsPage() {
         description="Every company the system has qualified, newest first. Filter by country, opportunity or freshness to get to the ones worth a conversation today."
       />
 
-      <PageBody className="space-y-4">
+      {/* Extra bottom padding while the bulk bar is up, so the pagination row
+          can always scroll clear of it. */}
+      <PageBody className={cn("space-y-4", selectedIds.size > 0 && "pb-32 md:pb-24")}>
         <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Pipeline stage">
           {TABS.map((tab) => (
             <button
@@ -277,10 +279,13 @@ export default function LeadsPage() {
       </PageBody>
 
       {/* Bulk action bar — appears with the first ticked lead, stays out of the
-          way otherwise. Floats above the mobile bottom nav. */}
+          way otherwise. Floats above the mobile bottom nav. The full-width
+          wrapper must not eat clicks meant for content beside/behind the pill
+          (the pagination buttons live in that band), so only the pill itself
+          accepts pointer events. */}
       {selectedIds.size > 0 && (
-        <div className="fixed inset-x-0 bottom-16 z-40 flex justify-center px-4 md:bottom-5 md:pl-60">
-          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-strong)] bg-[var(--surface-raised)] px-4 py-2.5 shadow-[var(--shadow-lg)]">
+        <div className="pointer-events-none fixed inset-x-0 bottom-16 z-40 flex justify-center px-4 md:bottom-5 md:pl-60">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-strong)] bg-[var(--surface-raised)] px-4 py-2.5 shadow-[var(--shadow-lg)]">
             <Badge tone="var(--accent)">{selectedIds.size} selected</Badge>
             <span className="hidden text-[11px] text-[var(--text-subtle)] sm:inline">
               {selectionMeta.withEmail} with email · {selectionMeta.withPhone} with phone · kept across pages
