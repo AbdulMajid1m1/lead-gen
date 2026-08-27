@@ -206,6 +206,20 @@ describe("first email carries no link and asks for no meeting", () => {
     expect(draft.body).toMatch(/^(?:Hello,|مرحباً)/);
   });
 
+  it("reads as a sentence when the observation opens with a participle", () => {
+    // The catalogue writes reasons as standalone lines ("Currently hiring X"),
+    // which lower-cased into "I noticed currently hiring X" — the exact wording
+    // that prompted the complaint about these emails reading as generated.
+    const hiring = initialTemplate({
+      company: { name: "Acme Ltd", countryCode: "GB" },
+      facts: [{ id: "h1", text: "Currently hiring a Senior Machine Learning Engineer, indicating an active AI programme.", confidenceLevel: "DETECTED" }],
+      serviceKey: "CUSTOM_SOFTWARE",
+      serviceLabel: "custom software",
+    });
+    expect(hiring.body).toMatch(/I noticed you're currently hiring/);
+    expect(hiring.body).not.toMatch(/I noticed currently hiring/);
+  });
+
   it("uses a second observed fact when one is available", () => {
     const twoFacts = initialTemplate({
       company: { name: "Muster Bau GmbH", countryCode: "DE" },

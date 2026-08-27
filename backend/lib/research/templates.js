@@ -412,7 +412,23 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel, reci
   const hook = HOOK_COPY[kind] || HOOK_COPY.DEFAULT;
 
   // A fact that opens with the company's own name must keep its capital.
-  const quote = (text) => (text.startsWith(company.name) ? text : lowerFirst(text));
+  /**
+   * Fit an observation into "I noticed …" so it reads as a sentence.
+   *
+   * The signal catalogue writes reasons as standalone lines — "Currently hiring
+   * a Senior ML Engineer", "The home page took 4.2s to respond" — which is
+   * right for the lead card but produces "I noticed currently hiring a Senior
+   * ML Engineer" once lower-cased into the email. A reason that opens with a
+   * bare participle needs its subject restored, and since the email addresses
+   * the company as "you", that subject is "you are".
+   */
+  const quote = (text) => {
+    if (text.startsWith(company.name)) return text;
+    const lowered = lowerFirst(text);
+    return /^(?:currently |actively )?(?:hiring|recruiting|advertising|expanding|opening|running|using|serving)\b/.test(lowered)
+      ? `you're ${lowered}`
+      : lowered;
+  };
 
   // Both halves must come from the same thought: a booking hook answered with a
   // "get found in search" promise reads as two templates stitched together.
