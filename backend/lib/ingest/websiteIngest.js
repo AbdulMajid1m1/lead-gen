@@ -23,10 +23,22 @@ const PAGE_PRIORITY = [
   { priority: 100, label: "home",    max: 1, test: (p) => p === "/" },
   { priority: 95,  label: "contact", max: 2, test: (p) => /^\/(?:contact|contactus|contact-us|contact-me|kontakt|contacto|contatti|get-in-touch|reach-us|reach-out|connect|enquir(?:y|ies)|inquir(?:y|ies)|request-a-quote|get-a-quote|book-a-call|talk-to-us|write-to-us|اتصل-بنا|تواصل-معنا)$/i.test(p) },
   { priority: 85,  label: "about",   max: 1, test: (p) => /^\/(?:about|about-us|aboutus|company|who-we-are|our-story|ueber-uns|uber-uns|sobre-nosotros|من-نحن|عن-الشركة)$/i.test(p) },
-  // A legal or imprint page is the single most reliable email source on the
-  // web: German law mandates one, and GDPR/CCPA privacy notices must name a
-  // contact address. Many small sites publish an email here and nowhere else.
-  { priority: 82,  label: "legal",   max: 1, test: (p) => /^\/(?:impressum|imprint|legal|legal-notice|privacy|privacy-policy|datenschutz|terms|terms-of-service|terms-and-conditions|aviso-legal)$/i.test(p) },
+  // The imprint page is the single highest-yield email source on the European
+  // web, and it is a legal obligation rather than a courtesy: the EU
+  // e-Commerce Directive Art. 5(1)(c) requires an email address, and the CJEU
+  // held in C-298/07 that a contact form does not satisfy it. Germany (§5 DDG,
+  // formerly §5 TMG), Austria (§5 ECG), Switzerland, Italy, Spain, France, the
+  // Netherlands and the UK all implement it under different page names.
+  //
+  // Ranked above `about` and given two slots because it is worth more than
+  // either. Previously it sat at 82 sharing one slot with privacy and terms,
+  // so on a German site `/datenschutz` routinely consumed the only slot and
+  // `/impressum` — the one page legally guaranteed to carry an address — was
+  // never fetched.
+  { priority: 92,  label: "imprint", max: 2, test: (p) => /^\/(?:impressum|impressum-datenschutz|impressum-und-datenschutz|imprint|anbieterkennzeichnung|offenlegung|rechtliches|rechtliche-hinweise|legal|legal-notice|legal-information|mentions-legales|informations-legales|note-legali|informazioni-legali|dati-societari|aviso-legal|avis-legal|informacion-legal|colofon|juridische-informatie|ficha-tecnica|yasal-bilgiler|معلومات-قانونية)$/i.test(p) },
+  // Privacy and terms carry a contact address far less reliably, so they get
+  // their own low-priority slot rather than competing with the imprint.
+  { priority: 60,  label: "policy",  max: 1, test: (p) => /^\/(?:privacy|privacy-policy|datenschutz|datenschutzerklaerung|politique-de-confidentialite|informativa-privacy|politica-de-privacidad|privacybeleid|terms|terms-of-service|terms-and-conditions|agb|conditions-generales)$/i.test(p) },
   // Team and leadership pages are where a business names the people who run it,
   // which is what turns "info@" outreach into a message addressed to someone.
   { priority: 80,  label: "team",    max: 1, test: (p) => /^\/(?:team|our-team|meet-the-team|staff|people|our-people|leadership|management|founders|doctors|our-doctors|physicians|lawyers|agents|experts|specialists|فريق-العمل)$/i.test(p) },
@@ -82,7 +94,23 @@ const classifyPath = (pathname) => {
 };
 
 /** Pick the highest-value internal links from a crawled page. */
-const selectFollowUpUrls = (links, origin, alreadyQueued, limit) => {
+/**
+ * The words a site actually links its imprint and contact pages with, across
+ * the markets we sell into. Matched against link text when the path itself is
+ * unrecognised.
+ */
+const ANCHOR_LEXICON = [
+  { label: "imprint", priority: 91, re: /^\s*(?:impressum|anbieterkennzeichnung|offenlegung|rechtliches|rechtliche\s+hinweise|imprint|legal\s+notice|legal\s+information|mentions\s+l[ée]gales|informations\s+l[ée]gales|note\s+legali|informazioni\s+legali|dati\s+societari|aviso\s+legal|avís\s+legal|informaci[óo]n\s+legal|colofon|juridische\s+informatie|ficha\s+t[ée]cnica|yasal\s+bilgiler|معلومات\s+قانونية)\s*$/i },
+  { label: "contact", priority: 94, re: /^\s*(?:kontakt|kontakt\s+aufnehmen|contact|contact\s+us|contatti|contacto|contactez[- ]nous|neem\s+contact\s+op|iletişim|اتصل\s+بنا|تواصل\s+معنا)\s*$/i },
+];
+
+const classifyAnchorText = (text) => {
+  const label = String(text || "").replace(/\s+/g, " ").trim();
+  if (!label || label.length > 40) return null;
+  return ANCHOR_LEXICON.find((entry) => entry.re.test(label)) || null;
+};
+
+export const selectFollowUpUrls = (links, origin, alreadyQueued, limit) => {
   const scored = [];
   for (const link of links) {
     let url;
@@ -97,8 +125,21 @@ const selectFollowUpUrls = (links, origin, alreadyQueued, limit) => {
     if (/\.(?:pdf|jpe?g|png|gif|svg|webp|zip|mp4|mp3|docx?|xlsx?)$/i.test(url.pathname)) continue;
 
     const rule = classifyPath(url.pathname.replace(/\/+$/, "") || "/");
-    if (rule.label === "other") continue; // only follow known-valuable pages
-    scored.push({ url: normalized, priority: rule.priority, label: rule.label });
+
+    // A path we do not recognise can still be an imprint: sites version and
+    // localise the slug freely ("/de/rechtliche-hinweise-2024"), and the BGH
+    // has held (I ZR 228/03) that reaching it through two links is lawful, so
+    // German sites legitimately nest it under /kontakt. The link *text* is the
+    // stable signal the URL is not, and matching on it is what stops a
+    // legally-mandated address being missed over a slug we had not listed.
+    const byText = rule.label === "other" ? classifyAnchorText(link.text) : null;
+    if (rule.label === "other" && !byText) continue; // only follow known-valuable pages
+
+    scored.push({
+      url: normalized,
+      priority: byText ? byText.priority : rule.priority,
+      label: byText ? byText.label : rule.label,
+    });
   }
   scored.sort((a, b) => b.priority - a.priority);
 

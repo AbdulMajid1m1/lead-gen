@@ -1,4 +1,8 @@
 import * as cheerio from "cheerio";
+import {
+  decodeCloudflareEmail, decodeWordSeparators, normaliseForMatching,
+  decodeCandidate, emailsFromMailto, emailsFromJson,
+} from "./emailDecode.js";
 
 /**
  * Extracts publicly published business contact points from a page.
@@ -16,7 +20,16 @@ const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}\b/g;
 // whose parking pages advertise their own sales address on every domain they
 // hold. Without that last group, a business whose name happens to match a
 // parked domain acquires the broker's inbox as its "business email".
-const EMAIL_BLOCKLIST_RE = /(?:^|@)(?:example|test|domain|yourdomain|email|sentry|wixpress|godaddy|squarespace|shopify|placeholder|localhost)\b|@(?:domainster|domainmarket|hugedomains|brandbucket|sedo|afternic|dan|undeveloped|namecheap|dynadot|sav|epik|escrow)\.|\.(?:png|jpe?g|gif|webp|svg|css|js|woff2?|ico)$|^(?:user|name|your|someone)@/i;
+// `(?![\w-])` rather than `\b` on the placeholder group: `\b` matches before a
+// hyphen, so real businesses at test-labor.de and email-marketing.de were being
+// thrown away as placeholder text.
+const EMAIL_BLOCKLIST_RE = /(?:^|@)(?:example|test|domain|yourdomain|email|sentry|wixpress|godaddy|squarespace|shopify|placeholder|localhost)(?![\w-])|@(?:domainster|domainmarket|hugedomains|brandbucket|sedo|afternic|dan|undeveloped|namecheap|dynadot|sav|epik|escrow)\.|\.(?:png|jpe?g|gif|webp|svg|css|js|woff2?|ico)$|^(?:user|name|your|someone)@/i;
+
+/**
+ * Methods where the page is *declaring* an address rather than mentioning one.
+ * These skip the TLD allowlist; prose does not.
+ */
+const DECLARED_METHODS = new Set(["MAILTO_LINK", "CLOUDFLARE", "STRUCTURED_DATA", "DATA_ATTR"]);
 
 const ROLE_PREFIXES = new Set([
   "info", "contact", "hello", "hi", "sales", "support", "enquiries", "enquiry",
@@ -148,10 +161,20 @@ export const extractContacts = (html, ctx = {}) => {
   const $ = cheerio.load(html || "");
   const pageUrl = ctx.pageUrl || null;
 
-  // Strip script/style before text scanning — inline JSON blobs are full of
-  // vendor emails and version strings that look like phone numbers.
+  // Nodes the page hides from a human are stripped before any text scan. Two
+  // reasons, and the second matters more: a `display:none` block is where
+  // scraper honeypots live, and a seeded trap address is a spam-trap hit that
+  // costs the sending domain its reputation.
+  $("[style*='display:none' i], [style*='display: none' i], [hidden], [aria-hidden='true']").remove();
+
+  // Script/style/noscript are dropped from the *text* scan — inline JSON blobs
+  // are full of vendor emails and version strings that read as phone numbers.
+  // They are read separately, and deliberately, further down: Cloudflare does
+  // not obfuscate script contents, so on a Cloudflare site the JSON blob is
+  // frequently the only place the address survives in the clear.
+  const $scripts = $("script").clone();
   const $body = $("script, style, noscript").remove().end();
-  const text = deobfuscate($body.text().replace(/\s+/g, " "));
+  const text = deobfuscate(decodeWordSeparators(normaliseForMatching($body.text().replace(/\s+/g, " "))));
 
   // ── emails ──
   const emails = new Map();
@@ -159,9 +182,13 @@ export const extractContacts = (html, ctx = {}) => {
     const email = String(value).trim().toLowerCase().replace(/^mailto:/, "").split("?")[0];
     if (!email || !/^[^@]+@[^@]+\.[a-z]{2,24}$/i.test(email)) return;
     if (EMAIL_BLOCKLIST_RE.test(email)) return;
-    // A mailto: href is the site declaring an address, so it is trusted even
-    // with an unusual TLD. Text scraped from prose must clear the TLD check.
-    if (method !== "MAILTO_LINK" && !hasValidTld(email)) return;
+    // The TLD allowlist exists to stop prose ("...checkout.view") reading as an
+    // address. It must not apply to a *declared* address — a mailto: href, a
+    // Cloudflare-encoded span, a schema.org `email` field or a data- attribute
+    // is the site stating its own contact point, and stating it on `.berlin`,
+    // `.immo` or `.construction` is not a reason to discard it. Only text
+    // scraped out of running prose has to clear the list.
+    if (!DECLARED_METHODS.has(method) && !hasValidTld(email)) return;
     if (!emails.has(email)) {
       emails.set(email, {
         value: email,
@@ -173,8 +200,72 @@ export const extractContacts = (html, ctx = {}) => {
     }
   };
 
-  $("a[href^='mailto:' i]").each((_, el) => addEmail($(el).attr("href") || "", "MAILTO_LINK"));
+  // A mailto: may carry several recipients, and more in its to/cc/bcc fields —
+  // and may carry none at all ("mailto:?subject=Hi"), which must not become a
+  // contact. RFC 6068 rather than a naive prefix strip.
+  $("a[href^='mailto:' i]").each((_, el) => {
+    for (const address of emailsFromMailto($(el).attr("href") || "")) addEmail(address, "MAILTO_LINK");
+  });
   for (const m of text.matchAll(EMAIL_RE)) addEmail(m[0], "PAGE_TEXT");
+
+  // Cloudflare's Email Address Obfuscation, on by default for every site that
+  // signs up. Both markup forms, plus the raw fragment, because the attribute
+  // is sometimes written onto an element cheerio does not match cleanly.
+  $("[data-cfemail]").each((_, el) => {
+    const decoded = decodeCloudflareEmail($(el).attr("data-cfemail"));
+    if (decoded) addEmail(decoded, "CLOUDFLARE");
+  });
+  for (const m of String(html || "").matchAll(/email-protection#([0-9a-fA-F]{6,})/g)) {
+    const decoded = decodeCloudflareEmail(m[1]);
+    if (decoded) addEmail(decoded, "CLOUDFLARE");
+  }
+
+  // Addresses parked in data- attributes, and the split user/domain pattern
+  // several CMS anti-spam plugins use.
+  $("[data-email], [data-mail], [data-user], [data-domain], [data-contact]").each((_, el) => {
+    const attribs = el.attribs || {};
+    const user = attribs["data-user"];
+    const domain = attribs["data-domain"];
+    if (user && domain) addEmail(`${user}@${domain}`, "DATA_ATTR");
+    for (const [name, value] of Object.entries(attribs)) {
+      if (!name.startsWith("data-") || !value) continue;
+      const hit = decodeCandidate(value);
+      if (hit) addEmail(hit.email, "DATA_ATTR");
+    }
+  });
+
+  // SVG text and <address> blocks — invisible to a text scan that walks only
+  // HTML elements, and never obfuscated because nobody expects them to be read.
+  $("svg text, svg tspan, address").each((_, el) => {
+    const hit = decodeCandidate($(el).text());
+    if (hit) addEmail(hit.email, "PAGE_TEXT");
+  });
+
+  // Structured data and framework state. One recursive key walk covers
+  // schema.org contactPoint/founder/employee, @graph, and the __NEXT_DATA__ /
+  // __NUXT__ / Wix / Squarespace blobs alike — the shapes are open-ended and a
+  // list of known paths would be out of date the week it was written.
+  $scripts.each((_, el) => {
+    const raw = $(el).text();
+    if (!raw || raw.length > 400_000 || !raw.includes("@")) return;
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch { parsed = null; }
+    if (parsed) {
+      for (const address of emailsFromJson(parsed)) addEmail(address, "STRUCTURED_DATA");
+      return;
+    }
+    // Not pure JSON (an assignment like `window.__NUXT__ = {...}`): pull out the
+    // first balanced object and try that, then fall back to a plain scan.
+    const start = raw.indexOf("{");
+    if (start >= 0) {
+      const slice = raw.slice(start, raw.lastIndexOf("}") + 1);
+      try {
+        for (const address of emailsFromJson(JSON.parse(slice))) addEmail(address, "STRUCTURED_DATA");
+        return;
+      } catch { /* fall through */ }
+    }
+    for (const m of normaliseForMatching(raw).matchAll(EMAIL_RE)) addEmail(m[0], "STRUCTURED_DATA");
+  });
 
   // ── phones ──
   const phones = new Map();

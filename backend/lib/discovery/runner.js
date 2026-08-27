@@ -218,7 +218,7 @@ const runStep = async ({ kind, params, parsed, runId, touchedCompanyIds, stats, 
           const res = await ingestWebsite({
             companyId: company.id,
             url: `https://${company.domains[0].domain}`,
-            maxPages: params.maxPagesPerHost || 4,
+            maxPages: params.maxPagesPerHost || 6,
             discoveryRunId: runId,
           });
           if (res.ok) crawled += 1;
