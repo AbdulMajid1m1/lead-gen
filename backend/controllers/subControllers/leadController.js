@@ -7,6 +7,8 @@ import { relativeAge, freshnessBucket, decayFactor } from "../../lib/scoring/dec
 import { countryName } from "../../utils/countries.js";
 import { createError } from "../../utils/createError.js";
 import { asyncHandler } from "../../middlewares/validate.js";
+import { pickWhatsAppNumber } from "../../lib/outreach/phoneRank.js";
+import { sendPolicyFor, isRoleAddress, isSendBlocked } from "../../lib/outreach/sendPolicy.js";
 
 export const listSchema = z.object({
   status: z.string().optional(),
@@ -562,9 +564,40 @@ export const listLeadIds = asyncHandler(async (req, res) => {
     take: 500,
     select: {
       id: true,
-      company: { select: { contacts: { where: { isSuppressed: false }, select: { kind: true, roleHint: true } } } },
+      company: {
+        select: {
+          countryCode: true,
+          // `value` and `confidenceLevel` are needed to tell a mobile from a
+          // switchboard; without them the WhatsApp count is a guess.
+          contacts: {
+            where: { isSuppressed: false },
+            select: { kind: true, roleHint: true, value: true, confidenceLevel: true, isSuppressed: true },
+          },
+        },
+      },
     },
   });
+
+  // "Has a phone number" and "can be reached on WhatsApp" are not the same
+  // claim. Counting them as one is what let a bulk send promise forty
+  // recipients and deliver to fifteen — the rest were landlines.
+  const waPlausible = rows.filter((r) => {
+    const best = pickWhatsAppNumber(r.company.contacts, r.company.countryCode);
+    return best && best.kind !== "LANDLINE";
+  }).length;
+
+  // Leads the legal gate will refuse at campaign creation. Counted here so the
+  // bulk bar can say so *before* a campaign is built, rather than the user
+  // discovering it in a list of skips afterwards.
+  const emailBlocked = rows.filter((r) =>
+    isSendBlocked(sendPolicyFor({
+      countryCode: r.company.countryCode,
+      channel: "EMAIL",
+      roleAddress: r.company.contacts.some((c) => c.kind === "EMAIL" && isRoleAddress(c)),
+    }))).length;
+  const blockedCountries = [...new Set(rows
+    .map((r) => r.company.countryCode)
+    .filter((code) => code && isSendBlocked(sendPolicyFor({ countryCode: code, channel: "EMAIL" }))))];
 
   res.json({
     success: true,
@@ -572,6 +605,13 @@ export const listLeadIds = asyncHandler(async (req, res) => {
       ids: rows.map((r) => r.id),
       withEmail: rows.filter((r) => r.company.contacts.some((c) => c.kind === "EMAIL" && c.roleHint !== "NON_OUTREACH")).length,
       withPhone: rows.filter((r) => r.company.contacts.some((c) => c.kind === "PHONE" || (c.kind === "SOCIAL" && c.roleHint === "WHATSAPP"))).length,
+      // Leads whose best number is a WhatsApp link, a mobile, or a number we
+      // cannot classify. Landline-only leads are excluded: they will almost
+      // certainly come back "not registered on WhatsApp".
+      withWhatsApp: waPlausible,
+      // How many of this selection cannot lawfully be cold-emailed, and where.
+      emailBlocked,
+      blockedCountries,
       capped: rows.length === 500,
     },
   });

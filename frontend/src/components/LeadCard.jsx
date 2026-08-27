@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { Mail, Phone, FileText, MapPin, ArrowRight, Sparkles, ShieldAlert, User } from "lucide-react";
 import { Badge, ScoreRing, Surface } from "./ui.jsx";
 import {
-  SERVICE_LABELS, LEAD_TYPE_LABELS, CONFIDENCE_STYLES,
+  SERVICE_LABELS, LEAD_TYPE_LABELS, CONFIDENCE_STYLES, SEND_POLICY_STYLE,
   scoreTone, freshnessTone, cn,
 } from "../lib/format.js";
 
@@ -13,6 +13,11 @@ import {
 export const LeadCard = ({ lead, selectable = false, selected = false, onToggleSelect }) => {
   const tone = scoreTone(lead.score);
   const fresh = freshnessTone(lead.freshness.bucket);
+  // Older cached leads predate the compliance field; render without it rather
+  // than crashing the whole grid.
+  const emailPolicy = lead.compliance?.email || null;
+  const whatsappPolicy = lead.compliance?.whatsapp || null;
+  const policyStyle = SEND_POLICY_STYLE[emailPolicy?.policy] || SEND_POLICY_STYLE.RESTRICTED;
 
   return (
     <Surface
@@ -94,6 +99,35 @@ export const LeadCard = ({ lead, selectable = false, selected = false, onToggleS
                   </li>
                 ))}
               </ul>
+            )}
+
+            {/* The legal position on contacting this lead, stated before the
+                address is. In the opt-in markets a single cold email is
+                actionable by the recipient with no regulator involved, so this
+                belongs next to the contact route rather than behind a click. */}
+            {emailPolicy && emailPolicy.policy !== "ALLOWED" && (
+              <div
+                className="mt-3 flex items-start gap-2 rounded-lg border px-2.5 py-2 text-[11px] leading-snug"
+                style={{
+                  borderColor: `color-mix(in oklch, ${policyStyle.tone} 35%, transparent)`,
+                  backgroundColor: `color-mix(in oklch, ${policyStyle.tone} 8%, transparent)`,
+                }}
+              >
+                <ShieldAlert size={12} className="mt-0.5 shrink-0" style={{ color: policyStyle.tone }} />
+                <span className="min-w-0">
+                  <span className="font-medium" style={{ color: policyStyle.tone }}>
+                    {policyStyle.label}
+                    {emailPolicy.country ? ` — ${emailPolicy.country}` : ""}
+                    {emailPolicy.law ? ` (${emailPolicy.law})` : ""}
+                  </span>
+                  <span className="mt-0.5 block text-[var(--text-muted)]">{emailPolicy.note}</span>
+                  {emailPolicy.policy === "BLOCKED" && whatsappPolicy?.policy !== "BLOCKED" && (
+                    <span className="mt-0.5 block text-[var(--text-muted)]">
+                      Phone and WhatsApp are treated differently here — that route is still open.
+                    </span>
+                  )}
+                </span>
+              </div>
             )}
 
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2">

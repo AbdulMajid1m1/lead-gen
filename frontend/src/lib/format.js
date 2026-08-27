@@ -154,6 +154,19 @@ export const CONTACT_HEALTH = {
   ARCHIVED: { label: "Archived", tone: "var(--text-subtle)", urgent: false },
 };
 
+/**
+ * How a send verdict reads on screen.
+ *
+ * BLOCKED is shown in the critical colour rather than a soft warning tone on
+ * purpose: in those markets a single cold email is actionable by the recipient
+ * with no regulator involved, so it is not a "be careful" — it is a stop.
+ */
+export const SEND_POLICY_STYLE = {
+  ALLOWED: { label: "Email OK", tone: "var(--color-positive)", short: "OK" },
+  RESTRICTED: { label: "Check first", tone: "var(--color-caution)", short: "Check" },
+  BLOCKED: { label: "Email not lawful", tone: "var(--color-critical)", short: "Blocked" },
+};
+
 export const CHANNEL_LABELS = {
   EMAIL: "Email",
   WHATSAPP: "WhatsApp",

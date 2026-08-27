@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Users, SlidersHorizontal, Mail, MessageCircle, CheckSquare, X } from "lucide-react";
+import { Users, SlidersHorizontal, Mail, MessageCircle, CheckSquare, X, ShieldAlert } from "lucide-react";
 import { PageBody, PageHeader } from "../App.jsx";
 import { api } from "../lib/api.js";
 import { LeadCard } from "../components/LeadCard.jsx";
@@ -43,11 +43,11 @@ export default function LeadsPage() {
   // Selection for bulk send: a Set of lead ids plus what we know about their
   // reachability (used by the sheet's summary line).
   const [selectedIds, setSelectedIds] = useState(() => new Set());
-  const [selectionMeta, setSelectionMeta] = useState({ withEmail: 0, withPhone: 0 });
+  const [selectionMeta, setSelectionMeta] = useState({ withEmail: 0, withPhone: 0, withWhatsApp: 0, emailBlocked: 0, blockedCountries: [] });
   const [sheet, setSheet] = useState(null); // null | { channels: [...] }
   const [selectingAll, setSelectingAll] = useState(false);
 
-  const clearSelection = () => { setSelectedIds(new Set()); setSelectionMeta({ withEmail: 0, withPhone: 0 }); };
+  const clearSelection = () => { setSelectedIds(new Set()); setSelectionMeta({ withEmail: 0, withPhone: 0, withWhatsApp: 0, emailBlocked: 0, blockedCountries: [] }); };
   const set = (key) => (value) => { setFilters((f) => ({ ...f, [key]: value })); setPage(1); clearSelection(); };
   const setCountry = (next) => { setCountries(next); setPage(1); clearSelection(); };
 
@@ -93,6 +93,13 @@ export default function LeadsPage() {
   const bump = (lead, dir) => setSelectionMeta((m) => ({
     withEmail: Math.max(0, m.withEmail + (lead.contact.hasEmail ? dir : 0)),
     withPhone: Math.max(0, m.withPhone + (lead.contact.hasPhone ? dir : 0)),
+    // Distinct from hasPhone: a switchboard is a phone number but not a
+    // WhatsApp account, and the bulk bar must not promise otherwise.
+    withWhatsApp: Math.max(0, m.withWhatsApp + (lead.contact.hasWhatsApp ? dir : 0)),
+    // Leads a campaign will refuse on legal grounds, counted as they are ticked
+    // so the warning appears before the sheet is opened, not after.
+    emailBlocked: Math.max(0, m.emailBlocked + (lead.compliance?.email?.policy === "BLOCKED" ? dir : 0)),
+    blockedCountries: m.blockedCountries,
   }));
 
   const toggleLead = (lead) => {
@@ -123,7 +130,10 @@ export default function LeadsPage() {
     try {
       const res = await api.listLeadIds({ ...filters, country: countries.join(",") });
       setSelectedIds(new Set(res.ids));
-      setSelectionMeta({ withEmail: res.withEmail, withPhone: res.withPhone });
+      setSelectionMeta({
+        withEmail: res.withEmail, withPhone: res.withPhone, withWhatsApp: res.withWhatsApp ?? 0,
+        emailBlocked: res.emailBlocked ?? 0, blockedCountries: res.blockedCountries ?? [],
+      });
       if (res.capped) toast.info("Selection capped at 500 leads — the campaign limit.");
     } catch (err) {
       toast.error(err.message);
@@ -288,8 +298,21 @@ export default function LeadsPage() {
           <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-strong)] bg-[var(--surface-raised)] px-4 py-2.5 shadow-[var(--shadow-lg)]">
             <Badge tone="var(--accent)">{selectedIds.size} selected</Badge>
             <span className="hidden text-[11px] text-[var(--text-subtle)] sm:inline">
-              {selectionMeta.withEmail} with email · {selectionMeta.withPhone} with phone · kept across pages
+              {selectionMeta.withEmail} with email · {selectionMeta.withWhatsApp} reachable on WhatsApp · kept across pages
             </span>
+            {selectionMeta.emailBlocked > 0 && (
+              <span
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium"
+                style={{
+                  backgroundColor: "color-mix(in oklch, var(--color-critical) 12%, transparent)",
+                  color: "var(--color-critical)",
+                }}
+                title={`Cold email is not lawful in ${selectionMeta.blockedCountries.join(", ") || "these markets"}. These leads will be skipped; phone and WhatsApp may still be open.`}
+              >
+                <ShieldAlert size={11} />
+                {selectionMeta.emailBlocked} cannot be emailed
+              </span>
+            )}
             <span className="mx-1 hidden h-4 w-px bg-[var(--border)] sm:inline" />
             <Button size="sm" onClick={() => setSheet({ channels: ["EMAIL"] })}>
               <Mail size={13} />Email
