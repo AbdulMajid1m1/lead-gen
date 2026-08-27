@@ -28,3 +28,32 @@ export const COUNTRY_NAMES = {
 
 /** Display name for a country code, falling back to the code itself. */
 export const countryName = (code) => (code ? COUNTRY_NAMES[code.toUpperCase()] || code.toUpperCase() : null);
+
+/**
+ * ISO 3166-1 alpha-2 → E.164 country calling code.
+ *
+ * Kept beside COUNTRY_NAMES because both answer "what do we know about this
+ * country code", and a second copy elsewhere would drift. Used to put the
+ * international prefix back on a number a business published nationally
+ * ("030 78001738" on a German site), which is what lets the same line from
+ * three different sources collapse to one stored contact.
+ */
+export const CALLING_CODES = {
+  AE: "971", AR: "54", AT: "43", AU: "61", BE: "32", BG: "359", BH: "973", BR: "55",
+  CA: "1", CH: "41", CL: "56", CN: "86", CY: "357", CZ: "420", DE: "49", DK: "45",
+  EE: "372", EG: "20", ES: "34", FI: "358", FR: "33", GB: "44", GR: "30", HK: "852",
+  HR: "385", HU: "36", ID: "62", IE: "353", IL: "972", IN: "91", IQ: "964", IS: "354",
+  IT: "39", JO: "962", JP: "81", KE: "254", KR: "82", KW: "965", LB: "961", LT: "370",
+  LU: "352", LV: "371", MA: "212", MT: "356", MX: "52", MY: "60", NG: "234", NL: "31",
+  NO: "47", NZ: "64", OM: "968", PH: "63", PK: "92", PL: "48", PT: "351", QA: "974",
+  RO: "40", RS: "381", RU: "7", SA: "966", SE: "46", SG: "65", SI: "386", SK: "421",
+  TH: "66", TR: "90", TW: "886", UA: "380", US: "1", VN: "84", ZA: "27",
+};
+
+/** Longest calling code that a bare international number starts with. */
+const SORTED_CODES = [...new Set(Object.values(CALLING_CODES))].sort((a, b) => b.length - a.length);
+
+export const callingCodeFor = (countryCode) =>
+  CALLING_CODES[String(countryCode || "").toUpperCase()] || null;
+
+export const detectCallingCode = (digits) => SORTED_CODES.find((c) => digits.startsWith(c)) || null;

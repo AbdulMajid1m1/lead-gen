@@ -5,6 +5,8 @@ import { decayFactor, relativeAge, freshnessBucket } from "../scoring/decay.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
 import { MIN_RESULTS_BEFORE_DISCOVER, AI_MAX_SEARCH_CALLS } from "../../configs/envConfig.js";
 import { expandLocation } from "../research/brief.js";
+import { pickDisplayPhone, pickWhatsAppNumber } from "../outreach/phoneRank.js";
+import { sendPolicyFor, isRoleAddress } from "../outreach/sendPolicy.js";
 
 /**
  * Turns a StructuredQuery into database results and, when the database cannot
@@ -186,7 +188,11 @@ export const toLeadCard = (lead, rankScore = null) => {
     || null;
   const person = lead.company?.people?.[0] || null;
   const email = contacts.find((c) => c.kind === "EMAIL" && c.roleHint !== "NON_OUTREACH");
-  const phone = contacts.find((c) => c.kind === "PHONE");
+  // Ranked, not "first row": a company's switchboard and its owner's mobile are
+  // both PHONE contacts, and only one of them is worth a WhatsApp message.
+  const homeCountry = lead.company?.countryCode || null;
+  const phone = pickDisplayPhone(contacts, homeCountry);
+  const whatsapp = pickWhatsAppNumber(contacts, homeCountry);
   const form = contacts.find((c) => c.kind === "CONTACT_FORM");
 
   return {
@@ -219,13 +225,27 @@ export const toLeadCard = (lead, rankScore = null) => {
       hasEmail: Boolean(email),
       hasPhone: Boolean(phone),
       hasForm: Boolean(form),
+      // Whether this lead is reachable on WhatsApp at all, and on which number
+      // — so the bulk bar can count honestly instead of assuming every phone
+      // is a WhatsApp account.
+      hasWhatsApp: Boolean(whatsapp),
       email: email?.value || null,
-      phone: phone?.value || null,
+      phone: phone?.display || null,
+      whatsapp: whatsapp ? { number: whatsapp.number, display: whatsapp.display, kind: whatsapp.kind, why: whatsapp.why } : null,
       formUrl: form?.value || null,
       // A named person turns "Dear Sir/Madam" into a real greeting, so the
       // grid shows whether one exists before the lead is opened.
       personName: person?.fullName || null,
       personTitle: person?.title || null,
+    },
+    // Whether we are legally allowed to cold-email this lead, and why. Computed
+    // here rather than in the UI so the grid, the bulk bar and the sender can
+    // never disagree about it — and surfaced on every lead, not just at send
+    // time, because in the opt-in markets the restriction reaches collection
+    // too (EDPB Guidelines 1/2024, fn. 143).
+    compliance: {
+      email: sendPolicyFor({ countryCode: homeCountry, channel: "EMAIL", roleAddress: isRoleAddress(email) }),
+      whatsapp: sendPolicyFor({ countryCode: homeCountry, channel: "WHATSAPP" }),
     },
     recommendedAction: lead.actions?.[0]
       ? { actionType: lead.actions[0].actionType, title: lead.actions[0].title, rationale: lead.actions[0].rationale }

@@ -6,6 +6,7 @@ import {
   phoneMatchKey,
 } from "../../utils/normalize.js";
 import { log } from "../../utils/logger.js";
+import { canonicalEmail, canonicalPhone } from "../outreach/phoneRank.js";
 
 const logger = log("provenance");
 
@@ -201,6 +202,24 @@ export const recordFact = async ({
 };
 
 /** Store a contact, honouring the suppression list at write time. */
+/**
+ * One stored spelling per real contact point.
+ *
+ * Anything that is not an email or a phone (contact-form and social URLs) is
+ * left exactly as observed — those are opaque identifiers, and "tidying" a URL
+ * risks changing what it points at.
+ */
+const canonicalContactValue = async (companyId, kind, value) => {
+  if (kind === "EMAIL") return canonicalEmail(value);
+  if (kind !== "PHONE") return String(value).trim();
+
+  const company = await prisma.company.findUnique({
+    where: { id: companyId },
+    select: { countryCode: true },
+  });
+  return canonicalPhone(value, company?.countryCode || null);
+};
+
 export const recordContact = async ({
   companyId,
   kind,
@@ -209,7 +228,17 @@ export const recordContact = async ({
   confidenceLevel = "DETECTED",
   sourceRecordId = null,
 }) => {
-  const trimmed = String(value).slice(0, 500);
+  // Canonicalise before the upsert key is built. `Contact` is unique on the raw
+  // string, so without this the same telephone arrives from Google Places, the
+  // crawler, OpenStreetMap and JSON-LD in four different spellings and becomes
+  // four separate "contacts" — each one separately MX-checked, separately
+  // counted in the reachability totals, and separately offered to the sender.
+  //
+  // The country hint is looked up rather than passed in: most callers do not
+  // have it to hand, and a number written nationally cannot be resolved to
+  // E.164 without it.
+  const canonical = await canonicalContactValue(companyId, kind, value);
+  const trimmed = canonical.slice(0, 500);
   const suppressed = await isSuppressed(kind, trimmed);
   if (suppressed) {
     logger.debug({ companyId, kind }, "contact suppressed at write time");

@@ -2,6 +2,7 @@ import prisma from "../../prismaClient.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
 import { relativeAge, freshnessBucket } from "../scoring/decay.js";
 import { log } from "../../utils/logger.js";
+import { pickDisplayPhone } from "../outreach/phoneRank.js";
 
 const logger = log("research:grid");
 
@@ -68,7 +69,9 @@ export const buildGridRows = async (runId) => {
     const whatsapps = c.contacts.filter((x) => x.kind === "SOCIAL" && x.roleHint === "WHATSAPP");
     const socials = c.contacts.filter((x) => x.kind === "SOCIAL" && x.roleHint !== "WHATSAPP");
     const bestEmail = best(emails);
-    const bestPhone = best(phones);
+    // Ranked by the same rule the sender uses, so the grid never shows a
+    // switchboard as "the number" while the campaign quietly picks another.
+    const bestPhone = pickDisplayPhone(phones, c.countryCode);
     const bestWhats = best(whatsapps);
 
     // Claims we could not confirm are shown, clearly marked, never promoted.
@@ -108,7 +111,7 @@ export const buildGridRows = async (runId) => {
               : null,
       contacts: {
         email: cell(bestEmail?.value, bestEmail?.confidenceLevel, null, { roleHint: bestEmail?.roleHint }),
-        phone: cell(bestPhone?.value, bestPhone?.confidenceLevel),
+        phone: cell(bestPhone?.display, bestPhone?.confidenceLevel),
         whatsapp: cell(bestWhats?.value, bestWhats?.confidenceLevel),
         socials: socials.map((s) => ({ network: s.roleHint, url: s.value, confidenceLevel: s.confidenceLevel })),
         unverifiedClaims,

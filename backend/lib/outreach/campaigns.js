@@ -1,6 +1,8 @@
 import prisma from "../../prismaClient.js";
 import { getAccount, sendInitialEmail, sendWhatsAppForLead } from "./service.js";
 import { getWhatsAppAccount } from "./whatsapp.js";
+import { pickWhatsAppNumber } from "./phoneRank.js";
+import { sendPolicyFor, isRoleAddress, isSendBlocked } from "./sendPolicy.js";
 import { domainHasMx, emailLooksMangled, BROKER_DOMAIN_RE } from "./hygiene.js";
 import { composeEmailForLead, gatherFacts } from "../research/compose.js";
 import { whatsappInitialTemplate } from "../research/templates.js";
@@ -99,16 +101,10 @@ export const pickEmailContact = (contacts) => {
 };
 
 /** Best number to WhatsApp: an explicit WhatsApp contact beats a plain phone. */
-export const pickWhatsAppNumber = (contacts) => {
-  const wa = contacts.find((c) => c.kind === "SOCIAL" && c.roleHint === "WHATSAPP" && !c.isSuppressed);
-  if (wa) {
-    const digits = String(wa.value).replace(/\D/g, "");
-    if (digits.length >= 7) return { number: digits, source: "WHATSAPP_LINK" };
-  }
-  const phone = contacts.filter((c) => c.kind === "PHONE" && !c.isSuppressed)
-    .sort((a, b) => (b.confidenceLevel === "VERIFIED" ? 1 : 0) - (a.confidenceLevel === "VERIFIED" ? 1 : 0))[0];
-  return phone ? { number: phone.value, source: "PHONE" } : null;
-};
+// Re-exported rather than redefined: which number to try on WhatsApp is one
+// decision, and it lives in phoneRank.js. Keeping the name exported here means
+// every existing importer (and its tests) is unaffected by the move.
+export { pickWhatsAppNumber };
 
 /**
  * Create a campaign over a set of leads.
@@ -152,21 +148,35 @@ export const createCampaign = async ({
   const recipients = leads.map((lead) => {
     const locked = LOCKED.has(lead.status);
     const email = pickEmailContact(lead.company.contacts);
-    const wa = pickWhatsAppNumber(lead.company.contacts);
+    const wa = pickWhatsAppNumber(lead.company.contacts, lead.company.countryCode);
     const hasEmailThread = lead.threads.some((t) => t.channel === "EMAIL");
     const hasWaThread = lead.threads.some((t) => t.channel === "WHATSAPP");
 
+    // The legal gate comes before every other reason to skip: in the opt-in
+    // markets a cold email is unlawful however good the address is, and a
+    // single one is actionable by the recipient without any regulator.
+    const emailPolicy = sendPolicyFor({
+      countryCode: lead.company.countryCode,
+      channel: "EMAIL",
+      roleAddress: isRoleAddress(email),
+    });
+    const waPolicy = sendPolicyFor({ countryCode: lead.company.countryCode, channel: "WHATSAPP" });
+
     const emailState = !wantEmail ? ["SKIPPED", "Channel not in this campaign."]
+      : isSendBlocked(emailPolicy) ? ["SKIPPED", `Cold email is not lawful in ${emailPolicy.country} (${emailPolicy.law}).`]
       : locked ? ["SKIPPED", `Lead status is ${lead.status} — locked by a human decision.`]
       : hasEmailThread ? ["SKIPPED", "Already in an email conversation."]
       : !email ? ["SKIPPED", "No usable email address on this lead."]
       : ["PENDING", email.value];
 
     const waState = !wantWa ? ["SKIPPED", "Channel not in this campaign."]
+      : isSendBlocked(waPolicy) ? ["SKIPPED", `Cold messaging is not lawful in ${waPolicy.country} (${waPolicy.law}).`]
       : locked ? ["SKIPPED", `Lead status is ${lead.status} — locked by a human decision.`]
       : hasWaThread ? ["SKIPPED", "Already in a WhatsApp conversation."]
       : !wa ? ["SKIPPED", "No usable phone number on this lead."]
-      : ["PENDING", wa.number];
+      // `display` rather than `number`: this string is shown in the campaign
+      // log and echoed in any send error, so it stays in the form a human wrote.
+      : ["PENDING", wa.display];
 
     return {
       leadId: lead.id,

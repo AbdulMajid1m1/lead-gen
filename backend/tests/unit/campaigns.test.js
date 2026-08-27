@@ -35,15 +35,26 @@ describe("pickWhatsAppNumber", () => {
       { kind: "PHONE", value: "+966111111111", confidenceLevel: "VERIFIED", isSuppressed: false },
       { kind: "SOCIAL", roleHint: "WHATSAPP", value: "https://wa.me/966500000000", isSuppressed: false },
     ]);
-    expect(picked).toEqual({ number: "966500000000", source: "WHATSAPP_LINK" });
+    // `number` is what gets dialled; the wa.me URL is never shown back to a user.
+    expect(picked).toMatchObject({ number: "966500000000", display: "+966500000000", source: "WHATSAPP_LINK" });
   });
 
-  it("falls back to the best phone number", () => {
+  it("falls back to a phone, preferring the mobile over the switchboard", () => {
     const picked = pickWhatsAppNumber([
-      { kind: "PHONE", value: "0111111111", confidenceLevel: "DETECTED", isSuppressed: false },
-      { kind: "PHONE", value: "+966222222222", confidenceLevel: "VERIFIED", isSuppressed: false },
+      { kind: "PHONE", value: "+966 11 222 2222", confidenceLevel: "VERIFIED", isSuppressed: false },
+      { kind: "PHONE", value: "+966 50 123 4567", confidenceLevel: "DETECTED", isSuppressed: false },
     ]);
-    expect(picked).toEqual({ number: "+966222222222", source: "PHONE" });
+    // The merely-DETECTED mobile beats the VERIFIED landline: on this channel,
+    // reachability outranks provenance. A verified landline is verified to be
+    // a landline.
+    expect(picked).toMatchObject({ number: "966501234567", kind: "MOBILE", source: "PHONE" });
+  });
+
+  it("still returns a landline when it is the only number there is", () => {
+    const picked = pickWhatsAppNumber([
+      { kind: "PHONE", value: "+49 30 78001738", confidenceLevel: "VERIFIED", isSuppressed: false },
+    ]);
+    expect(picked).toMatchObject({ number: "493078001738", kind: "LANDLINE" });
   });
 
   it("returns null when there is nothing usable", () => {
