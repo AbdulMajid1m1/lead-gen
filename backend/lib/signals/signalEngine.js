@@ -39,6 +39,9 @@ export const evaluateCompanySignals = async (companyId) => {
         where: { status: { in: ["ACTIVE", "RECENTLY_ACTIVE"] } },
         include: { skills: true },
       },
+      // Ordered so the first row is the best outreach target: owners before
+      // executives, and a reachable person before an unreachable one.
+      people: { orderBy: [{ seniority: "asc" }, { email: "desc" }], take: 5 },
     },
   });
   if (!company) throw new Error(`Company ${companyId} not found`);
@@ -269,6 +272,34 @@ export const evaluateCompanySignals = async (companyId) => {
   }
   if (usableContacts.some((c) => c.kind === "CONTACT_FORM")) {
     push("CONTACT_FORM_FOUND", { dedupeKey: `contact:${company.id}` });
+  }
+  if (company.people?.length) {
+    const best = company.people[0];
+    push("NAMED_CONTACT_FOUND", {
+      dedupeKey: `person:${company.id}`,
+      context: { personName: best.fullName, personTitle: best.title },
+    });
+  }
+
+  // ─── Disqualifiers ──────────────────────────────────────────────────────────
+  // Raised last and deliberately weightless: these do not lower a score, they
+  // mark a lead as one that must not be contacted at all.
+  const closed = fact("business_closed_permanently");
+  if (closed) {
+    push("BUSINESS_CLOSED", {
+      dedupeKey: `closed:${company.id}`,
+      context: { companyName: company.name, observedOn: closed.extractedAt?.toISOString?.().slice(0, 10) ?? null },
+      evidence: { factId: closed.id },
+    });
+  }
+
+  const hijacked = fact("domain_identity_rejected");
+  if (hijacked) {
+    push("WEBSITE_NOT_OWNED", {
+      dedupeKey: `identity:${company.id}`,
+      context: { domain: hijacked.value, detail: hijacked.evidenceSnippet?.slice(0, 200) ?? null },
+      evidence: { factId: hijacked.id },
+    });
   }
 
   return persistSignals(companyId, desired);

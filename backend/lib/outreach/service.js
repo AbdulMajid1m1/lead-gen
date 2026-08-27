@@ -244,7 +244,13 @@ export const sendFollowUp = async ({ account, threadId }) => {
   // Facts give the chase something new to say; a lead that vanished mid-thread
   // still gets the factless variant rather than an error.
   const gathered = await gatherFacts(thread.lead.id).catch(() => null);
-  const { body } = followUpTemplate({ company: thread.lead.company, serviceLabel, followUpNumber, facts: gathered?.facts || [] });
+  const { body } = followUpTemplate({
+    company: thread.lead.company,
+    serviceLabel,
+    serviceKey: thread.lead.primaryOpportunity,
+    followUpNumber,
+    facts: gathered?.facts || [],
+  });
 
   const lastOutbound = [...thread.messages].reverse().find((m) => m.direction === "OUTBOUND");
   const subject = thread.subject.startsWith("Re:") ? thread.subject : `Re: ${thread.subject}`;
@@ -306,7 +312,13 @@ export const sendWhatsAppFollowUp = async ({ device, threadId }) => {
   const followUpNumber = thread.followUpsSent + 1;
   const serviceLabel = SERVICE_LABELS[thread.lead.primaryOpportunity] || "software development";
   const gathered = await gatherFacts(thread.lead.id).catch(() => null);
-  const { body } = whatsappFollowUpTemplate({ company: thread.lead.company, serviceLabel, followUpNumber, facts: gathered?.facts || [] });
+  const { body } = whatsappFollowUpTemplate({
+    company: thread.lead.company,
+    serviceLabel,
+    serviceKey: thread.lead.primaryOpportunity,
+    followUpNumber,
+    facts: gathered?.facts || [],
+  });
 
   // The same sign-off the first message used, so the chat reads as one person.
   const signature = await resolveSignature({});

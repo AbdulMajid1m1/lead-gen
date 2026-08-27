@@ -108,6 +108,19 @@ export const NOMINATIM_URL  = process.env.NOMINATIM_URL  || "https://nominatim.o
 // only candidate requiring registration, and the six unauthenticated ATS boards
 // already cover hiring intelligence. See docs/DATA_SOURCES.md.
 
+// ─── Google Places (optional, paid, cross-check only) ─────────────────────────
+// Places is the highest-coverage business directory in the markets this product
+// targets, where OpenStreetMap is thin. It is used to *correct and corroborate*
+// records discovered elsewhere — never as the stored system of record, because
+// Google Maps Platform terms restrict long-term caching of Places content.
+// Only place IDs, which Google permits storing indefinitely, are persisted.
+export const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || "";
+export const GOOGLE_PLACES_ENABLED = Boolean(GOOGLE_MAPS_API_KEY);
+// A hard per-run ceiling: Places bills per call, and an ungoverned grid sweep
+// is the one way this pipeline can spend real money by accident.
+export const GOOGLE_PLACES_MAX_CALLS_PER_RUN = int(process.env.GOOGLE_PLACES_MAX_CALLS_PER_RUN, 200);
+export const GOOGLE_PLACES_TIMEOUT_MS = int(process.env.GOOGLE_PLACES_TIMEOUT_MS, 10_000);
+
 // ─── Boot-time guards ─────────────────────────────────────────────────────────
 // Fail loudly at import time rather than three requests later with a confusing
 // Prisma error or an anonymous crawler hammering a stranger's site.
@@ -130,6 +143,16 @@ if (NODE_ENV === "production") {
   }
   if (!CRAWLER_RESPECT_ROBOTS) {
     throw new Error("[envConfig] CRAWLER_RESPECT_ROBOTS cannot be disabled in production.");
+  }
+  // Places keys are billed per call and cannot be scoped by referrer for
+  // server-side use, so an accidentally committed key is a direct financial
+  // risk. Warn loudly rather than refusing to boot — the feature is optional.
+  if (GOOGLE_PLACES_ENABLED && !process.env.GOOGLE_PLACES_MAX_CALLS_PER_RUN) {
+    console.warn(
+      "[envConfig] GOOGLE_MAPS_API_KEY is set without GOOGLE_PLACES_MAX_CALLS_PER_RUN. " +
+      `Defaulting to ${GOOGLE_PLACES_MAX_CALLS_PER_RUN} calls per run. Restrict the key ` +
+      "to the Places and Geocoding APIs and to this server's IP in the Google Cloud console.",
+    );
   }
   // An unauthenticated console that can read every lead and send mail from the
   // company's mailboxes is not a degraded mode worth booting into.

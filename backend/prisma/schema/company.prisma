@@ -28,6 +28,7 @@ model Company {
   dedupeKeys  DedupeKey[]
   atsAccounts AtsAccount[]
   aiCandidates AiCandidate[]
+  people      CompanyPerson[]
 
   @@index([normalizedName])
   @@index([industry])
@@ -48,10 +49,18 @@ model CompanyDomain {
   firstCertSeenAt DateTime?
   discoveredVia   SourceKind
 
+  /// Result of the last identity check — see lib/verify/domainIdentity.js.
+  /// Defaults to UNCHECKED so existing rows keep their current meaning.
+  identityStatus    DomainIdentityStatus @default(UNCHECKED)
+  identityScore     Int?
+  identityReason    String?              @db.VarChar(500)
+  identityCheckedAt DateTime?
+
   audits WebsiteAudit[]
   tech   TechnologyDetection[]
 
   @@index([companyId])
+  @@index([identityStatus])
 }
 
 model CompanyAlias {
@@ -142,4 +151,36 @@ model GeoPlace {
   osmId       BigInt?
   countryCode String?  @db.VarChar(2)
   fetchedAt   DateTime @default(now())
+}
+
+
+/// A named human at a company, for outreach that addresses someone rather than
+/// an anonymous inbox. Only people a business publishes about itself — team
+/// pages, staff bios, public social profiles — are ever stored here.
+model CompanyPerson {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  fullName String  @db.VarChar(200)
+  title    String? @db.VarChar(200)
+  /// Ranked so the outreach layer can pick the best available target.
+  seniority PersonSeniority @default(UNKNOWN)
+
+  email       String? @db.VarChar(320)
+  linkedinUrl String? @db.VarChar(500)
+  profileUrl  String? @db.VarChar(500)
+  /// the page this person was observed on — provenance for the name and title
+  observedOnUrl String? @db.VarChar(1000)
+
+  confidenceLevel ConfidenceLevel
+  sourceRecordId  String?
+  sourceRecord    SourceRecord? @relation(fields: [sourceRecordId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, fullName])
+  @@index([companyId])
+  @@index([seniority])
 }

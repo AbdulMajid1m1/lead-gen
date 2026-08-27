@@ -12,9 +12,11 @@ import { CostTracker } from "../llm/responses.js";
 import { buildWhere } from "../nlquery/planner.js";
 import pLimit from "p-limit";
 import { ingestAggregators } from "../ingest/aggregatorIngest.js";
+import { crossCheckWithPlaces } from "../verify/placesCrossCheck.js";
+import { createPlacesBudget, isPlacesAvailable } from "../adapters/googlePlaces.js";
 import { evaluateCompanySignals } from "../signals/signalEngine.js";
 import { scoreCompany } from "../scoring/scoreEngine.js";
-import { DISCOVERY_MAX_COMPANIES, DISCOVERY_MAX_CRAWL_HOSTS, DISCOVERY_TIMEOUT_MS, RESEARCH_TIMEOUT_MS, AI_MAX_CITATION_FETCHES, CRAWLER_CONCURRENCY } from "../../configs/envConfig.js";
+import { DISCOVERY_MAX_COMPANIES, DISCOVERY_MAX_CRAWL_HOSTS, DISCOVERY_TIMEOUT_MS, RESEARCH_TIMEOUT_MS, AI_MAX_CITATION_FETCHES, CRAWLER_CONCURRENCY, GOOGLE_PLACES_MAX_CALLS_PER_RUN } from "../../configs/envConfig.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("discovery");
@@ -267,6 +269,41 @@ const runStep = async ({ kind, params, parsed, runId, touchedCompanyIds, stats, 
       stats.jobsFound += res.jobsIngested;
       emit(runId, { type: "progress", stats });
       return { companiesCreated: res.companiesCreated, jobsIngested: res.jobsIngested, sources: res.sources };
+    }
+
+    case "PLACES_VERIFY": {
+      // Corroborate against Google Places. Two things no open source can tell
+      // us: whether the business is still trading, and how much traction it has.
+      // A permanently closed business is the most expensive kind of bad lead —
+      // it consumes send quota and earns bounces that damage domain reputation.
+      if (!isPlacesAvailable()) {
+        return { skipped: true, reason: "GOOGLE_MAPS_API_KEY is not configured — skipped." };
+      }
+
+      const budget = createPlacesBudget(Math.min(params.maxCalls || 100, GOOGLE_PLACES_MAX_CALLS_PER_RUN));
+      const candidates = await prisma.company.findMany({
+        where: { id: { in: [...touchedCompanyIds] } },
+        take: Math.min(params.maxCompanies || 60, 200),
+      });
+
+      let checked = 0;
+      let closed = 0;
+      let corrected = 0;
+      for (const company of candidates) {
+        if (Date.now() > deadline || active.get(runId)?.cancelled || budget.remaining === 0) break;
+        try {
+          const res = await crossCheckWithPlaces(company.id, { budget });
+          if (!res.ok) continue;
+          checked += 1;
+          if (res.closed) closed += 1;
+          if (res.corrected) corrected += 1;
+        } catch (err) {
+          logger.debug({ company: company.name, msg: err.message }, "places cross-check failed");
+        }
+      }
+
+      emit(runId, { type: "progress", stats });
+      return { checked, closedBusinesses: closed, websitesCorrected: corrected, apiCalls: budget.used };
     }
 
     case "SIGNALS": {

@@ -3,6 +3,8 @@ import { fetchPage } from "../crawler/fetchPage.js";
 import { auditWebsite } from "../analyze/websiteAudit.js";
 import { extractContacts, pickPrimaryEmail } from "../extract/contacts.js";
 import { extractOrganizationFromJsonLd } from "../extract/pageMeta.js";
+import { verifyDomainIdentity } from "../verify/domainIdentity.js";
+import { extractPeople, pickPrimaryPerson } from "../extract/people.js";
 import { ensureSource, recordSourceRecord, recordFact, recordContact } from "../provenance/recorder.js";
 import { normalizeUrl, normalizeDomain } from "../../utils/normalize.js";
 import { sha256 } from "../../utils/hash.js";
@@ -18,19 +20,65 @@ const logger = log("websiteIngest");
  * facts we need live on a handful of predictable pages.
  */
 const PAGE_PRIORITY = [
-  { priority: 100, label: "home", test: (p) => p === "/" || p === "" },
-  { priority: 90, label: "contact", test: (p) => /^\/(?:contact|contact-us|kontakt|get-in-touch|reach-us)\/?$/i.test(p) },
-  { priority: 80, label: "about", test: (p) => /^\/(?:about|about-us|company|who-we-are|our-story)\/?$/i.test(p) },
-  { priority: 75, label: "careers", test: (p) => /^\/(?:careers?|jobs?|vacancies|work-with-us|join-us)\/?$/i.test(p) },
-  { priority: 70, label: "pricing", test: (p) => /^\/(?:pricing|plans|packages)\/?$/i.test(p) },
-  { priority: 65, label: "shop", test: (p) => /^\/(?:shop|store|menu|products?|order|book|booking|reservations?|appointments?)\/?$/i.test(p) },
+  { priority: 100, label: "home",    max: 1, test: (p) => p === "/" },
+  { priority: 95,  label: "contact", max: 2, test: (p) => /^\/(?:contact|contactus|contact-us|contact-me|kontakt|contacto|contatti|get-in-touch|reach-us|reach-out|connect|enquir(?:y|ies)|inquir(?:y|ies)|request-a-quote|get-a-quote|book-a-call|talk-to-us|write-to-us|اتصل-بنا|تواصل-معنا)$/i.test(p) },
+  { priority: 85,  label: "about",   max: 1, test: (p) => /^\/(?:about|about-us|aboutus|company|who-we-are|our-story|ueber-uns|uber-uns|sobre-nosotros|من-نحن|عن-الشركة)$/i.test(p) },
+  // A legal or imprint page is the single most reliable email source on the
+  // web: German law mandates one, and GDPR/CCPA privacy notices must name a
+  // contact address. Many small sites publish an email here and nowhere else.
+  { priority: 82,  label: "legal",   max: 1, test: (p) => /^\/(?:impressum|imprint|legal|legal-notice|privacy|privacy-policy|datenschutz|terms|terms-of-service|terms-and-conditions|aviso-legal)$/i.test(p) },
+  // Team and leadership pages are where a business names the people who run it,
+  // which is what turns "info@" outreach into a message addressed to someone.
+  { priority: 80,  label: "team",    max: 1, test: (p) => /^\/(?:team|our-team|meet-the-team|staff|people|our-people|leadership|management|founders|doctors|our-doctors|physicians|lawyers|agents|experts|specialists|فريق-العمل)$/i.test(p) },
+  { priority: 75,  label: "careers", max: 1, test: (p) => /^\/(?:careers?|jobs?|vacancies|work-with-us|join-us|join-our-team)$/i.test(p) },
+  { priority: 70,  label: "pricing", max: 1, test: (p) => /^\/(?:pricing|plans|packages|rates|tariffs)$/i.test(p) },
+  { priority: 68,  label: "locations", max: 1, test: (p) => /^\/(?:locations?|branches|our-branches|stores?|find-us|visit-us|clinics?)$/i.test(p) },
+  { priority: 65,  label: "shop",    max: 1, test: (p) => /^\/(?:shop|store|menu|products?|services?|order|book|booking|reservations?|appointments?)$/i.test(p) },
 ];
 
-const classifyPath = (pathname) => {
-  for (const rule of PAGE_PRIORITY) {
-    if (rule.test(pathname)) return rule;
+/** Locale segments a path may be nested under: /en/contact, /ar-sa/contact-us. */
+const LOCALE_SEGMENT_RE = /^\/(?:[a-z]{2}(?:[-_][a-z]{2})?)(?=\/)/i;
+
+/** CMS container segments that add nothing: Shopify's /pages/, WordPress /site/. */
+const CONTAINER_SEGMENT_RE = /^\/(?:pages?|site|web|www|home|index|main|content|pg)(?=\/)/i;
+
+/**
+ * Reduce a URL path to the form the priority tests expect.
+ *
+ * Without this the contact-page matcher only ever fired on a bare `/contact`,
+ * which is why so many leads had no email. Real sites publish the same page at
+ * `/en/contact-us`, `/pages/contact` (every Shopify store), `/contact.html` and
+ * `/ar/اتصل-بنا` — all of which were being skipped as "other" and never fetched.
+ * Bilingual sites are the norm in the Gulf markets this product targets, so the
+ * locale prefix alone accounted for a large share of the missing addresses.
+ */
+export const canonicalPath = (pathname) => {
+  let p = decodeURIComponent(pathname || "/").toLowerCase();
+  p = p.replace(/\/{2,}/g, "/").replace(/\/+$/, "") || "/";
+
+  // A bare locale root ("/en", "/ar-sa") is the localised home page.
+  if (/^\/[a-z]{2}(?:[-_][a-z]{2})?$/i.test(p)) return "/";
+
+  // Peel at most two wrapper segments so /en/pages/contact resolves, while a
+  // genuinely deep path keeps enough shape to stay classified as "other".
+  for (let i = 0; i < 2; i += 1) {
+    const stripped = p.replace(LOCALE_SEGMENT_RE, "").replace(CONTAINER_SEGMENT_RE, "");
+    if (stripped === p) break;
+    p = stripped || "/";
   }
-  return { priority: 20, label: "other", test: null };
+
+  p = p.replace(/\.(?:html?|php|aspx?|jsp|cfm)$/i, "");
+  // Treat separator styles as equivalent: contact_us, contact-us, contactus.
+  p = p.replace(/_/g, "-");
+  return p || "/";
+};
+
+const classifyPath = (pathname) => {
+  const canonical = canonicalPath(pathname);
+  for (const rule of PAGE_PRIORITY) {
+    if (rule.test(canonical)) return rule;
+  }
+  return { priority: 20, label: "other", max: 0, test: null };
 };
 
 /** Pick the highest-value internal links from a crawled page. */
@@ -54,11 +102,16 @@ const selectFollowUpUrls = (links, origin, alreadyQueued, limit) => {
   }
   scored.sort((a, b) => b.priority - a.priority);
 
-  const seenLabels = new Set();
+  // Most purposes need one page, but contact details are routinely split across
+  // two (a "/contact" hub linking a "/get-a-quote" form), so the cap is
+  // per-label rather than a flat one-each rule.
+  const takenPerLabel = new Map();
   const out = [];
   for (const s of scored) {
-    if (seenLabels.has(s.label)) continue; // one page per purpose is enough
-    seenLabels.add(s.label);
+    const cap = PAGE_PRIORITY.find((r) => r.label === s.label)?.max ?? 1;
+    const taken = takenPerLabel.get(s.label) || 0;
+    if (taken >= cap) continue;
+    takenPerLabel.set(s.label, taken + 1);
     out.push(s);
     if (out.length >= limit) break;
   }
@@ -183,17 +236,99 @@ export const ingestWebsite = async ({ companyId, url, maxPages = CRAWLER_MAX_PAG
     return { ok: false, reason: blocked[0]?.reason || "NO_PAGES", blocked, pagesCrawled: 0 };
   }
 
+  const homePage = pages[0];
+
+  // ─── Identity gate ──────────────────────────────────────────────────────────
+  // Does this site actually belong to this company? Every other source hands us
+  // a domain on trust: OpenStreetMap's `website` tag can be years out of date,
+  // an AI claim is a suggestion, and a guessed `<name>.com` is a coin flip.
+  // The page is already fetched at this point, so the check costs no extra
+  // request — and it is the only place that covers all four sources at once.
+  //
+  // This exists because a Riyadh restaurant was being emailed at a domain that
+  // had expired with the business and been re-registered by a gambling network.
+  // The site returned HTTP 200, so every liveness check passed.
+  const identityCompany = await prisma.company.findUnique({
+    where: { id: companyId },
+    include: { contacts: { where: { kind: "PHONE" } }, locations: { take: 1 }, aliases: true },
+  });
+
+  let identity = null;
+  if (identityCompany) {
+    // A city only describes the company when it came from a map record; a job
+    // posting's city would reject a perfectly good head-office website.
+    const cityTrusted = Boolean(identityCompany.osmCategory || identityCompany.locations.length > 0);
+    identity = await verifyDomainIdentity(homePage.finalUrl || startUrl, {
+      name: identityCompany.name,
+      city: cityTrusted ? identityCompany.city : null,
+      countryCode: cityTrusted ? identityCompany.countryCode : null,
+      phones: identityCompany.contacts.map((c) => c.value),
+      aliases: identityCompany.aliases.map((a) => a.alias),
+    }, { html: homePage.body, finalUrl: homePage.finalUrl });
+  }
+
+  // A hostile page is disqualifying on its own terms — its contact details
+  // belong to whoever took the domain over, so nothing on it may be recorded.
+  const HOSTILE = new Set(["PARKED", "HOLDING_PAGE", "SHARED_PLATFORM"]);
+  const isHostile = identity && (HOSTILE.has(identity.disqualifier) || String(identity.disqualifier || "").startsWith("TAKEOVER_"));
+
+  if (isHostile) {
+    if (domain) {
+      await prisma.companyDomain.updateMany({
+        where: { companyId, domain },
+        data: {
+          identityStatus: "REJECTED", identityScore: identity.score,
+          identityReason: identity.reason.slice(0, 500), identityCheckedAt: new Date(),
+        },
+      });
+    }
+    await recordFact({
+      companyId,
+      key: "domain_identity_rejected",
+      value: identity.domain || domain,
+      confidenceLevel: "VERIFIED",
+      extractorName: "websiteIngest",
+      evidenceSnippet: `${identity.reason} ${identity.evidence || ""}`.trim().slice(0, 500),
+    });
+    logger.warn({ companyId, domain: identity.domain, disqualifier: identity.disqualifier }, "website rejected — not this company's site");
+    // Stop before extracting anything. Contacts, technologies and the audit
+    // would all describe the wrong website.
+    return { ok: false, reason: "DOMAIN_NOT_OWNED", identity, pagesCrawled: pages.length, blocked };
+  }
+
   // ─── Analyse ────────────────────────────────────────────────────────────────
   const audit = auditWebsite({ pages });
-  const homePage = pages[0];
+
+  const identityFields = identity
+    ? {
+        identityStatus: identity.verdict === "OWNED" ? "CONFIRMED" : "WEAK",
+        identityScore: identity.score,
+        identityReason: identity.reason.slice(0, 500),
+        identityCheckedAt: new Date(),
+      }
+    : {};
 
   const companyDomain = domain
     ? await prisma.companyDomain.upsert({
         where: { domain },
-        update: { httpsOk: (homePage.finalUrl || "").startsWith("https://") },
-        create: { companyId, domain, discoveredVia: "WEBSITE_CRAWL", httpsOk: (homePage.finalUrl || "").startsWith("https://") },
+        update: { httpsOk: (homePage.finalUrl || "").startsWith("https://"), ...identityFields },
+        create: { companyId, domain, discoveredVia: "WEBSITE_CRAWL", httpsOk: (homePage.finalUrl || "").startsWith("https://"), ...identityFields },
       })
     : null;
+
+  // A site that never says whose it is stays usable but is marked, so the
+  // outreach layer and the provenance UI can both see the doubt rather than
+  // treating a weak match as fact.
+  if (identity && identity.verdict !== "OWNED") {
+    await recordFact({
+      companyId,
+      key: "domain_identity_weak",
+      value: identity.domain || domain,
+      confidenceLevel: "DETECTED",
+      extractorName: "websiteIngest",
+      evidenceSnippet: identity.reason.slice(0, 500),
+    });
+  }
 
   // Technologies
   for (const tech of audit.technologies) {
@@ -265,6 +400,56 @@ export const ingestWebsite = async ({ companyId, url, maxPages = CRAWLER_MAX_PAG
     await recordContact({
       companyId, kind: "CONTACT_FORM", value: formPage.finalUrl, roleHint: "FORM",
       confidenceLevel: "VERIFIED", sourceRecordId: pageSourceRecordId,
+    });
+  }
+
+  // ─── People ─────────────────────────────────────────────────────────────────
+  // Who to actually address. A message to a named owner outperforms one to
+  // info@ by a wide margin, and the name is usually published on the same pages
+  // we already fetched — the team page most of all, which is why it is now part
+  // of the crawl frontier.
+  const people = [];
+  for (const page of pages) {
+    people.push(...extractPeople(page.body, { pageUrl: page.finalUrl, emails: allContacts.emails }));
+  }
+  const uniquePeople = [...new Map(people.map((p) => [p.fullName.toLowerCase(), p])).values()];
+
+  for (const person of uniquePeople.slice(0, 25)) {
+    await prisma.companyPerson.upsert({
+      where: { companyId_fullName: { companyId, fullName: person.fullName } },
+      update: {
+        // Only fill gaps: a later page with a thinner listing must not erase a
+        // title or profile URL an earlier, richer page already gave us.
+        ...(person.title ? { title: person.title.slice(0, 200), seniority: person.seniority } : {}),
+        ...(person.email ? { email: person.email.slice(0, 320) } : {}),
+        ...(person.linkedinUrl ? { linkedinUrl: person.linkedinUrl.slice(0, 500) } : {}),
+      },
+      create: {
+        companyId,
+        fullName: person.fullName.slice(0, 200),
+        title: person.title?.slice(0, 200) ?? null,
+        seniority: person.seniority,
+        email: person.email?.slice(0, 320) ?? null,
+        linkedinUrl: person.linkedinUrl?.slice(0, 500) ?? null,
+        observedOnUrl: person.observedOnUrl?.slice(0, 1000) ?? null,
+        // DETECTED, not VERIFIED: we observed the name on the company's site,
+        // but that the person still works there is an inference.
+        confidenceLevel: person.method === "SCHEMA_ORG" ? "VERIFIED" : "DETECTED",
+        sourceRecordId: pageSourceRecordId,
+      },
+    });
+  }
+
+  const primaryPerson = pickPrimaryPerson(uniquePeople);
+  if (primaryPerson) {
+    await recordFact({
+      companyId,
+      key: "primary_contact_person",
+      value: primaryPerson.fullName,
+      confidenceLevel: "DETECTED",
+      extractorName: "websiteIngest",
+      sourceRecordId: pageSourceRecordId,
+      evidenceSnippet: `${primaryPerson.fullName}${primaryPerson.title ? `, ${primaryPerson.title}` : ""} — published on ${primaryPerson.observedOnUrl}. Best available outreach target of ${uniquePeople.length} named ${uniquePeople.length === 1 ? "person" : "people"}.`.slice(0, 500),
     });
   }
 

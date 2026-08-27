@@ -53,6 +53,10 @@ describe("buildResearchPlan", () => {
   it("always finishes with verify → signals → score → compose → snapshot", () => {
     const parsed = parseQuery("companies hiring HR managers");
     const k = kinds(buildResearchPlan(parsed, briefFor(parsed)));
-    expect(k.slice(-5)).toEqual(["AI_VERIFY", "SIGNALS", "SCORE", "AI_COMPOSE", "SNAPSHOT"]);
+    // Both verification steps must precede scoring: AI_VERIFY checks claimed
+    // details against real pages, and PLACES_VERIFY establishes whether the
+    // business is still trading. A closure discovered after SCORE would arrive
+    // too late to stop the lead being ranked and drafted for outreach.
+    expect(k.slice(-6)).toEqual(["AI_VERIFY", "PLACES_VERIFY", "SIGNALS", "SCORE", "AI_COMPOSE", "SNAPSHOT"]);
   });
 });

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft, Mail, Phone, Globe, MapPin, Briefcase, ShieldCheck, Layers,
   GitBranch, Copy, ExternalLink, Sparkles, Clock, AlertTriangle, Check,
+  ShieldAlert, Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageBody } from "../App.jsx";
@@ -104,13 +105,28 @@ export default function LeadDetailPage() {
                   {lead.company.domains[0] && (
                     <a
                       href={`https://${lead.company.domains[0].domain}`}
-                      target="_blank" rel="noopener noreferrer"
+                      target="_blank" rel="noopener noreferrer nofollow"
                       className="inline-flex items-center gap-1 font-mono text-[13px] text-[var(--accent)] hover:underline"
                     >
                       <Globe size={12} />{lead.company.domains[0].domain}<ExternalLink size={10} />
                     </a>
                   )}
                 </div>
+
+                {/* Ownership doubt has to interrupt, not decorate. Every contact
+                    detail below is read off this site, so if the site is not
+                    provably theirs, none of it can be trusted. */}
+                {lead.company.domains[0]?.identityStatus === "WEAK" && (
+                  <div className="mt-2.5 flex items-start gap-2 rounded-lg border border-[var(--color-caution)]/40 bg-[color-mix(in_oklch,var(--color-caution)_10%,transparent)] p-2.5">
+                    <ShieldAlert size={14} className="mt-px shrink-0 text-[var(--color-caution)]" aria-hidden="true" />
+                    <p className="text-[12px] leading-snug text-[var(--text)]">
+                      <span className="font-medium">Website ownership unverified.</span>{" "}
+                      {lead.company.domains[0].identityReason
+                        || "This site never states that it belongs to this business."}{" "}
+                      Confirm before using any contact detail taken from it.
+                    </p>
+                  </div>
+                )}
                 <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                   <Badge tone={tone}>{SERVICE_LABELS[lead.primaryOpportunity]}</Badge>
                   <Badge>{LEAD_TYPE_LABELS[lead.type]}</Badge>
@@ -375,6 +391,79 @@ export default function LeadDetailPage() {
 
         {/* ── Sidebar ──────────────────────────────────────────────────────── */}
         <div className="space-y-5">
+          {/* Who to address. A named owner is the difference between a message
+              that opens with a greeting and one that opens with "Dear Sir/Madam",
+              so this sits above the raw contact routes rather than below them. */}
+          {lead.people?.length > 0 && (
+            <Surface className="p-5">
+              <SectionHeading
+                icon={Users}
+                title="People"
+                description={`${lead.people.length} named on the company's own site`}
+              />
+              <ul className="space-y-3">
+                {lead.people.map((person, i) => (
+                  <li
+                    key={i}
+                    className={cn(
+                      "rounded-lg border p-3",
+                      i === 0
+                        ? "border-[var(--accent)] bg-[color-mix(in_oklch,var(--accent)_6%,transparent)]"
+                        : "border-[var(--border)]",
+                    )}
+                  >
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="text-sm font-semibold">{person.fullName}</span>
+                      {i === 0 && <Badge tone="var(--accent)">Best target</Badge>}
+                      <Badge>{titleize(person.seniority)}</Badge>
+                    </div>
+                    {person.title && (
+                      <p className="mt-0.5 text-xs text-[var(--text-muted)]">{person.title}</p>
+                    )}
+                    <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+                      {person.email && (
+                        <button
+                          type="button"
+                          onClick={() => copy(person.email, "Email")}
+                          className="inline-flex items-center gap-1.5 font-mono text-[11px] text-[var(--text)] hover:text-[var(--accent)]"
+                        >
+                          <Mail size={11} />
+                          {person.email}
+                          <Copy size={10} className="text-[var(--text-subtle)]" />
+                        </button>
+                      )}
+                      {person.linkedinUrl && (
+                        <a
+                          href={person.linkedinUrl}
+                          target="_blank"
+                          rel="noopener noreferrer nofollow"
+                          className="inline-flex items-center gap-1.5 text-[var(--text-muted)] hover:text-[var(--accent)]"
+                        >
+                          <ExternalLink size={11} />
+                          LinkedIn
+                          <ExternalLink size={10} />
+                        </a>
+                      )}
+                    </div>
+                    {person.observedOnUrl && (
+                      <p className="mt-1.5 text-[11px] text-[var(--text-subtle)]">
+                        Published on{" "}
+                        <a
+                          href={person.observedOnUrl}
+                          target="_blank"
+                          rel="noopener noreferrer nofollow"
+                          className="underline decoration-dotted underline-offset-2 hover:text-[var(--accent)]"
+                        >
+                          the company's own site
+                        </a>
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </Surface>
+          )}
+
           <Surface className="p-5">
             <SectionHeading icon={Mail} title="Contact" />
             <div className="space-y-2.5">

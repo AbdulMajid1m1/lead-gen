@@ -94,7 +94,7 @@ export const listLeads = asyncHandler(async (req, res) => {
       skip: (q.page - 1) * q.pageSize,
       take: q.pageSize,
       include: {
-        company: { include: { domains: true, contacts: { where: { isSuppressed: false } }, locations: { take: 1 } } },
+        company: { include: { domains: true, contacts: { where: { isSuppressed: false } }, locations: { take: 1 }, people: { orderBy: [{ seniority: "asc" }, { email: "desc" }], take: 1 } } },
         reasons: { orderBy: { rank: "asc" }, take: 3 },
         opportunities: { orderBy: { rank: "asc" } },
         actions: { orderBy: { priority: "desc" }, take: 1 },
@@ -167,6 +167,9 @@ export const getLead = asyncHandler(async (req, res) => {
         include: {
           domains: true,
           contacts: true,
+          // Ordered so the first row is the best outreach target — the enum is
+          // declared most-senior-first, so ascending puts owners at the top.
+          people: { orderBy: [{ seniority: "asc" }, { email: "desc" }] },
           locations: true,
           tech: { orderBy: { category: "asc" } },
           audits: { orderBy: { auditedAt: "desc" }, take: 1 },
@@ -241,7 +244,13 @@ export const getLead = asyncHandler(async (req, res) => {
         firstSeenAt: c.firstSeenAt,
         lastCrawledAt: c.lastCrawledAt,
         lastEnrichedAt: c.lastEnrichedAt,
-        domains: c.domains.map((d) => ({ domain: d.domain, isPrimary: d.isPrimary, httpsOk: d.httpsOk, discoveredVia: d.discoveredVia })),
+        // identityStatus travels with every domain so the UI can warn before
+        // anyone emails an address on a site that is not this company's.
+        domains: c.domains.map((d) => ({
+          domain: d.domain, isPrimary: d.isPrimary, httpsOk: d.httpsOk, discoveredVia: d.discoveredVia,
+          identityStatus: d.identityStatus, identityScore: d.identityScore,
+          identityReason: d.identityReason, identityCheckedAt: d.identityCheckedAt,
+        })),
         locations: c.locations.map((l) => ({ addressLine: l.addressLine, city: l.city, country: l.country, lat: l.lat, lon: l.lon })),
       },
       contacts: {
@@ -250,6 +259,13 @@ export const getLead = asyncHandler(async (req, res) => {
         forms: c.contacts.filter((x) => x.kind === "CONTACT_FORM").map(contactDto),
         socials: c.contacts.filter((x) => x.kind === "SOCIAL").map(contactDto),
       },
+      // The people a business publishes about itself, best target first, so
+      // outreach can open with a name instead of "Dear Sir/Madam".
+      people: (c.people || []).map((p) => ({
+        fullName: p.fullName, title: p.title, seniority: p.seniority,
+        email: p.email, linkedinUrl: p.linkedinUrl, profileUrl: p.profileUrl,
+        observedOnUrl: p.observedOnUrl, confidenceLevel: p.confidenceLevel,
+      })),
       opportunities: lead.opportunities.map((o) => ({
         service: o.service, label: SERVICE_LABELS[o.service], points: o.points, rank: o.rank, rationale: o.rationale,
       })),

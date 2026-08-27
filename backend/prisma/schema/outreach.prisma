@@ -69,9 +69,15 @@ model EmailAccount {
 
   /// Follow-up automation: send follow-ups automatically when a thread has no
   /// reply after followUpDays[n] days. When off, due follow-ups wait for a click.
+  ///
+  /// Three chases on a widening gap: a second observation (day 3), one matched
+  /// piece of our own work (day 10), then the breakup (day 24). The middle one
+  /// is where proof and the only link in the sequence live — the sequence used
+  /// to jump straight from "one more observation" to "goodbye" without ever
+  /// showing the reader anything we had built.
   autoFollowUp Boolean @default(true)
-  followUpDays Json    @default("[3, 7]")
-  maxFollowUps Int     @default(2)
+  followUpDays Json    @default("[3, 7, 14]")
+  maxFollowUps Int     @default(3)
   /// Legacy freeform sign-off, kept as the last fallback when no Signature row
   /// is selected anywhere. New setups should use `signatureId` instead.
   signature    String? @db.VarChar(2000)

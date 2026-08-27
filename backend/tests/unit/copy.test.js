@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { initialTemplate, followUpTemplate, whatsappInitialTemplate } from "../../lib/research/templates.js";
+import { initialTemplate, followUpTemplate, whatsappInitialTemplate, whatsappFollowUpTemplate } from "../../lib/research/templates.js";
 import { emailLooksMangled, BROKER_DOMAIN_RE } from "../../lib/outreach/hygiene.js";
 
 /**
@@ -132,5 +132,159 @@ describe("address hygiene", () => {
     expect(BROKER_DOMAIN_RE.test("domainmarket.com")).toBe(true);
     expect(BROKER_DOMAIN_RE.test("hugedomains.com")).toBe(true);
     expect(BROKER_DOMAIN_RE.test("brightdental.co.uk")).toBe(false);
+  });
+});
+
+
+/**
+ * Where proof and links are allowed to appear.
+ *
+ * A link in a first cold email measurably hurts deliverability, and since
+ * November 2025 Gmail rejects distrusted mail outright rather than filtering
+ * it. So the opener carries no URL at all — our website already rides along in
+ * the signature block — and the portfolio waits for the proof chase, once the
+ * address has taken two messages without bouncing.
+ */
+const URL_RE = /https?:\/\/|www\.|\b[a-z0-9-]+\.(?:com|net|org|io|ai|sa|ae)\b/i;
+const bookingLead = {
+  company: { name: "Nakheel Dental", city: "Riyadh", countryCode: "SA", industry: "Dental clinic" },
+  facts: [
+    fact(1, "Nakheel Dental is a dental clinic in Riyadh.", "VERIFIED"),
+    fact(2, "Its website has no online booking — appointments are by phone only."),
+    fact(3, "Its site is built on Wix.", "VERIFIED"),
+  ],
+};
+
+describe("first email carries no link and asks for no meeting", () => {
+  const draft = initialTemplate({ ...bookingLead, serviceKey: "WEBSITE_DEV", serviceLabel: "website development" });
+
+  it("contains no URL of any kind", () => {
+    expect(URL_RE.test(draft.body)).toBe(false);
+  });
+
+  it("does not request a call, meeting or demo", () => {
+    expect(draft.body).not.toMatch(/book a (?:call|meeting)|schedule|calendar|demo|\b\d+[- ]?min(?:ute)?s?\b/i);
+  });
+
+  it("asks for a one-word reply instead", () => {
+    expect(draft.body).toMatch(/One word back|تكفي كلمة واحدة/);
+  });
+
+  it("does not list our other services", () => {
+    // A reader told we do web, mobile, AI and cloud learns only that we are a
+    // general agency — the opposite of the relevance that earns a reply.
+    const services = draft.body.match(/\b(?:mobile app|cloud|marketing|AI|ai automation)\b/gi) || [];
+    expect(services.length).toBeLessThanOrEqual(1);
+  });
+
+  it("answers the hook it opened with", () => {
+    // The value line used to come from the service alone, so a booking hook was
+    // answered with a "customers can't find you in search" promise.
+    const english = draft.body.split("———").pop();
+    expect(english).toMatch(/booking/i);
+    expect(english).not.toMatch(/those searches/i);
+  });
+});
+
+describe("proof follow-up", () => {
+  const proof = (serviceKey) => followUpTemplate({
+    company: bookingLead.company, serviceLabel: "website development",
+    serviceKey, followUpNumber: 2, facts: bookingLead.facts,
+  }).body;
+
+  it("is the first message in the sequence allowed to carry a link", () => {
+    const chase1 = followUpTemplate({ ...bookingLead, serviceLabel: "x", serviceKey: "WEBSITE_DEV", followUpNumber: 1 }).body;
+    expect(URL_RE.test(chase1)).toBe(false);
+    expect(URL_RE.test(proof("WEBSITE_DEV"))).toBe(true);
+  });
+
+  it("shows exactly one piece of work, not the whole portfolio", () => {
+    const body = proof("WEBSITE_DEV");
+    const shown = ["tracefyhr.com", "mynime.com", "isaconsulting.com", "isaworkbridge.com"]
+      .filter((u) => body.includes(u));
+    expect(shown).toHaveLength(1);
+  });
+
+  it("matches the example to the service being pitched", () => {
+    expect(proof("HR_SOFTWARE")).toContain("tracefyhr.com");
+    expect(proof("MOBILE_APP")).toContain("mynime.com");
+    expect(proof("SAAS_DEV")).toContain("isaworkbridge.com");
+  });
+
+  it("still does not ask for a meeting", () => {
+    expect(proof("WEBSITE_DEV")).not.toMatch(/book a (?:call|meeting)|schedule|calendar/i);
+  });
+
+  it("goes out in Arabic first for a Gulf lead", () => {
+    expect(proof("WEBSITE_DEV")).toMatch(/[\u0600-\u06FF]/);
+  });
+
+  it("keeps the breakup as the final chase, not the second", () => {
+    const last = followUpTemplate({
+      company: bookingLead.company, serviceLabel: "website development",
+      serviceKey: "WEBSITE_DEV", followUpNumber: 3, facts: bookingLead.facts,
+    }).body;
+    expect(last).toMatch(/Last note from me/);
+    expect(proof("WEBSITE_DEV")).not.toMatch(/Last note from me/);
+  });
+
+  it("sends no link in a first WhatsApp touch but does in the proof chase", () => {
+    const first = whatsappInitialTemplate({ company: bookingLead.company, facts: bookingLead.facts, serviceLabel: "website development" }).body;
+    expect(URL_RE.test(first)).toBe(false);
+    const wa = whatsappFollowUpTemplate({ company: bookingLead.company, serviceLabel: "x", serviceKey: "HR_SOFTWARE", followUpNumber: 2, facts: [] }).body;
+    expect(wa).toContain("tracefyhr.com");
+  });
+});
+
+
+/**
+ * Length and shape discipline.
+ *
+ * Under 75 words is the single largest lever on reply rate, and the reader is
+ * on a phone: one sentence per paragraph, answerable with one thumb-typed word.
+ */
+describe("length and phone-readability", () => {
+  const scenarios = [
+    ["no booking", "WEBSITE_DEV", [
+      fact(1, "Nakheel Dental is a dental clinic in Riyadh.", "VERIFIED"),
+      fact(2, "Its website has no online booking — appointments are by phone only.")]],
+    ["no website", "WEBSITE_DEV", [
+      fact(1, "Bright Cafe is a cafe in London.", "VERIFIED"),
+      fact(2, "Bright Cafe is listed as an operating business with contact details but has no website at all.")]],
+    ["hiring", "CUSTOM_SOFTWARE", [
+      fact(1, "Acme is a technology employer.", "VERIFIED"),
+      fact(2, "It is currently hiring: Senior Backend Engineer.", "VERIFIED")]],
+    ["slow site", "WEBSITE_DEV", [
+      fact(1, "Vista Clinic is a clinic in Manchester.", "VERIFIED"),
+      fact(2, "Its home page took 5.5s to load.")]],
+  ];
+
+  for (const [label, serviceKey, facts] of scenarios) {
+    it(`${label}: body stays under 70 words`, () => {
+      const co = { name: facts[0].text.split(" is ")[0], city: "London", countryCode: "GB", industry: "x" };
+      const draft = initialTemplate({ company: co, facts, serviceKey, serviceLabel: "x" });
+      const english = draft.body.includes("———") ? draft.body.split("———")[1] : draft.body;
+      expect(english.trim().split(/\s+/).length).toBeLessThanOrEqual(70);
+    });
+
+    it(`${label}: subject reads like a colleague, not a pitch`, () => {
+      const co = { name: facts[0].text.split(" is ")[0], city: "London", countryCode: "GB", industry: "x" };
+      const { subject } = initialTemplate({ company: co, facts, serviceKey, serviceLabel: "x" });
+      expect(subject.split(/\s+/).length).toBeLessThanOrEqual(5);
+      expect(subject).not.toMatch(/idea|proposal|opportunity|solution|can't find|—/i);
+    });
+  }
+
+  it("keeps every paragraph short enough to read on a phone", () => {
+    const draft = initialTemplate({
+      company: { name: "Vista Clinic", city: "Manchester", countryCode: "GB", industry: "Clinic" },
+      facts: [fact(1, "Vista Clinic is a clinic in Manchester.", "VERIFIED"), fact(2, "Its home page took 5.5s to load.")],
+      serviceKey: "WEBSITE_DEV", serviceLabel: "website development",
+    });
+    for (const para of draft.body.split("\n\n")) {
+      // ~25 words is about two lines on a phone. Anything longer is a block
+      // the reader skims past rather than reads.
+      expect(para.trim().split(/\s+/).length).toBeLessThanOrEqual(25);
+    }
   });
 });

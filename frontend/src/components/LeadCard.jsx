@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Mail, Phone, FileText, MapPin, ArrowRight, Sparkles } from "lucide-react";
+import { Mail, Phone, FileText, MapPin, ArrowRight, Sparkles, ShieldAlert, User } from "lucide-react";
 import { Badge, ScoreRing, Surface } from "./ui.jsx";
 import {
   SERVICE_LABELS, LEAD_TYPE_LABELS, CONFIDENCE_STYLES,
@@ -55,7 +55,23 @@ export const LeadCard = ({ lead, selectable = false, selected = false, onToggleS
                   {[lead.company.city, lead.company.countryCode].filter(Boolean).join(" · ")}
                 </span>
               )}
-              {lead.company.domain && <span className="truncate font-mono text-[11px]">{lead.company.domain}</span>}
+              {lead.company.domain && (
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  <span className="truncate font-mono text-[11px]">{lead.company.domain}</span>
+                  {/* A website we could not tie to this business is the one thing
+                      worth interrupting the scan for — every contact detail
+                      taken from it may belong to somebody else. */}
+                  {lead.company.domainIdentityStatus === "WEAK" && (
+                    <span
+                      className="inline-flex items-center gap-0.5 text-[var(--color-caution)]"
+                      title="This site never identifies itself as this business. Verify before contacting."
+                    >
+                      <ShieldAlert size={11} aria-hidden="true" />
+                      <span className="sr-only">Website ownership unverified</span>
+                    </span>
+                  )}
+                </span>
+              )}
               <span className="inline-flex items-center gap-1" style={{ color: fresh }}>
                 <span className="size-1.5 rounded-full" style={{ background: fresh }} />
                 {lead.freshness.relative}
@@ -98,6 +114,15 @@ export const LeadCard = ({ lead, selectable = false, selected = false, onToggleS
                 )}
                 {!lead.contact.email && !lead.contact.phone && !lead.contact.hasForm && (
                   <span className="text-[var(--text-subtle)]">No contact route found</span>
+                )}
+                {lead.contact.personName && (
+                  <span
+                    className="inline-flex items-center gap-1.5 truncate"
+                    title={[lead.contact.personName, lead.contact.personTitle].filter(Boolean).join(" — ")}
+                  >
+                    <User size={12} className="text-[var(--accent)]" />
+                    <span className="max-w-[150px] truncate">{lead.contact.personName}</span>
+                  </span>
                 )}
               </div>
 

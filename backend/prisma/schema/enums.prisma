@@ -40,7 +40,28 @@ enum SourceKind {
   WIKIDATA
   WEBSITE_CRAWL
   AI_WEB_SEARCH
+  GOOGLE_PLACES
   MANUAL
+}
+
+/// Whether a fetched website actually identifies itself as the company we
+/// attached it to. Recorded per domain so a hijacked or mistaken website is
+/// visible in the UI instead of silently poisoning outreach.
+enum DomainIdentityStatus {
+  UNCHECKED // never fetched, or fetched before this check existed
+  CONFIRMED // the page names the company, or carries its known phone number
+  WEAK      // reachable and not hostile, but never states whose site it is
+  REJECTED  // parked, placeholder, shared platform, or an expired-domain takeover
+}
+
+/// How useful a person is as an outreach target, most useful first.
+enum PersonSeniority {
+  OWNER      // founder, owner, proprietor, managing director
+  EXECUTIVE  // C-level, VP, director, head of
+  MARKETING  // marketing / growth / brand — the buyer for web work
+  OPERATIONS // manager, coordinator, general staff with authority
+  OTHER
+  UNKNOWN
 }
 
 enum CrawlStatus {

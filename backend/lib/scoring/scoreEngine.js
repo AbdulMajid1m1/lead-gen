@@ -1,5 +1,5 @@
 import prisma from "../../prismaClient.js";
-import { SIGNAL_CATALOG, REACHABILITY_SIGNALS, isOpportunitySignal } from "../signals/signalCatalog.js";
+import { SIGNAL_CATALOG, REACHABILITY_SIGNALS, isOpportunitySignal, DISQUALIFYING_SIGNALS } from "../signals/signalCatalog.js";
 import { decayFactor } from "./decay.js";
 import { buildRecommendation } from "./recommend.js";
 import { log } from "../../utils/logger.js";
@@ -50,6 +50,21 @@ export const scoreCompany = async (companyId, { searchQueryId = null, discoveryR
       await setStatus(company.leads[0].id, "DO_NOT_CONTACT", `Suppressed: ${suppressed.reason || suppressed.kind}`);
     }
     return { skipped: true, reason: "SUPPRESSED" };
+  }
+
+  // A disqualified company must never surface as a lead either, however well it
+  // would otherwise score. A permanently closed business still has a website
+  // worth auditing, a phone number and a full set of tech-debt signals — it
+  // would rank perfectly well while being uncontactable by definition. The same
+  // holds for a company whose domain has been taken over by somebody else:
+  // every signal derived from that site describes the wrong business.
+  const disqualifier = company.signals.find((sig) => DISQUALIFYING_SIGNALS.has(sig.type));
+  if (disqualifier) {
+    const label = SIGNAL_CATALOG[disqualifier.type]?.label || disqualifier.type;
+    if (company.leads[0]) {
+      await setStatus(company.leads[0].id, "DO_NOT_CONTACT", `Disqualified: ${label}.`);
+    }
+    return { skipped: true, reason: "DISQUALIFIED", disqualifier: disqualifier.type };
   }
 
   const now = Date.now();

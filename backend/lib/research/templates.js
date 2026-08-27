@@ -157,12 +157,21 @@ const classifyObservation = (text) => {
  */
 const HOOK_COPY = {
   NO_WEBSITE: {
-    subjectAr: () => "عملاؤك يبحثون عنك ولا يجدونك",
+    // The service copy's subject ("Customers can't find X online") is a pitch,
+    // not a subject line — it announces a sales email before it is opened.
+    subject: () => "finding you online",
+    pain: "people searching for a place like yours are finding competitors instead",
+    value: "We build a fast, mobile-first site that turns those searches into calls. Most go live in 2-3 weeks",
+    subjectAr: () => "ظهوركم في البحث",
+    painAr: "من يبحث عن نشاط مثل نشاطكم يجد منافسيكم بدلاً منكم",
+    valueAr: "نبني موقعاً سريعاً يعمل على الجوال ويحوّل عمليات البحث إلى اتصالات، وغالباً خلال ٢-٣ أسابيع",
     openerAr: (name) => `لاحظت أن بيانات ${name} التجارية منشورة لكن لا يوجد له موقع إلكتروني.`,
   },
   SLOW_SITE: {
     subject: () => "your website speed",
     pain: "most visitors give up on a slow page within a few seconds — they go back and tap the next result",
+    value: "We rebuild the front end so pages open immediately, which is usually the cheapest enquiry increase available",
+    valueAr: "نعيد بناء الواجهة لتفتح الصفحات فوراً، وهي غالباً أرخص طريقة لزيادة الاستفسارات",
     subjectAr: () => "سرعة موقعكم",
     painAr: "أغلب الزوار يغادرون الصفحة البطيئة خلال ثوانٍ ويعودون لنتيجة البحث التالية",
     openerAr: () => "لاحظت أن موقعكم يستغرق وقتاً طويلاً في التحميل.",
@@ -170,6 +179,8 @@ const HOOK_COPY = {
   NO_BOOKING: {
     subject: () => "online bookings",
     pain: "every booking that has to happen by phone is one you lose when the line is busy or it's after hours",
+    value: "We add online booking that takes appointments around the clock, without changing how your front desk works",
+    valueAr: "نضيف حجزاً أونلاين يستقبل المواعيد على مدار الساعة دون تغيير طريقة عمل الاستقبال",
     subjectAr: () => "الحجز أونلاين",
     painAr: "كل حجز يتم عبر الهاتف فقط هو حجز تخسره عندما يكون الخط مشغولاً أو بعد ساعات العمل",
     openerAr: () => "لاحظت أن الحجز أو الطلب لديكم لا يتم أونلاين.",
@@ -177,6 +188,8 @@ const HOOK_COPY = {
   NO_MOBILE: {
     subject: () => "your site on phones",
     pain: "most visitors are on a phone, and a desktop-only page sends them straight back to the search results",
+    value: "We rebuild the site mobile-first so the majority of your visitors can actually read and use it",
+    valueAr: "نعيد بناء الموقع ليعمل على الجوال أولاً حتى يستطيع أغلب زوارك قراءته واستخدامه فعلاً",
     subjectAr: () => "موقعكم على الجوال",
     painAr: "أغلب زوارك يستخدمون الجوال، والصفحة غير المهيأة له تعيدهم مباشرة لنتائج البحث",
     openerAr: () => "لاحظت أن موقعكم لا يعمل بشكل جيد على الجوال.",
@@ -184,6 +197,8 @@ const HOOK_COPY = {
   NO_SCHEMA: {
     subject: () => "your Google listing",
     pain: "without structured data Google can't show your hours, photos or reviews — competitors with richer listings get the click",
+    value: "We mark the site up so Google can display your hours, ratings and location directly in the results",
+    valueAr: "نضيف البيانات المنظمة ليعرض قوقل ساعات عملكم وتقييماتكم وموقعكم مباشرة في النتائج",
     subjectAr: () => "ظهوركم في قوقل",
     painAr: "بدون البيانات المنظمة لا يعرض قوقل ساعات عملكم وتقييماتكم، فتذهب النقرة لمنافس يظهر بشكل أفضل",
     openerAr: () => "لاحظت أن ظهوركم في نتائج قوقل يمكن تحسينه بشكل ملموس.",
@@ -191,6 +206,8 @@ const HOOK_COPY = {
   BUILDER: {
     subject: () => "your website platform",
     pain: "template builders are fine to start, but they cap speed, search ranking and custom features as you grow",
+    value: "We move sites off template builders onto something you own, keeping everything that already works",
+    valueAr: "ننقل الموقع من منصات القوالب إلى نظام تملكونه، مع الحفاظ على كل ما يعمل حالياً",
     subjectAr: () => "منصة موقعكم",
     painAr: "منصات القوالب الجاهزة مناسبة للبداية لكنها تحدّ من السرعة والظهور في البحث والميزات مع النمو",
     openerAr: () => "لاحظت أن موقعكم مبني على منصة قوالب جاهزة.",
@@ -205,6 +222,8 @@ const HOOK_COPY = {
   HIRING: {
     subject: () => "your hiring push",
     pain: "growth like that usually strains the systems behind it, and hiring for it takes months",
+    value: "We plug in as a delivery team that ships while you hire, then hand over cleanly",
+    valueAr: "ننضم كفريق تطوير ينفّذ بينما توظفون، ثم نسلّم العمل بشكل منظم",
     subjectAr: () => "توسع فريقكم",
     painAr: "النمو بهذا الشكل يضغط عادة على الأنظمة خلف الكواليس، والتوظيف له يستغرق شهوراً",
     openerAr: () => "لاحظت أن لديكم وظائف شاغرة معلنة حالياً.",
@@ -234,6 +253,64 @@ const HOOK_COPY = {
 /** Gulf markets where outreach should lead in Arabic even for Latin-named businesses. */
 const ARABIC_MARKETS = new Set(["SA", "AE", "KW", "QA", "BH", "OM"]);
 
+/**
+ * One piece of our own work per service angle — the proof touch of the sequence.
+ *
+ * Deliberately one, not a list. A four-link portfolio dump reads as a brochure
+ * and buries the single example that actually resembles the reader's problem;
+ * matched social proof is what earns the reply. Every description here is a
+ * plain statement of what was built, with no invented metrics — an
+ * unsubstantiated "300% more leads" costs more trust than it buys.
+ *
+ * deventiatech.com is deliberately absent: it already appears in the signature
+ * block on every message, so repeating it in the body spends a second link for
+ * nothing. Links carry real deliverability cost, so each one has to earn itself.
+ */
+const PORTFOLIO = {
+  HR_SOFTWARE: {
+    url: "tracefyhr.com",
+    what: "our own cloud HR system — employees, attendance, leave and payroll in one place, with live numbers for whoever is managing it",
+    whatAr: "نظام موارد بشرية سحابي من تطويرنا — الموظفون والحضور والإجازات والرواتب في مكان واحد مع أرقام لحظية للإدارة",
+  },
+  CRM_DEV: {
+    url: "isaconsulting.com",
+    what: "a staffing and IT firm's site, plus the live admin dashboard our team still builds and runs for them",
+    whatAr: "موقع شركة توظيف وتقنية معلومات، إضافة إلى لوحة التحكم التشغيلية التي يطوّرها فريقنا ويشغّلها لهم",
+  },
+  SAAS_DEV: {
+    url: "isaworkbridge.com",
+    what: "a recruitment and job placement platform, built end to end",
+    whatAr: "منصة توظيف وتوطين وظائف، بُنيت من الصفر حتى التشغيل",
+  },
+  CUSTOM_SOFTWARE: {
+    url: "isaworkbridge.com",
+    what: "a recruitment and job placement platform we built end to end, then kept developing as they grew",
+    whatAr: "منصة توظيف وتوظيف وظائف بنيناها بالكامل وواصلنا تطويرها مع نموّهم",
+  },
+  WEBSITE_DEV: {
+    url: "isaconsulting.com",
+    what: "a staffing and IT company's site, built so that being found and loading fast mattered more than anything decorative",
+    whatAr: "موقع شركة توظيف وتقنية معلومات — بناء يهمّ فيه الظهور والسرعة أكثر من أي شيء شكلي",
+  },
+  MOBILE_APP: {
+    url: "mynime.com",
+    what: "a streaming and discovery platform that has to feel the same on a phone as it does on a desktop",
+    whatAr: "منصة بث واستكشاف يجب أن تعمل على الجوال بنفس سلاسة الكمبيوتر",
+  },
+  ECOMMERCE_DEV: {
+    url: "mynime.com",
+    what: "a discovery platform where browsing a large catalogue has to stay fast on any screen — the same problem an online shop has",
+    whatAr: "منصة استكشاف يبقى فيها تصفّح كتالوج كبير سريعاً على أي شاشة — وهي نفس مشكلة المتجر الإلكتروني",
+  },
+  AI_AUTOMATION: {
+    url: "tracefyhr.com",
+    what: "a cloud HR system where the attendance, leave and payroll reporting updates itself instead of being compiled by hand each month",
+    whatAr: "نظام موارد بشرية سحابي تتحدّث فيه تقارير الحضور والإجازات والرواتب تلقائياً بدل تجميعها يدوياً كل شهر",
+  },
+};
+
+const portfolioFor = (serviceKey) => PORTFOLIO[serviceKey] || PORTFOLIO.CUSTOM_SOFTWARE;
+
 /** The initial pitch: hook → pain → value → tiny CTA, under ~80 words. */
 export const initialTemplate = ({ company, facts, serviceKey, serviceLabel }) => {
   const copy = PITCH_COPY[serviceKey] || PITCH_COPY.CUSTOM_SOFTWARE;
@@ -248,13 +325,16 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel }) =>
   // A fact that opens with the company's own name must keep its capital.
   const quote = (text) => (text.startsWith(company.name) ? text : lowerFirst(text));
 
+  // Both halves must come from the same thought: a booking hook answered with a
+  // "get found in search" promise reads as two templates stitched together.
   const pain = hook.pain || copy.pain;
+  const value = hook.value || copy.value;
   const english = [
     "Hello,",
     `I noticed ${quote(observation.text)}`,
     `That matters: ${pain}.`,
-    `${copy.value}.`,
-    `Want me to send 2-3 specific ideas for ${company.name}? A one-word reply is enough.`,
+    `${value}.`,
+    "Want me to send 2-3 specific ideas? One word back is enough.",
     "Best regards",
   ].join("\n\n");
 
@@ -268,8 +348,8 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel }) =>
         "مرحباً،",
         (hook.openerAr || HOOK_COPY.DEFAULT.openerAr)(company.name),
         `${hook.painAr || copy.painAr}.`,
-        `${copy.valueAr}.`,
-        `هل أرسل لك ٢-٣ أفكار محددة لـ ${company.name}؟ يكفي رد بكلمة واحدة.`,
+        `${hook.valueAr || copy.valueAr}.`,
+        "هل أرسل لك ٢-٣ أفكار محددة؟ تكفي كلمة واحدة.",
         "مع التحية",
       ].join("\n\n")
     : null;
@@ -310,7 +390,15 @@ const secondObservation = (facts = []) => {
   return usable[0] || null;
 };
 
-export const whatsappFollowUpTemplate = ({ company, serviceLabel, followUpNumber, facts = [] }) => {
+export const whatsappFollowUpTemplate = ({ company, serviceLabel, serviceKey, followUpNumber, facts = [] }) => {
+  if (followUpNumber === 2) {
+    const work = portfolioFor(serviceKey);
+    return {
+      body:
+        `Closest thing we've built to what ${company.name} needs: ${work.url} — ${work.what}. `
+        + `Happy to explain how the same approach would apply here, if that's useful.`,
+    };
+  }
   if (followUpNumber <= 1) {
     const second = secondObservation(facts);
     const extra = second
@@ -329,7 +417,12 @@ export const whatsappFollowUpTemplate = ({ company, serviceLabel, followUpNumber
   };
 };
 
-export const followUpTemplate = ({ company, serviceLabel, followUpNumber, facts = [] }) => {
+export const followUpTemplate = ({ company, serviceLabel, serviceKey, followUpNumber, facts = [] }) => {
+  const bilingual = ARABIC.test(company.name) || ARABIC_MARKETS.has(company.countryCode);
+
+  // ── Chase 1: a second observation ──
+  // A new concrete detail, never "just checking in" — that phrase measurably
+  // depresses replies because it gives the reader no reason to answer.
   if (followUpNumber <= 1) {
     const second = secondObservation(facts);
     return {
@@ -343,6 +436,42 @@ export const followUpTemplate = ({ company, serviceLabel, followUpNumber, facts 
       ].join("\n\n"),
     };
   }
+
+  // ── Chase 2: proof ──
+  // The first message in the sequence that may carry a link. Cold first-touch
+  // links measurably hurt deliverability, so the proof waits until the address
+  // has taken two messages without bouncing or complaining — by which point a
+  // link costs little and is the one thing that answers "who are you?".
+  //
+  // One matched example, not the full portfolio: the reader should recognise
+  // their own problem in it. Still no meeting request — the ask stays a
+  // one-word reply until they have shown interest.
+  if (followUpNumber === 2) {
+    const work = portfolioFor(serviceKey);
+
+    const english = [
+      "Hello,",
+      `Rather than describe what we do, here is the closest thing we have built to what ${company.name} needs:`,
+      `${work.url} — ${work.what}.`,
+      `If that shape is useful, I'll map the same approach to ${company.name} in a few lines. A one-word reply is enough.`,
+      "Best regards",
+    ].join("\n\n");
+
+    if (!bilingual) return { body: english };
+
+    const arabic = [
+      "مرحباً،",
+      `بدل الحديث عن خدماتنا، هذا أقرب مشروع بنيناه لما يحتاجه ${company.name}:`,
+      `${work.url} — ${work.whatAr}.`,
+      `إن كانت الفكرة مناسبة، سأرسل كيف نطبّق نفس الأسلوب على ${company.name} في أسطر قليلة. يكفي رد بكلمة واحدة.`,
+      "مع التحية",
+    ].join("\n\n");
+
+    return { body: `${arabic}\n\n———\n\n${english}` };
+  }
+
+  // ── Chase 3: the breakup ──
+  // Loss aversion, and a promise we keep: nothing is sent after this.
   return {
     body: [
       "Hello,",

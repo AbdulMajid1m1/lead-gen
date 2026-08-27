@@ -38,6 +38,8 @@ export const gatherFacts = async (leadId) => {
           tech: true,
           audits: { orderBy: { auditedAt: "desc" }, take: 1 },
           jobPostings: { where: { status: "ACTIVE" }, take: 3 },
+          // Best outreach target first; the enum is declared most-senior-first.
+          people: { orderBy: [{ seniority: "asc" }, { email: "desc" }], take: 1 },
         },
       },
       reasons: { orderBy: { rank: "asc" } },
@@ -68,7 +70,21 @@ export const gatherFacts = async (leadId) => {
   for (const job of c.jobPostings) add(`It is currently hiring: ${job.title}.`, "VERIFIED", job.lastSeenActiveAt);
 
   const email = c.contacts.find((x) => x.kind === "EMAIL" && x.roleHint !== "NON_OUTREACH");
-  const recipientHint = email?.roleHint === "ROLE" || /^(info|contact|hello|sales)@/.test(email?.value || "")
+
+  // A greeting that uses the reader's own name is one of the cheapest reply-rate
+  // gains available, but only when the name is real. It is used solely when the
+  // business published the person on its own site AND the address we hold is
+  // theirs — addressing "Ahmed" on a shared info@ inbox that three people read
+  // is worse than no name at all.
+  const person = c.people?.[0] || null;
+  const addressable = person && email && (
+    person.email?.toLowerCase() === email.value.toLowerCase()
+    || (email.roleHint !== "ROLE" && !/^(info|contact|hello|sales|admin|office)@/i.test(email.value))
+  );
+
+  const recipientHint = addressable
+    ? `${person.fullName}${person.title ? `, ${person.title}` : ""} — published on the company's own site. Open with their first name only.`
+    : email?.roleHint === "ROLE" || /^(info|contact|hello|sales)@/.test(email?.value || "")
     ? "role account — do not address a named person"
     : email ? "published business address — do not assume a name"
     : "no email known — write for a contact form or phone follow-up";

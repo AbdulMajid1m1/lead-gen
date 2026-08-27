@@ -188,12 +188,41 @@ export const SIGNAL_CATALOG = {
   CONTACT_EMAIL_FOUND: { weight: 0, halfLifeDays: null, leadType: null, label: "Email found", services: {}, reason: () => "A public business email address was found." },
   CONTACT_PHONE_FOUND: { weight: 0, halfLifeDays: null, leadType: null, label: "Phone found", services: {}, reason: () => "A public business phone number was found." },
   CONTACT_FORM_FOUND:  { weight: 0, halfLifeDays: null, leadType: null, label: "Contact form found", services: {}, reason: () => "The website has a working contact form." },
+  NAMED_CONTACT_FOUND: { weight: 0, halfLifeDays: null, leadType: null, label: "Named contact found", services: {}, reason: (c) => `${c.personName}${c.personTitle ? `, ${c.personTitle}` : ""} is published on the company's own site as a contact.` },
+
+  // ─── Disqualifiers (carry no points; they remove a lead from outreach) ──────
+  // These exist because the costly mistakes in lead generation are not missed
+  // opportunities, they are confidently wrong records: emailing a business that
+  // closed years ago, or one whose "website" now belongs to somebody else.
+  BUSINESS_CLOSED: {
+    weight: 0, halfLifeDays: null, leadType: null,
+    label: "Permanently closed",
+    services: {},
+    reason: (c) => `Google Places lists ${c.companyName} as permanently closed${c.observedOn ? ` (checked ${c.observedOn})` : ""}. Outreach would bounce and damage sending reputation.`,
+  },
+  WEBSITE_NOT_OWNED: {
+    weight: 0, halfLifeDays: null, leadType: null,
+    label: "Website does not belong to this business",
+    services: {},
+    reason: (c) => `The domain on record (${c.domain}) is not this company's website — ${c.detail || "it failed the identity check"}.`,
+  },
 };
 
-export const REACHABILITY_SIGNALS = new Set(["CONTACT_EMAIL_FOUND", "CONTACT_PHONE_FOUND", "CONTACT_FORM_FOUND"]);
+export const REACHABILITY_SIGNALS = new Set(["CONTACT_EMAIL_FOUND", "CONTACT_PHONE_FOUND", "CONTACT_FORM_FOUND", "NAMED_CONTACT_FOUND"]);
+
+/**
+ * Signals that invalidate a lead outright.
+ *
+ * Kept separate from weighting: a disqualified lead is not a low-scoring lead,
+ * it is one that must never be contacted, however strong its other signals are.
+ */
+export const DISQUALIFYING_SIGNALS = new Set(["BUSINESS_CLOSED", "WEBSITE_NOT_OWNED"]);
+
+export const isDisqualifyingSignal = (type) => DISQUALIFYING_SIGNALS.has(type);
 
 /** Opportunity signals are everything that carries weight. */
-export const isOpportunitySignal = (type) => !REACHABILITY_SIGNALS.has(type) && (SIGNAL_CATALOG[type]?.weight ?? 0) > 0;
+export const isOpportunitySignal = (type) =>
+  !REACHABILITY_SIGNALS.has(type) && !DISQUALIFYING_SIGNALS.has(type) && (SIGNAL_CATALOG[type]?.weight ?? 0) > 0;
 
 export const getSignalDefinition = (type) => SIGNAL_CATALOG[type] || null;
 
@@ -207,4 +236,5 @@ export const catalogForApi = () =>
     leadType: def.leadType,
     services: Object.keys(def.services),
     isReachability: REACHABILITY_SIGNALS.has(type),
+    isDisqualifying: DISQUALIFYING_SIGNALS.has(type),
   }));

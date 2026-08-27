@@ -1,7 +1,7 @@
 import prisma from "../../prismaClient.js";
-import { fetchPage } from "../crawler/fetchPage.js";
+import { verifyDomainIdentity } from "../verify/domainIdentity.js";
 import { recordFact } from "../provenance/recorder.js";
-import { normalizeCompanyName, normalizeDomain } from "../../utils/normalize.js";
+import { normalizeCompanyName } from "../../utils/normalize.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("domainResolver");
@@ -11,93 +11,52 @@ const logger = log("domainResolver");
  *
  * A company found through a job board arrives with a name and nothing else, and
  * a lead with no way to contact it is worthless. Guessing `<name>.com` is cheap,
- * but a guess must never be *recorded* as fact — so every candidate is fetched
- * and only accepted when the page itself proves the association by naming the
- * company. The resulting domain is stored with DETECTED confidence and the
- * matching snippet as evidence.
+ * but a guess must never be *recorded* as fact.
+ *
+ * The judgement of whether a candidate page really belongs to the company lives
+ * in lib/verify/domainIdentity.js, which every other source now shares. This
+ * module's job is narrowed to what is unique to it: proposing sensible guesses
+ * and stopping at the first one that survives verification. Keeping the two
+ * apart is what stopped the resolver's careful checks from being the *only*
+ * place they ran — OpenStreetMap tags and AI claims used to bypass them
+ * entirely, which is how a closed Riyadh restaurant ended up pointing at a
+ * hijacked domain serving gambling spam.
  */
 
 const TLDS = [".com", ".io", ".co", ".ai", ".org", ".net"];
 
-/** Domains that host many companies — a match there proves nothing. */
+/** Country-specific suffixes worth trying for a business we can place. */
+const COUNTRY_TLDS = {
+  SA: [".com.sa", ".sa"], AE: [".ae", ".com.ae"], QA: [".qa", ".com.qa"],
+  KW: [".com.kw"], BH: [".com.bh"], OM: [".com.om"], EG: [".com.eg"],
+  GB: [".co.uk", ".uk"], DE: [".de"], FR: [".fr"], NL: [".nl"], ES: [".es"],
+  IT: [".it"], PT: [".pt"], PK: [".com.pk"], IN: [".in", ".co.in"], TR: [".com.tr"],
+};
+
+/** Hosts that carry many companies — a match there proves nothing. */
 const SHARED_HOSTS = /^(?:jobs|boards|apply|careers|my|app|www)\.|(?:greenhouse|lever|ashbyhq|workable|recruitee|smartrecruiters|linkedin|facebook|notion|github)\.(?:io|com|co)$/i;
 
 /**
- * Parked domains, brokers and for-sale pages.
+ * Build the guess list, most likely first.
  *
- * These are the resolver's worst failure mode: a short company name almost
- * always has a matching .com, and a parked page happily echoes that name in its
- * title. Left unchecked it attaches a domain broker's address to a real
- * business — which is how "Gad" in Riyadh acquired info@domainster.com.
+ * Local businesses in the Gulf register under the country suffix far more often
+ * than under a bare .com, so when we know where a company is, those are tried
+ * before the generic TLDs rather than after the candidate budget runs out.
  */
-const PARKED_MARKERS = /\b(?:domainster|sedo|afternic|dan\.com|hugedomains|buydomains|namecheap parking|godaddy(?:\.com)? (?:parking|auctions)|this domain (?:is|may be) for sale|buy this domain|the domain .{0,40} is for sale|parked (?:free )?(?:domain|courtesy)|inquire about this domain)\b/i;
-
-/**
- * A name match alone is not identification.
- *
- * "French Corner" matches a café in Riyadh, a bakery in Chicago and a shop in
- * Paris. When we know where the business actually is, the page has to show some
- * sign of the same place before we accept the domain — otherwise the resolver
- * confidently attaches a stranger's website and email to the lead.
- */
-const pageCorroboratesLocation = (html, { city, countryCode, domain }) => {
-  if (!city && !countryCode) return { ok: true, how: "no location known to check against" };
-
-  const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
-  if (city && new RegExp(`\\b${city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text)) {
-    return { ok: true, how: `the page mentions ${city}` };
-  }
-
-  // A country-code TLD is strong geographic evidence in itself.
-  const ccTld = { SA: ".sa", AE: ".ae", GB: ".uk", DE: ".de", FR: ".fr", NL: ".nl", ES: ".es", IT: ".it", PT: ".pt", PK: ".pk", IN: ".in" }[countryCode];
-  if (ccTld && domain.endsWith(ccTld)) return { ok: true, how: `the domain uses the ${ccTld} country suffix` };
-
-  // Or the country named in the page text.
-  const countryNames = { SA: "saudi", AE: "emirates|dubai|abu dhabi", GB: "united kingdom|england|scotland|wales",
-                         DE: "germany|deutschland", FR: "france", NL: "netherlands", ES: "spain|españa",
-                         IT: "italy|italia", PT: "portugal", PK: "pakistan", IN: "india" }[countryCode];
-  if (countryNames && new RegExp(`\\b(?:${countryNames})\\b`, "i").test(text)) {
-    return { ok: true, how: "the page names the same country" };
-  }
-
-  return { ok: false, how: null };
-};
-
-const candidateDomains = (companyName) => {
+const candidateDomains = (companyName, countryCode = null) => {
   const norm = normalizeCompanyName(companyName);
   if (!norm || norm.length < 2) return [];
-  const words = norm.split(" ").filter(Boolean);
-  const stems = [...new Set([words.join(""), words.slice(0, 2).join(""), words[0]])].filter((s) => s.length >= 3 && s.length <= 40);
 
+  const words = norm.split(" ").filter(Boolean);
+  const stems = [...new Set([words.join(""), words.slice(0, 2).join(""), words[0]])]
+    .filter((s) => s.length >= 3 && s.length <= 40);
+
+  const suffixes = [...(COUNTRY_TLDS[countryCode] || []), ...TLDS];
   const out = [];
   for (const stem of stems) {
-    for (const tld of TLDS) out.push(`${stem}${tld}`);
+    for (const tld of suffixes) out.push(`${stem}${tld}`);
   }
-  return out.slice(0, 8);
-};
-
-/**
- * Does this page actually belong to this company?
- * Requires the name in the title, an og:site_name, or a copyright line — all
- * places a site states its own identity, rather than anywhere on the page.
- */
-const pageConfirmsCompany = (html, companyName) => {
-  const norm = normalizeCompanyName(companyName);
-  if (!norm) return null;
-  const firstWord = norm.split(" ")[0];
-  if (firstWord.length < 3) return null;
-
-  const title = /<title[^>]*>([\s\S]{0,200}?)<\/title>/i.exec(html)?.[1] || "";
-  const ogSite = /<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']{0,120})["']/i.exec(html)?.[1] || "";
-  const copyright = /(?:©|&copy;|copyright)[^<]{0,80}/i.exec(html)?.[0] || "";
-
-  for (const [where, text] of [["title", title], ["og:site_name", ogSite], ["copyright notice", copyright]]) {
-    const normalizedText = normalizeCompanyName(text.replace(/<[^>]+>/g, " "));
-    if (normalizedText && (normalizedText.includes(norm) || normalizedText.includes(firstWord))) {
-      return { where, snippet: text.replace(/\s+/g, " ").trim().slice(0, 200) };
-    }
-  }
-  return null;
+  return [...new Set(out)].slice(0, 10);
 };
 
 /**
@@ -106,7 +65,7 @@ const pageConfirmsCompany = (html, companyName) => {
 export const resolveCompanyDomain = async (companyId, { maxCandidates = 5 } = {}) => {
   const company = await prisma.company.findUnique({
     where: { id: companyId },
-    include: { domains: true, locations: { take: 1 } },
+    include: { domains: true, locations: { take: 1 }, aliases: true, contacts: { where: { kind: "PHONE" } } },
   });
   if (!company) throw new Error(`Company ${companyId} not found`);
   if (company.domains.length > 0) {
@@ -119,66 +78,60 @@ export const resolveCompanyDomain = async (companyId, { maxCandidates = 5 } = {}
   // and checking the homepage against that rejects the real website. That is
   // exactly how Stripe, Ripple and Anthropic ended up labelled "no website".
   const cityTrusted = Boolean(company.osmCategory || company.locations.length > 0);
-  const geoContext = {
+  const identityContext = {
+    name: company.name,
     city: cityTrusted ? company.city : null,
     countryCode: cityTrusted ? company.countryCode : null,
+    phones: company.contacts.map((c) => c.value),
+    aliases: company.aliases.map((a) => a.alias),
   };
 
-  const candidates = candidateDomains(company.name).slice(0, maxCandidates);
+  const candidates = candidateDomains(company.name, cityTrusted ? company.countryCode : null)
+    .slice(0, maxCandidates);
   let checked = 0;
+  const rejections = [];
 
   for (const candidate of candidates) {
     if (SHARED_HOSTS.test(candidate)) continue;
     checked += 1;
 
-    const res = await fetchPage(`https://${candidate}/`, { timeoutMs: 10_000, maxBytes: 1_500_000 });
-    if (!res.ok || !res.body) continue;
+    const identity = await verifyDomainIdentity(candidate, identityContext);
 
-    // A redirect to a different registrable domain is the site telling us its
-    // real address — follow that rather than the guess.
-    const finalDomain = normalizeDomain(res.finalUrl) || candidate;
-
-    // A domain-broker page will echo any name back at us — reject before the
-    // name check even runs.
-    if (PARKED_MARKERS.test(res.body)) {
-      logger.debug({ company: company.name, candidate }, "candidate domain is parked or for sale — rejected");
-      continue;
-    }
-
-    const confirmation = pageConfirmsCompany(res.body, company.name);
-    if (!confirmation) {
-      logger.debug({ company: company.name, candidate }, "candidate domain did not confirm the company name");
-      continue;
-    }
-
-    const geo = pageCorroboratesLocation(res.body, { ...geoContext, domain: finalDomain });
-    if (!geo.ok) {
-      logger.debug(
-        { company: company.name, candidate, city: company.city },
-        "name matched but the page shows no link to the company's location — rejected as a probable name collision",
-      );
+    if (identity.verdict !== "OWNED") {
+      if (identity.verdict === "REJECTED" && identity.disqualifier !== "NO_IDENTITY") {
+        rejections.push(`${candidate}: ${identity.disqualifier}`);
+      }
+      logger.debug({ company: company.name, candidate, verdict: identity.verdict, disqualifier: identity.disqualifier }, "candidate rejected");
       continue;
     }
 
     await prisma.companyDomain.upsert({
-      where: { domain: finalDomain },
-      update: { httpsOk: true },
-      create: { companyId, domain: finalDomain, discoveredVia: "WEBSITE_CRAWL", isPrimary: true, httpsOk: true },
+      where: { domain: identity.domain },
+      update: {
+        httpsOk: true,
+        identityStatus: "CONFIRMED", identityScore: identity.score,
+        identityReason: identity.reason.slice(0, 500), identityCheckedAt: new Date(),
+      },
+      create: {
+        companyId, domain: identity.domain, discoveredVia: "WEBSITE_CRAWL", isPrimary: true, httpsOk: true,
+        identityStatus: "CONFIRMED", identityScore: identity.score,
+        identityReason: identity.reason.slice(0, 500), identityCheckedAt: new Date(),
+      },
     });
 
     await recordFact({
       companyId,
       key: "resolved_domain",
-      value: finalDomain,
-      // DETECTED, not VERIFIED: the association is proven by a name match on
-      // the page, which is strong but still an inference from public content.
+      value: identity.domain,
+      // DETECTED, not VERIFIED: the association is proven by evidence on the
+      // page, which is strong but still an inference from public content.
       confidenceLevel: "DETECTED",
       extractorName: "domainResolver",
-      evidenceSnippet: `Resolved ${finalDomain} for "${company.name}" — the site's ${confirmation.where} reads: ${confirmation.snippet}. Location corroborated because ${geo.how}.`,
+      evidenceSnippet: `${identity.reason} ${identity.evidence || ""}`.trim().slice(0, 500),
     });
 
-    logger.info({ company: company.name, domain: finalDomain, via: confirmation.where }, "company domain resolved");
-    return { found: true, domain: finalDomain, evidence: confirmation.snippet, checked };
+    logger.info({ company: company.name, domain: identity.domain, score: identity.score }, "company domain resolved");
+    return { found: true, domain: identity.domain, evidence: identity.evidence, score: identity.score, checked };
   }
 
   await recordFact({
@@ -187,8 +140,10 @@ export const resolveCompanyDomain = async (companyId, { maxCandidates = 5 } = {}
     value: "true",
     confidenceLevel: "VERIFIED",
     extractorName: "domainResolver",
-    evidenceSnippet: `Checked ${checked} candidate domain(s) for "${company.name}"; none confirmed the company name.`,
+    evidenceSnippet: `Checked ${checked} candidate domain(s) for "${company.name}"; none confirmed the company name.${rejections.length ? ` Rejected: ${rejections.join("; ")}.` : ""}`.slice(0, 500),
   });
 
   return { found: false, checked };
 };
+
+export const __testables = { candidateDomains, SHARED_HOSTS, COUNTRY_TLDS };

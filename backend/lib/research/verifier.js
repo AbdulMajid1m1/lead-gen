@@ -1,8 +1,9 @@
 import prisma from "../../prismaClient.js";
 import { fetchPage } from "../crawler/fetchPage.js";
 import { extractContacts } from "../extract/contacts.js";
-import { recordContact, recordSourceRecord, ensureSource, isSuppressed } from "../provenance/recorder.js";
+import { recordContact, recordSourceRecord, recordFact, ensureSource, isSuppressed } from "../provenance/recorder.js";
 import { phoneMatchKey, normalizeDomain } from "../../utils/normalize.js";
+import { verifyDomainIdentity } from "../verify/domainIdentity.js";
 import { AI_MAX_CITATION_FETCHES } from "../../configs/envConfig.js";
 import { log } from "../../utils/logger.js";
 
@@ -60,7 +61,11 @@ const observedValuesFrom = (html, pageUrl) => {
     // A WhatsApp claim is only ever satisfied by an explicit wa.me link — a
     // phone number merely existing never means the business is on WhatsApp.
     WHATSAPP: found.socials.filter((s) => s.network === "WHATSAPP").map((s) => s.handle || s.url),
-    WEBSITE: [pageUrl],
+    // WEBSITE is deliberately absent. It used to be `[pageUrl]`, which made a
+    // website claim self-confirming: we fetched the URL the model cited and
+    // then "verified" the claim by comparing that URL to itself. Every
+    // reachable address passed, including expired domains taken over by spam
+    // networks. Website claims now go through verifyDomainIdentity instead.
     ADDRESS: [],
   };
 };
@@ -73,7 +78,7 @@ const observedValuesFrom = (html, pageUrl) => {
 export const verifyCandidateClaims = async (candidateId, { fetchBudget = AI_MAX_CITATION_FETCHES } = {}) => {
   const candidate = await prisma.aiCandidate.findUnique({
     where: { id: candidateId },
-    include: { claims: true, company: { include: { contacts: true, domains: true } } },
+    include: { claims: true, company: { include: { contacts: true, domains: true, locations: { take: 1 } } } },
   });
   if (!candidate?.companyId || !candidate.company) {
     return { confirmed: 0, contradicted: 0, uncheckable: 0, fetches: 0 };
@@ -110,6 +115,68 @@ export const verifyCandidateClaims = async (candidateId, { fetchBudget = AI_MAX_
         verifiedContactId: contact?.id ?? null,
         note: "Observed by our crawler on the company's own website.",
       });
+      stats.confirmed += 1;
+      continue;
+    }
+
+    // ── 1b. A website claim is settled by identity, not by reachability ─────
+    // The model naming a domain proves nothing; the domain resolving proves
+    // only that *someone* owns it. The page has to identify itself as this
+    // company, and must not be a parked, placeholder or hijacked domain.
+    if (claim.field === "WEBSITE") {
+      if (stats.fetches >= fetchBudget) {
+        await setClaim(claim.id, "UNCHECKABLE", { note: "Verification budget for this run was exhausted." });
+        stats.uncheckable += 1;
+        continue;
+      }
+      stats.fetches += 1;
+
+      const identity = await verifyDomainIdentity(claim.value, {
+        name: company.name,
+        // Only a map-backed location describes the company itself; a job
+        // posting's city would reject the real head-office website.
+        city: company.locations?.length || company.osmCategory ? company.city : null,
+        countryCode: company.locations?.length || company.osmCategory ? company.countryCode : null,
+        phones: company.contacts.filter((c) => c.kind === "PHONE").map((c) => c.value),
+      });
+
+      if (identity.verdict !== "OWNED") {
+        await setClaim(claim.id, identity.verdict === "UNREACHABLE" ? "UNCHECKABLE" : "CONTRADICTED", {
+          note: identity.reason,
+        });
+        if (identity.verdict === "UNREACHABLE") stats.uncheckable += 1;
+        else stats.contradicted += 1;
+        continue;
+      }
+
+      const websiteSource = await ensureSource({
+        kind: "AI_WEB_SEARCH",
+        name: "AI web search (website claim)",
+        attribution: "Website suggested by AI web search and confirmed by our own crawler against the company's identity.",
+      });
+      const websiteRecord = await recordSourceRecord({
+        sourceId: websiteSource.id,
+        externalId: null,
+        url: `https://${identity.domain}/`,
+        payload: { domain: identity.domain, score: identity.score, signals: identity.signals, reason: identity.reason },
+      });
+
+      await prisma.companyDomain.upsert({
+        where: { domain: identity.domain },
+        update: { httpsOk: true },
+        create: { companyId: company.id, domain: identity.domain, discoveredVia: "AI_WEB_SEARCH", isPrimary: ownDomains.size === 0, httpsOk: true },
+      });
+      await recordFact({
+        companyId: company.id,
+        key: "resolved_domain",
+        value: identity.domain,
+        confidenceLevel: "DETECTED",
+        extractorName: "aiVerify",
+        evidenceSnippet: identity.reason.slice(0, 500),
+        sourceRecordId: websiteRecord.id,
+      });
+
+      await setClaim(claim.id, "CONFIRMED_OWN_SITE", { note: identity.reason });
       stats.confirmed += 1;
       continue;
     }

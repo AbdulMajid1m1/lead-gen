@@ -178,6 +178,13 @@ export const searchLeads = async (parsed, { page = 1, pageSize = 25 } = {}) => {
 
 export const toLeadCard = (lead, rankScore = null) => {
   const contacts = lead.company?.contacts || [];
+  // Prefer the domain the identity check confirmed; a rejected one must never
+  // be the address shown on the card.
+  const domains = lead.company?.domains || [];
+  const primaryDomain = domains.find((d) => d.identityStatus === "CONFIRMED")
+    || domains.find((d) => d.identityStatus !== "REJECTED")
+    || null;
+  const person = lead.company?.people?.[0] || null;
   const email = contacts.find((c) => c.kind === "EMAIL" && c.roleHint !== "NON_OUTREACH");
   const phone = contacts.find((c) => c.kind === "PHONE");
   const form = contacts.find((c) => c.kind === "CONTACT_FORM");
@@ -202,7 +209,10 @@ export const toLeadCard = (lead, rankScore = null) => {
       industry: lead.company?.industry,
       city: lead.company?.city || lead.company?.locations?.[0]?.city || null,
       countryCode: lead.company?.countryCode,
-      domain: lead.company?.domains?.[0]?.domain || null,
+      domain: primaryDomain?.domain || null,
+      // Carried onto the card so the grid can mark an unverified website before
+      // anyone clicks through and emails an address taken from the wrong site.
+      domainIdentityStatus: primaryDomain?.identityStatus || "UNCHECKED",
     },
     topReasons: (lead.reasons || []).map((r) => ({ text: r.text, confidenceLevel: r.confidenceLevel })),
     contact: {
@@ -212,6 +222,10 @@ export const toLeadCard = (lead, rankScore = null) => {
       email: email?.value || null,
       phone: phone?.value || null,
       formUrl: form?.value || null,
+      // A named person turns "Dear Sir/Madam" into a real greeting, so the
+      // grid shows whether one exists before the lead is opened.
+      personName: person?.fullName || null,
+      personTitle: person?.title || null,
     },
     recommendedAction: lead.actions?.[0]
       ? { actionType: lead.actions[0].actionType, title: lead.actions[0].title, rationale: lead.actions[0].rationale }
@@ -260,7 +274,7 @@ export const buildDiscoveryPlan = (parsed) => {
       ordinal: ordinal++,
       kind: "CRAWL",
       label: "Crawl and audit the websites that were found",
-      params: { maxHosts: 40, maxPagesPerHost: 4 },
+      params: { maxHosts: 40, maxPagesPerHost: 7 },
     });
   }
 
@@ -286,7 +300,7 @@ export const buildDiscoveryPlan = (parsed) => {
         ordinal: ordinal++,
         kind: "CRAWL",
         label: "Find each company's website and collect public contact details",
-        params: { maxHosts: 25, maxPagesPerHost: 4, maxResolve: 20 },
+        params: { maxHosts: 25, maxPagesPerHost: 7, maxResolve: 20 },
       });
     }
   }
@@ -302,6 +316,10 @@ export const buildDiscoveryPlan = (parsed) => {
     });
   }
 
+  // Google Places is optional and skips itself when no key is configured. It
+  // runs before SIGNALS so a permanently closed business is known to scoring
+  // rather than being ranked and emailed like a live one.
+  steps.push({ ordinal: ordinal++, kind: "PLACES_VERIFY", label: "Cross-check each business against Google Places", params: {} });
   steps.push({ ordinal: ordinal++, kind: "SIGNALS", label: "Derive signals from the collected evidence", params: {} });
   steps.push({ ordinal: ordinal++, kind: "SCORE", label: "Score and rank the resulting leads", params: {} });
 
@@ -441,9 +459,10 @@ export const buildResearchPlan = (parsed, brief) => {
     ordinal: ordinal++,
     kind: "CRAWL",
     label: "Visit each website and collect published contact details",
-    params: { maxHosts: 30, maxPagesPerHost: 4, maxResolve: 15 },
+    params: { maxHosts: 30, maxPagesPerHost: 7, maxResolve: 15 },
   });
   steps.push({ ordinal: ordinal++, kind: "AI_VERIFY", label: "Verify every AI-claimed detail against a real page", params: {} });
+  steps.push({ ordinal: ordinal++, kind: "PLACES_VERIFY", label: "Cross-check each business against Google Places", params: {} });
   steps.push({ ordinal: ordinal++, kind: "SIGNALS", label: "Derive signals from the collected evidence", params: {} });
   steps.push({ ordinal: ordinal++, kind: "SCORE", label: "Score and rank the results", params: {} });
   steps.push({ ordinal: ordinal++, kind: "AI_COMPOSE", label: "Write a personalised outreach email for each match", params: {} });
