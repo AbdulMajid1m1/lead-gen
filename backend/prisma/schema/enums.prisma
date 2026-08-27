@@ -281,3 +281,29 @@ enum AdminRole {
   ADMIN
   VIEWER
 }
+
+// ─── Client book ──────────────────────────────────────────────────────────────
+
+/// Where a client stands with us today.
+///
+/// PAST is the plain reading of "previous client": work delivered, nothing
+/// running, still absolutely worth a check-in. ARCHIVED is the one state that
+/// means "stop surfacing this" — a wound-up company, or a relationship we do
+/// not want to revive.
+enum ClientStatus {
+  ACTIVE
+  PAST
+  ON_HOLD
+  ARCHIVED
+}
+
+/// The state of one piece of delivered work. MAINTENANCE is separate from
+/// IN_PROGRESS because it changes what the check-in should say: one asks "how
+/// is the build going", the other asks "does it still need anything".
+enum ClientProjectStatus {
+  IN_PROGRESS
+  DELIVERED
+  MAINTENANCE
+  ON_HOLD
+  CANCELLED
+}

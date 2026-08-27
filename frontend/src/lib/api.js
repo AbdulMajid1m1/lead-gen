@@ -156,6 +156,22 @@ export const api = {
   dashboard: () => request("/stats/dashboard"),
   signalCatalog: () => request("/signals/catalog"),
 
+  // ─── Client book ───────────────────────────────────────────────────────────
+  listClients: (params) => request(`/clients${qs(params)}`),
+  // The counts and filter options the toolbar is allowed to offer — always
+  // derived from the clients that exist, never from a static list.
+  clientFacets: () => request("/clients/facets"),
+  getClient: (id) => request(`/clients/${id}`),
+  createClient: (body) => request("/clients", { method: "POST", body }),
+  updateClient: (id, body) => request(`/clients/${id}`, { method: "PUT", body }),
+  deleteClient: (id) => request(`/clients/${id}`, { method: "DELETE" }),
+
+  createClientProject: (clientId, body) => request(`/clients/${clientId}/projects`, { method: "POST", body }),
+  updateClientProject: (clientId, projectId, body) => request(`/clients/${clientId}/projects/${projectId}`, { method: "PUT", body }),
+  deleteClientProject: (clientId, projectId) => request(`/clients/${clientId}/projects/${projectId}`, { method: "DELETE" }),
+
+  logClientTouchpoint: (clientId, body) => request(`/clients/${clientId}/touchpoints`, { method: "POST", body }),
+
   listSuppression: () => request("/suppression"),
   addSuppression: (body) => request("/suppression", { method: "POST", body }),
   removeSuppression: (id) => request(`/suppression/${id}`, { method: "DELETE" }),

@@ -95,6 +95,110 @@ export const INBOX_BUCKETS = {
   },
 };
 
+/**
+ * Client-book vocabulary.
+ *
+ * Status colour answers the same question it does on the lead side — is
+ * anything owed here? Positive = work is running. Neutral = delivered and
+ * quiet, which is the normal resting state of a past client and must not look
+ * like a problem. Caution = paused and worth a nudge. Subtle = deliberately out
+ * of sight.
+ */
+export const CLIENT_STATUS_LABELS = {
+  ACTIVE: "Active",
+  PAST: "Past client",
+  ON_HOLD: "On hold",
+  ARCHIVED: "Archived",
+};
+
+export const CLIENT_STATUS_HINTS = {
+  ACTIVE: "Work is running right now.",
+  PAST: "Delivered, nothing live — still worth a check-in.",
+  ON_HOLD: "Paused by them or by us.",
+  ARCHIVED: "Hidden from the list and never suggested for a check-in.",
+};
+
+export const CLIENT_STATUS_TONE = {
+  ACTIVE: "var(--color-positive)",
+  PAST: "var(--color-info)",
+  ON_HOLD: "var(--color-caution)",
+  ARCHIVED: "var(--text-subtle)",
+};
+
+export const PROJECT_STATUS_LABELS = {
+  IN_PROGRESS: "In progress",
+  DELIVERED: "Delivered",
+  MAINTENANCE: "Maintenance",
+  ON_HOLD: "On hold",
+  CANCELLED: "Cancelled",
+};
+
+export const PROJECT_STATUS_TONE = {
+  IN_PROGRESS: "var(--accent)",
+  DELIVERED: "var(--color-positive)",
+  MAINTENANCE: "var(--color-info)",
+  ON_HOLD: "var(--color-caution)",
+  CANCELLED: "var(--text-subtle)",
+};
+
+/**
+ * How a check-in verdict reads on a card. `urgent` drives the accent treatment,
+ * so only the states that genuinely want action today carry it.
+ */
+export const CONTACT_HEALTH = {
+  DUE: { label: "Check-in due", tone: "var(--accent)", urgent: true },
+  NEVER_CONTACTED: { label: "Never contacted", tone: "var(--accent)", urgent: true },
+  QUIET: { label: "Gone quiet", tone: "var(--color-caution)", urgent: true },
+  SCHEDULED: { label: "Follow-up booked", tone: "var(--color-info)", urgent: false },
+  RECENT: { label: "In touch", tone: "var(--color-positive)", urgent: false },
+  ARCHIVED: { label: "Archived", tone: "var(--text-subtle)", urgent: false },
+};
+
+export const CHANNEL_LABELS = {
+  EMAIL: "Email",
+  WHATSAPP: "WhatsApp",
+  PHONE: "Call",
+  CONTACT_FORM: "Contact form",
+  SOCIAL: "Social",
+};
+
+/**
+ * `<input type="date">` speaks "YYYY-MM-DD" and nothing else. Built from the
+ * local calendar date rather than `toISOString()`, which shifts the day for
+ * anyone east or west of UTC at the wrong hour.
+ */
+export const toDateInput = (value) => {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+};
+
+/** A phone number reduced to what `tel:` and `wa.me` accept. */
+export const dialable = (phone) => {
+  if (!phone) return null;
+  const cleaned = String(phone).replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "");
+  return cleaned.replace(/\D/g, "").length >= 7 ? cleaned : null;
+};
+
+/** wa.me refuses a leading "+" and any separator, so it gets digits only. */
+export const whatsappNumber = (phone) => {
+  const digits = String(phone || "").replace(/\D/g, "");
+  return digits.length >= 7 ? digits : null;
+};
+
+/** "acme.com/work" — a URL as a person would read it aloud. */
+export const prettyUrl = (url) => {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname.replace(/^www\./, "")}${parsed.pathname === "/" ? "" : parsed.pathname}`;
+  } catch {
+    return String(url);
+  }
+};
+
 export const ACTION_LABELS = {
   CONTACT_IMMEDIATELY: "Contact immediately",
   EMAIL_PITCH: "Send email pitch",

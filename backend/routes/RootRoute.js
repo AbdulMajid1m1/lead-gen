@@ -10,12 +10,14 @@ import * as research from "../controllers/subControllers/researchController.js";
 import * as outreach from "../controllers/subControllers/outreachController.js";
 import * as campaigns from "../controllers/subControllers/campaignController.js";
 import * as signatures from "../controllers/subControllers/signatureController.js";
+import * as clients from "../controllers/subControllers/clientController.js";
 import * as auth from "../controllers/subControllers/authController.js";
 import { requireAuth } from "../middlewares/requireAuth.js";
 import { loginLimiter } from "../middlewares/rateLimiter.js";
 
 const router = Router();
 const idParam = z.object({ id: z.string().min(1).max(64) });
+const nestedIdParam = z.object({ id: z.string().min(1).max(64), projectId: z.string().min(1).max(64) });
 
 // ─── Authentication ───────────────────────────────────────────────────────────
 // Mounted before the gate below, because these are the only routes a
@@ -119,6 +121,23 @@ router.get("/outreach/whatsapp/session", validate({ query: outreach.whatsappSess
 router.get("/outreach/whatsapp/status", outreach.whatsappStatusInfo);
 router.post("/outreach/whatsapp/logout", writeLimiter, validate({ body: outreach.whatsappLogoutSchema }), outreach.whatsappLogoutHandler);
 router.post("/outreach/whatsapp/send", writeLimiter, validate({ body: outreach.whatsappSendSchema }), outreach.whatsappSend);
+
+// ─── Client book: companies we have already worked for ───────────────────────
+// Separate from /leads on purpose: a lead is evidence the discovery engine owns
+// and rewrites, a client is a record a person typed and owns outright.
+// /clients/facets must precede /clients/:id, or "facets" is read as an id.
+router.get("/clients", validate({ query: clients.listSchema }), clients.listClients);
+router.get("/clients/facets", clients.clientFacets);
+router.post("/clients", writeLimiter, validate({ body: clients.createSchema }), clients.createClient);
+router.get("/clients/:id", validate({ params: idParam }), clients.getClient);
+router.put("/clients/:id", writeLimiter, validate({ params: idParam, body: clients.updateSchema }), clients.updateClient);
+router.delete("/clients/:id", writeLimiter, validate({ params: idParam }), clients.deleteClient);
+
+router.post("/clients/:id/projects", writeLimiter, validate({ params: idParam, body: clients.projectSchema }), clients.createProject);
+router.put("/clients/:id/projects/:projectId", writeLimiter, validate({ params: nestedIdParam, body: clients.projectSchema }), clients.updateProject);
+router.delete("/clients/:id/projects/:projectId", writeLimiter, validate({ params: nestedIdParam }), clients.deleteProject);
+
+router.post("/clients/:id/touchpoints", writeLimiter, validate({ params: idParam, body: clients.touchpointSchema }), clients.logTouchpoint);
 
 // ─── Reference data & operations ──────────────────────────────────────────────
 router.get("/signals/catalog", stats.signalCatalog);

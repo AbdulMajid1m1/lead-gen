@@ -1,6 +1,6 @@
 import { cn } from "../lib/format.js";
-import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, ChevronDown, Inbox, Loader2 } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { AlertCircle, Check, ChevronDown, Inbox, Loader2, Trash2 } from "lucide-react";
 
 export const Surface = ({ className, children, ...props }) => (
   <div
@@ -259,3 +259,79 @@ export const Field = ({ label, children, className }) => (
     <dd className="text-sm text-[var(--text)]">{children ?? "—"}</dd>
   </div>
 );
+
+/**
+ * A labelled form control.
+ *
+ * Every input in the app owes the user four things: what it is, what a valid
+ * value looks like, why it matters, and what went wrong. Bundling them here
+ * means no form can quietly ship without them, and the label/description/error
+ * are wired to the control by id so a screen reader announces them too.
+ *
+ * `children` is a render prop receiving the ids and invalid state to spread
+ * onto the control.
+ */
+export const FormField = ({ label, hint, help, error, required, htmlFor, children, className }) => {
+  const autoId = useId();
+  const id = htmlFor || autoId;
+  const helpId = `${id}-help`;
+  const errorId = `${id}-error`;
+  const describedBy = [help ? helpId : null, error ? errorId : null].filter(Boolean).join(" ") || undefined;
+
+  return (
+    <div className={cn("flex flex-col gap-1", className)}>
+      <label htmlFor={id} className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">
+        {label}
+        {required && <span className="ml-0.5 text-[var(--accent)]" aria-hidden>*</span>}
+        {hint && <span className="ml-1.5 normal-case tracking-normal text-[var(--text-subtle)]">{hint}</span>}
+      </label>
+
+      {children({ id, "aria-describedby": describedBy, "aria-invalid": error ? true : undefined, "aria-required": required || undefined })}
+
+      {error
+        ? <p id={errorId} role="alert" className="flex items-center gap-1 text-[11px] leading-snug text-[var(--color-critical)]">
+            <AlertCircle size={11} className="shrink-0" />{error}
+          </p>
+        : help && <p id={helpId} className="text-[11px] leading-snug text-[var(--text-subtle)]">{help}</p>}
+    </div>
+  );
+};
+
+/**
+ * Destructive actions, behind a deliberate second click.
+ *
+ * Preferred over `window.confirm` where the deletion cascades: a browser dialog
+ * cannot say *what else* goes with it, and this can. Reverts on blur or Escape,
+ * so an accidental first click costs nothing.
+ */
+export const ConfirmDelete = ({ onConfirm, label = "Delete", confirmLabel = "Delete for good", title, disabled, size = "sm", className }) => {
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") setArmed(false); };
+    document.addEventListener("keydown", onKey);
+    // Auto-disarm, so a forgotten confirmation is never left sitting under a
+    // stray click minutes later.
+    const timer = setTimeout(() => setArmed(false), 6000);
+    return () => { document.removeEventListener("keydown", onKey); clearTimeout(timer); };
+  }, [armed]);
+
+  if (!armed) {
+    return (
+      <Button variant="ghost" size={size} className={className} title={title || label} disabled={disabled} onClick={() => setArmed(true)}>
+        <Trash2 size={12} />
+        <span className="sr-only">{label}</span>
+      </Button>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1">
+      <Button variant="danger" size={size} disabled={disabled} onClick={() => { setArmed(false); onConfirm(); }} autoFocus onBlur={() => setArmed(false)}>
+        {confirmLabel}
+      </Button>
+      <Button variant="ghost" size={size} onClick={() => setArmed(false)}>Cancel</Button>
+    </span>
+  );
+};

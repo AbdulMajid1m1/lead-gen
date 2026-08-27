@@ -1,0 +1,148 @@
+/// The client book — the companies we have actually worked for.
+///
+/// Deliberately a separate island from Company/Lead. A lead is a *hypothesis*
+/// assembled from crawled evidence and is owned by the discovery engine, which
+/// rewrites it on every run; a client is a fact typed in by a human and must
+/// survive any re-crawl untouched. Keeping the two apart is precisely what lets
+/// discovery stay free to overwrite everything it owns.
+///
+/// The book exists to answer one question repeatedly: "who have we not spoken
+/// to in a while, and what did we build for them?" — which is why the check-in
+/// fields and the project list are first-class here rather than notes.
+
+model Client {
+  id String @id @default(cuid())
+
+  /// The client organisation as we refer to it.
+  name String @db.VarChar(200)
+  /// Lowercased, accent-folded, legal-suffix-stripped (utils/normalize.js), so
+  /// "Acme Ltd." and "acme" cannot both be entered. Unique because a duplicate
+  /// client row silently splits one relationship's history in two.
+  normalizedName String @unique @db.VarChar(200)
+
+  status ClientStatus @default(ACTIVE)
+
+  /// Stored with its scheme so it can be linked directly. Only http(s) is ever
+  /// accepted — see the URL guard in the controller.
+  website     String? @db.VarChar(500)
+  industry    String? @db.VarChar(120)
+  city        String? @db.VarChar(120)
+  /// ISO 3166-1 alpha-2, matching Company.countryCode so both lists can share
+  /// the same country labels.
+  countryCode String? @db.VarChar(2)
+
+  /// Anything worth remembering that is not a project: how we met them, who
+  /// signs off, billing quirks.
+  notes String? @db.VarChar(4000)
+  /// Free labels for slicing the list — "retainer", "referral", "SLA".
+  tags  String[]
+
+  /// When the relationship began — not `createdAt`. A client entered into the
+  /// book today may have been a client for three years.
+  clientSince DateTime?
+
+  /// Derived from the touchpoint log, never typed directly, so "when did we
+  /// last speak" always traces back to something a human recorded.
+  lastContactedAt DateTime?
+  /// The point of the whole feature: when to check in about maintenance,
+  /// updates, or new work.
+  nextFollowUpAt DateTime?
+
+  /// Set when a lead was promoted into the book, so the outreach engine and the
+  /// client book agree about who is already a customer. Unique: one lead can
+  /// only ever become one client. SetNull because pruning a stale lead must
+  /// never take a real client's record with it.
+  leadId String? @unique
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contacts    ClientContact[]
+  projects    ClientProject[]
+  touchpoints ClientTouchpoint[]
+
+  @@index([status])
+  @@index([nextFollowUpAt])
+  @@index([lastContactedAt])
+  @@index([createdAt])
+}
+
+/// A person at the client.
+///
+/// A table rather than three columns on Client because "more numbers from their
+/// team" is a stated requirement: the person who signed the contract is rarely
+/// the person who answers a question about the deployed app.
+model ClientContact {
+  id       String @id @default(cuid())
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  /// Exactly one contact per client carries this. It is the row the list view
+  /// shows and the one a logged check-in is assumed to be with.
+  isPrimary Boolean @default(false)
+
+  name  String? @db.VarChar(120)
+  role  String? @db.VarChar(120)
+  email String? @db.VarChar(255)
+  phone String? @db.VarChar(40)
+  notes String? @db.VarChar(500)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId, isPrimary])
+  @@index([email])
+}
+
+/// Work delivered for a client.
+///
+/// Plural on purpose: "do they need an update to the existing project, or do
+/// they have a new one" is the exact conversation this feature exists to start,
+/// and both halves of it need somewhere to live.
+model ClientProject {
+  id       String @id @default(cuid())
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  name String @db.VarChar(200)
+  /// Live URL, repository, or app-store listing. http(s) only — anything else
+  /// would be rendered into an anchor href.
+  url         String? @db.VarChar(500)
+  /// What it is, what it runs on, what we know about it. Free text.
+  description String? @db.VarChar(4000)
+
+  status ClientProjectStatus @default(DELIVERED)
+
+  startedAt   DateTime?
+  deliveredAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId, createdAt])
+  @@index([status])
+}
+
+/// One logged conversation with a client.
+///
+/// Append-only from the UI's point of view: writing a touchpoint is what moves
+/// `Client.lastContactedAt`, so the "quiet for N months" list can never be
+/// gamed by editing a date field.
+model ClientTouchpoint {
+  id       String @id @default(cuid())
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  /// Reuses the outreach channel vocabulary so a check-in reads the same way
+  /// whether it happened in this app or on the phone.
+  channel OutreachChannel @default(EMAIL)
+  summary String          @db.VarChar(2000)
+
+  /// When the conversation happened — backdatable, because check-ins get logged
+  /// after the fact more often than during.
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@index([clientId, occurredAt])
+}

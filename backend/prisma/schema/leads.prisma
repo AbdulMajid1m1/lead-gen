@@ -34,6 +34,9 @@ model Lead {
   emailDrafts   LeadEmailDraft[]
   campaignRecipients CampaignRecipient[]
   threads       OutreachThread[]
+  /// Set once this lead has been promoted into the client book. Optional and
+  /// one-to-one — a lead is only ever a customer once.
+  client        Client?
 
   @@index([score(sort: Desc)])
   @@index([status])

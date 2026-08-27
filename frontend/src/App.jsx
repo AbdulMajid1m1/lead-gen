@@ -3,7 +3,7 @@ import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { Logo } from "./components/Logo.jsx";
-import { LayoutDashboard, Search, Users, Radar, Settings, Moon, Sun, Sparkles, LogOut, Inbox, SendHorizonal } from "lucide-react";
+import { LayoutDashboard, Search, Users, Radar, Settings, Moon, Sun, Sparkles, LogOut, Inbox, SendHorizonal, Handshake } from "lucide-react";
 import { api } from "./lib/api.js";
 import { cn } from "./lib/format.js";
 import OutreachPage from "./pages/OutreachPage.jsx";
@@ -15,6 +15,8 @@ import LeadDetailPage from "./pages/LeadDetailPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import DiscoveryPage from "./pages/DiscoveryPage.jsx";
 import InboxPage from "./pages/InboxPage.jsx";
+import ClientsPage from "./pages/ClientsPage.jsx";
+import ClientDetailPage from "./pages/ClientDetailPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import { useAuth } from "./lib/auth.jsx";
@@ -29,6 +31,8 @@ const NAV = [
   // lead-finding screens because it is where a lead goes after you contact it.
   { to: "/outreach", label: "Outreach", icon: SendHorizonal },
   { to: "/inbox", label: "Inbox", icon: Inbox, badge: true },
+  // The post-sale half of the pipeline: everyone the outreach above already won.
+  { to: "/clients", label: "Clients", icon: Handshake },
   { to: "/discovery", label: "Discovery runs", icon: Radar },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
@@ -150,10 +154,11 @@ export default function App() {
             to={to}
             end={end}
             className={({ isActive }) =>
-              cn("relative flex flex-1 flex-col items-center gap-1 py-2.5 text-[10px]",
+              cn("relative flex min-w-0 flex-1 flex-col items-center gap-1 px-0.5 py-2.5 text-[10px]",
                 isActive ? "text-[var(--accent)]" : "text-[var(--text-muted)]")}
           >
-            <Icon size={17} />{label.split(" ")[0]}
+            <Icon size={17} />
+            <span className="w-full truncate text-center">{label.split(" ")[0]}</span>
             {badge && attention > 0 && (
               <span
                 className="tnum absolute right-1/2 top-1.5 -mr-3 rounded-full bg-[var(--accent)] px-1 py-px text-[9px] font-semibold text-[var(--accent-fg)]"
@@ -176,6 +181,8 @@ export default function App() {
           <Route path="/leads/:id" element={<LeadDetailPage />} />
           <Route path="/outreach" element={<OutreachPage />} />
           <Route path="/inbox" element={<InboxPage />} />
+          <Route path="/clients" element={<ClientsPage />} />
+          <Route path="/clients/:id" element={<ClientDetailPage />} />
           <Route path="/discovery" element={<DiscoveryPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
