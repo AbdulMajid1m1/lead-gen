@@ -175,6 +175,61 @@ export const api = {
   listSuppression: () => request("/suppression"),
   addSuppression: (body) => request("/suppression", { method: "POST", body }),
   removeSuppression: (id) => request(`/suppression/${id}`, { method: "DELETE" }),
+
+  /**
+   * Download a full database backup.
+   *
+   * Does not go through request(): the success path is a gzip stream, not JSON,
+   * and the failure path still is. Returns { blob, filename } for the caller to
+   * save.
+   *
+   * A dump that dies partway is aborted by the server mid-transfer rather than
+   * ended cleanly, so it arrives here as a network error. That is deliberate —
+   * it is the difference between a failed download and a truncated backup you
+   * would not discover until you tried to restore it — so it is reported as
+   * such rather than being smoothed over.
+   */
+  downloadBackup: async (password) => {
+    let res;
+    try {
+      res = await fetch("/api/backup/database", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+    } catch {
+      throw new ApiError(
+        "The backup stopped partway and the file is incomplete. Do not keep it — try again.",
+        { status: 0 },
+      );
+    }
+
+    if (!res.ok) {
+      let message = `The backup failed (HTTP ${res.status}).`;
+      try {
+        const payload = await res.json();
+        if (payload?.message) message = payload.message;
+      } catch { /* non-JSON error body — keep the default */ }
+      if (res.status === 401) onUnauthorized?.();
+      throw new ApiError(message, { status: res.status });
+    }
+
+    let blob;
+    try {
+      blob = await res.blob();
+    } catch {
+      throw new ApiError(
+        "The backup stopped partway and the file is incomplete. Do not keep it — try again.",
+        { status: 0 },
+      );
+    }
+
+    const disposition = res.headers.get("content-disposition") || "";
+    const match = /filename="?([^"]+)"?/.exec(disposition);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 16);
+    return { blob, filename: match?.[1] || `leadsignal-backup-${stamp}.sql.gz` };
+  },
 };
 
 /**

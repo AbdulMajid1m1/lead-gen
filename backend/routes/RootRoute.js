@@ -12,7 +12,8 @@ import * as campaigns from "../controllers/subControllers/campaignController.js"
 import * as signatures from "../controllers/subControllers/signatureController.js";
 import * as clients from "../controllers/subControllers/clientController.js";
 import * as auth from "../controllers/subControllers/authController.js";
-import { requireAuth } from "../middlewares/requireAuth.js";
+import * as backup from "../controllers/subControllers/backupController.js";
+import { requireAuth, requireRole } from "../middlewares/requireAuth.js";
 import { loginLimiter } from "../middlewares/rateLimiter.js";
 
 const router = Router();
@@ -145,4 +146,12 @@ router.get("/stats/dashboard", stats.dashboard);
 router.get("/suppression", stats.listSuppression);
 router.post("/suppression", writeLimiter, validate({ body: stats.suppressionSchema }), stats.addSuppression);
 router.delete("/suppression/:id", writeLimiter, validate({ params: idParam }), stats.removeSuppression);
+
+// ─── Database backup ──────────────────────────────────────────────────────────
+// POST, not GET: the body carries the backup password, and a secret in a query
+// string is written to nginx's access log and kept in browser history. ADMIN
+// only — a VIEWER can read leads in the UI but must not be able to walk out
+// with the whole database in one file.
+router.post("/backup/database", requireRole("ADMIN"), writeLimiter,
+  validate({ body: backup.backupSchema }), backup.downloadDatabaseBackup);
 export default router;

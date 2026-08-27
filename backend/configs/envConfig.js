@@ -121,6 +121,13 @@ export const GOOGLE_PLACES_ENABLED = Boolean(GOOGLE_MAPS_API_KEY);
 export const GOOGLE_PLACES_MAX_CALLS_PER_RUN = int(process.env.GOOGLE_PLACES_MAX_CALLS_PER_RUN, 200);
 export const GOOGLE_PLACES_TIMEOUT_MS = int(process.env.GOOGLE_PLACES_TIMEOUT_MS, 10_000);
 
+// ─── Database backup ──────────────────────────────────────────────────────────
+// A second factor in front of the backup download, on top of the admin session.
+// That endpoint hands over every row in one file — including every contact the
+// crawler has collected — so the session alone is deliberately not enough.
+// No default: unset disables the endpoint rather than leaving it open.
+export const DB_BACKUP_PASSWORD = process.env.DB_BACKUP_PASSWORD || "";
+
 // ─── Boot-time guards ─────────────────────────────────────────────────────────
 // Fail loudly at import time rather than three requests later with a confusing
 // Prisma error or an anonymous crawler hammering a stranger's site.

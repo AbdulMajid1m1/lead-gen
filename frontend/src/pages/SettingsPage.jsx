@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ShieldOff, Trash2, Plus, Info, Signal } from "lucide-react";
+import { ShieldOff, Trash2, Plus, Info, Signal, Database, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageBody, PageHeader } from "../App.jsx";
 import { api } from "../lib/api.js";
-import { Badge, Button, EmptyState, Skeleton, Surface, SectionHeading } from "../components/ui.jsx";
+import { Badge, Button, EmptyState, Input, Skeleton, Surface, SectionHeading } from "../components/ui.jsx";
 import EmailAccountsSection from "../components/EmailAccounts.jsx";
 import WhatsAppSection from "../components/WhatsAppSection.jsx";
 import SignaturesSection from "../components/Signatures.jsx";
@@ -179,7 +179,90 @@ export default function SettingsPage() {
             boards and companies' own websites.
           </p>
         </Surface>
+
+        <DatabaseBackupSection />
       </PageBody>
     </div>
+  );
+}
+
+/**
+ * Full database backup, gated behind a second password.
+ *
+ * The download is a gzip stream rather than JSON, so it goes through
+ * api.downloadBackup rather than the usual request() path. A dump that fails
+ * partway arrives as a network error by design — the server aborts the transfer
+ * instead of ending it cleanly — and that case is reported plainly, because a
+ * truncated backup that looks fine is worse than an obvious failure.
+ */
+function DatabaseBackupSection() {
+  const [password, setPassword] = useState("");
+  const [downloading, setDownloading] = useState(false);
+
+  const run = async () => {
+    if (!password || downloading) return;
+    setDownloading(true);
+    const toastId = toast.loading("Dumping the database… this can take a minute.");
+    try {
+      const { blob, filename } = await api.downloadBackup(password);
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Release the object URL once the browser has taken the download.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+      setPassword("");
+      toast.success(`Saved ${filename}.`, { id: toastId });
+    } catch (err) {
+      toast.error(err.message, { id: toastId, duration: 8000 });
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <Surface className="p-5">
+      <SectionHeading icon={Database} title="Database backup" />
+      <p className="text-[13px] leading-relaxed text-[var(--text-muted)]">
+        Downloads every table as a gzipped SQL dump — leads, companies, contacts, signals and
+        outreach history. Restore it onto any Postgres 16 host with:
+      </p>
+      <code className="mt-2 block overflow-x-auto rounded bg-[var(--surface-sunken)] px-2.5 py-1.5 text-[11px] whitespace-nowrap">
+        gunzip &lt; leadsignal-backup-….sql.gz | psql "$DATABASE_URL"
+      </code>
+
+      <div className="mt-4 flex flex-wrap items-end gap-3">
+        <div className="min-w-0 flex-1 sm:max-w-xs">
+          <label htmlFor="backup-password" className="mb-1 block text-[11px] uppercase tracking-wide text-[var(--text-subtle)]">
+            Backup password
+          </label>
+          <Input
+            id="backup-password"
+            type="password"
+            autoComplete="off"
+            placeholder="Required to download"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") run(); }}
+            disabled={downloading}
+          />
+        </div>
+        <Button onClick={run} disabled={downloading || !password}>
+          {downloading
+            ? <><Loader2 size={14} className="mr-1.5 animate-spin" />Dumping…</>
+            : <><Database size={14} className="mr-1.5" />Download backup</>}
+        </Button>
+      </div>
+
+      <p className="mt-3 text-[11px] leading-relaxed text-[var(--text-muted)]">
+        Streamed live, so keep the tab open until it finishes. If the dump fails partway the download
+        is aborted rather than completed — an incomplete file is never handed to you looking valid.
+      </p>
+    </Surface>
   );
 }
