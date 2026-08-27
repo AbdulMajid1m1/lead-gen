@@ -19,7 +19,7 @@ import { SIGNAL_CATALOG } from "../signals/signalCatalog.js";
  * PROMPT_VERSION is stored on every AI-derived row, so a lead found last month
  * can still be explained by the prompt that actually produced it.
  */
-export const PROMPT_VERSION = "1.0.0";
+export const PROMPT_VERSION = "1.1.0";
 
 const INDUSTRY_KEYS = Object.keys(OSM_CATEGORIES);
 const SIGNAL_KEYS = Object.keys(SIGNAL_CATALOG);
@@ -287,8 +287,12 @@ Write every email with this structure:
    It must answer the hook you opened with: a booking hook gets a booking
    outcome, never a "get found in search" one.
 5. CTA — exactly ONE tiny interest-based question that a one-word reply
-   answers, e.g. "Want me to send 2-3 specific ideas? A one-word reply is
-   enough." One ask only, at the end — scattering two asks cuts responses.
+   answers, and it must be built from the hook you opened with rather than
+   bolted on: "Want the two I would fix first?", "Shall I send what is slowing
+   it down?", "Want me to sketch what a first page could cover?". Never reuse a
+   phrasing another company could receive word for word — a recipient who has
+   seen two of our emails must not be able to tell they came from a template.
+   One ask only, at the end — scattering two asks cuts responses.
    Never "book a call", never a meeting request, never a calendar link. Asking
    for time in a first cold email cuts reply rates roughly in half; the meeting
    is earned in the reply, not requested in the opener.

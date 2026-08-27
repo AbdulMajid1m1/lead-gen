@@ -89,7 +89,14 @@ export const gatherFacts = async (leadId) => {
     : email ? "published business address — do not assume a name"
     : "no email known — write for a contact form or phone follow-up";
 
-  return { lead, company: c, facts, recipientHint };
+  // The structured form of the same decision. `recipientHint` is prose for the
+  // model; the template needs a name it can actually greet, and only when the
+  // business published that person itself and the address reaches them.
+  const recipient = addressable
+    ? { fullName: person.fullName, firstName: String(person.fullName).trim().split(/\s+/)[0], title: person.title || null }
+    : null;
+
+  return { lead, company: c, facts, recipientHint, recipient };
 };
 
 /** Contact-like strings the model must not invent into a body. */
@@ -149,14 +156,14 @@ export const composeEmailForLead = async ({ leadId, runId = null, tracker = null
 
   return saveDraft({
     leadId, runId,
-    draft: templateDraft({ company, lead, facts, serviceLabel, serviceKey: serviceOverride || lead.primaryOpportunity }),
+    draft: templateDraft({ company, lead, facts, serviceLabel, serviceKey: serviceOverride || lead.primaryOpportunity, recipient }),
     facts, generatedBy: "RULE", model: null,
   });
 };
 
 /** Deterministic fallback — always available, never invents anything. */
-const templateDraft = ({ company, lead, facts, serviceLabel, serviceKey }) =>
-  initialTemplate({ company, facts, serviceKey: serviceKey || lead.primaryOpportunity, serviceLabel });
+const templateDraft = ({ company, lead, facts, serviceLabel, serviceKey, recipient = null }) =>
+  initialTemplate({ company, facts, serviceKey: serviceKey || lead.primaryOpportunity, serviceLabel, recipient });
 
 const saveDraft = async ({ leadId, runId, draft, facts, generatedBy, model }) =>
   prisma.leadEmailDraft.create({
@@ -251,7 +258,7 @@ export const composeForRun = async ({ runId, leadIds, tracker, serviceOverride =
       const draft = templateDraft({
         company: g.company, lead: g.lead, facts: g.facts,
         serviceLabel: SERVICE_LABELS[serviceKey] || "software development",
-        serviceKey,
+        serviceKey, recipient: g.recipient,
       });
       await saveDraft({ leadId: g.leadId, runId, draft, facts: g.facts, generatedBy: "RULE", model: null });
       written += 1;

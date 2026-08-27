@@ -311,8 +311,97 @@ const PORTFOLIO = {
 
 const portfolioFor = (serviceKey) => PORTFOLIO[serviceKey] || PORTFOLIO.CUSTOM_SOFTWARE;
 
+/**
+ * The ask, varied by what was actually observed.
+ *
+ * One constant closing line across every email was the single most obvious tell
+ * that these are generated: a recipient who saw two of them saw the template.
+ * Each ask is still one question a one-word reply answers — that constraint is
+ * what makes the sequence work — but it is phrased for the hook it follows, so
+ * the last line reads as part of the same thought as the first.
+ *
+ * Keyed by observation kind, with an index chosen from the company name so the
+ * same company always gets the same wording. Deliberately deterministic: a
+ * regenerated draft that changes its closing line every time makes a sent
+ * thread impossible to reconcile against what is on screen.
+ */
+/**
+ * The readability ceilings, named rather than implicit.
+ *
+ * 70 words for the whole English body and 25 for any one paragraph: both are
+ * enforced by tests, and both exist because these are read on a phone between
+ * customers. They bound how much extra specificity an email can carry.
+ */
+const BODY_WORD_LIMIT = 70;
+const PARAGRAPH_WORD_LIMIT = 25;
+
+const CTA_BY_KIND = {
+  NO_WEBSITE: ["Want me to sketch what a first page could cover? One word back is enough.", "Shall I send two examples of what this looks like for a business your size?"],
+  SLOW_SITE: ["Want the two things slowing it down most? One word back is enough.", "Shall I send what the biggest delay is? A one-word reply is plenty."],
+  NO_BOOKING: ["Want me to send how this works for a business like yours? One word is enough.", "Shall I send two ways this usually gets handled?"],
+  NO_MOBILE: ["Want me to send what it looks like on a phone right now? One word back is enough.", "Shall I send the two fixes that matter most here?"],
+  NO_SCHEMA: ["Want me to send what's missing from your listing? One word back is enough.", "Shall I send the short version of what Google is not seeing?"],
+  BUILDER: ["Want me to send where that platform starts to cost you? One word is enough.", "Shall I send two things that get easier off it?"],
+  TECH_DEBT: ["Want me to send the two I would fix first? One word back is enough.", "Shall I send a short list, specific to your site?"],
+  HIRING: ["Want me to send how we usually cover a gap like this? One word is enough.", "Shall I send what the first month normally looks like?"],
+  EXPANSION: ["Want me to send what usually needs doing at this stage? One word is enough.", "Shall I send two things worth setting up early?"],
+  HAS_SITE_DEFAULT: ["Want me to send the two I would fix first? One word back is enough.", "Shall I send a short list, specific to your site?"],
+  DEFAULT: ["Want me to send 2-3 specific ideas? One word back is enough.", "Shall I send a couple of specific ideas? A one-word reply is enough."],
+};
+
+const CTA_AR = [
+  "هل أرسل لك ٢-٣ أفكار محددة؟ تكفي كلمة واحدة.",
+  "هل أرسل لك ملاحظتين محددتين عن هذا؟ يكفي رد بكلمة واحدة.",
+];
+
+/**
+ * The sentence that carries the observation into why it matters.
+ *
+ * "That matters: " opened this clause on 100% of emails and was a more visible
+ * tell than the closing line, because it sits in the middle of the message
+ * where the eye lands first.
+ */
+const PIVOTS = [
+  (pain) => `That matters: ${pain}.`,
+  (pain) => `Which means ${pain}.`,
+  (pain) => `In practice ${pain}.`,
+  (pain) => `The cost of that is simple — ${pain}.`,
+];
+
+/**
+ * A stable index for this company, so the same lead always produces the same
+ * wording. A hash rather than a counter: drafts are generated in batches, in
+ * parallel, and across processes.
+ */
+const variantIndex = (seed, count) => {
+  let hash = 0;
+  for (let i = 0; i < String(seed || "").length; i += 1) {
+    hash = (hash * 31 + String(seed).charCodeAt(i)) >>> 0;
+  }
+  return hash % count;
+};
+
+/**
+ * A second observation, when there is one worth adding.
+ *
+ * The template used exactly one fact per email while `gatherFacts` routinely
+ * supplies five to eight. One concrete detail reads as a mail merge; two read
+ * as someone having actually looked. Skips anything already used, the identity
+ * and address lines, and the audit-score line — which reads as a robot even
+ * when it is true.
+ */
+const pickSupporting = (facts, usedId) => {
+  const candidate = facts.find((f) =>
+    f.id !== usedId
+    && !/^Its address is|^Its website is/.test(f.text)
+    && !OPENER_BLOCKLIST.test(f.text)
+    && !/ is a | is an /.test(f.text.slice(0, 60)),
+  );
+  return candidate || null;
+};
+
 /** The initial pitch: hook → pain → value → tiny CTA, under ~80 words. */
-export const initialTemplate = ({ company, facts, serviceKey, serviceLabel }) => {
+export const initialTemplate = ({ company, facts, serviceKey, serviceLabel, recipient = null }) => {
   const copy = PITCH_COPY[serviceKey] || PITCH_COPY.CUSTOM_SOFTWARE;
   const observation = pickObservation(facts);
   const hasWebsite = facts.some((f) => /^Its website is /.test(f.text));
@@ -329,14 +418,58 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel }) =>
   // "get found in search" promise reads as two templates stitched together.
   const pain = hook.pain || copy.pain;
   const value = hook.value || copy.value;
-  const english = [
-    "Hello,",
+  // A first name when the business published one on its own site. `gatherFacts`
+  // has always resolved this and the template simply never received it, so
+  // every rule-generated email opened "Hello," at a company whose owner is
+  // named on its own About page.
+  const firstName = recipient?.firstName?.trim();
+  const greeting = firstName ? `Hi ${firstName},` : "Hello,";
+
+  const seed = `${company.name || ""}${observation.id || ""}`;
+  const ctaPool = CTA_BY_KIND[kind] || CTA_BY_KIND.DEFAULT;
+  const cta = ctaPool[variantIndex(seed, ctaPool.length)];
+  const pivot = PIVOTS[variantIndex(`${seed}p`, PIVOTS.length)];
+
+  // A second observed detail, but only when the email can afford it. Two
+  // concrete details read as someone having looked; one reads as a mail merge.
+  // The 70-word ceiling wins over the extra detail every time though — a long
+  // email on a phone is not read at all, so specificity gained by breaking the
+  // ceiling would be specificity nobody sees.
+  const candidate = pickSupporting(facts, observation.id);
+  const compose = (extra, askLine, pivotFn) => [
+    greeting,
     `I noticed ${quote(observation.text)}`,
-    `That matters: ${pain}.`,
+    extra ? `Also ${lowerFirst(extra.text)}` : null,
+    pivotFn(pain),
     `${value}.`,
-    "Want me to send 2-3 specific ideas? One word back is enough.",
+    askLine,
     "Best regards",
-  ].join("\n\n");
+  ].filter(Boolean).join("\n\n");
+
+  const wordCount = (body) => body.trim().split(/\s+/).length;
+  // Every paragraph is one line on a phone; a long "Also …" breaks that shape
+  // regardless of what the total comes to.
+  const extraFitsAlone = candidate
+    && `Also ${lowerFirst(candidate.text)}`.split(/\s+/).length <= PARAGRAPH_WORD_LIMIT;
+
+  // Give things up in order of what the reader loses least by losing: the
+  // second observation first, then the varied ask, then the varied pivot. The
+  // word ceiling is not negotiable — a long email on a phone is not read at
+  // all, so specificity bought by breaking it is specificity nobody sees.
+  const shortestCta = [...ctaPool].sort((a, b) => a.split(/\s+/).length - b.split(/\s+/).length)[0];
+  const shortestPivot = PIVOTS[0];
+  const attempts = [
+    { extra: extraFitsAlone ? candidate : null, ask: cta, piv: pivot },
+    { extra: null, ask: cta, piv: pivot },
+    { extra: null, ask: shortestCta, piv: pivot },
+    { extra: null, ask: shortestCta, piv: shortestPivot },
+  ];
+  const chosen =
+    attempts.find((a) => wordCount(compose(a.extra, a.ask, a.piv)) <= BODY_WORD_LIMIT)
+    || attempts[attempts.length - 1];
+
+  const supporting = chosen.extra;
+  const english = compose(chosen.extra, chosen.ask, chosen.piv);
 
   // An Arabic-named business — or any business in a Gulf market, whatever the
   // script of its name — gets the message in Arabic first, English below.
@@ -349,7 +482,7 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel }) =>
         (hook.openerAr || HOOK_COPY.DEFAULT.openerAr)(company.name),
         `${hook.painAr || copy.painAr}.`,
         `${hook.valueAr || copy.valueAr}.`,
-        "هل أرسل لك ٢-٣ أفكار محددة؟ تكفي كلمة واحدة.",
+        CTA_AR[variantIndex(`${company.name || ""}ar`, CTA_AR.length)],
         "مع التحية",
       ].join("\n\n")
     : null;
@@ -362,7 +495,7 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel }) =>
     aboutCompany: aboutFromFacts({ company, facts }),
     subject: subject.slice(0, 200),
     body: arabic ? `${arabic}\n\n———\n\n${english}` : english,
-    factIdsUsed: [observation.id].filter(Boolean),
+    factIdsUsed: [observation.id, supporting?.id].filter(Boolean),
   };
 };
 

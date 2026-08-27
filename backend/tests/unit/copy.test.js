@@ -167,7 +167,71 @@ describe("first email carries no link and asks for no meeting", () => {
   });
 
   it("asks for a one-word reply instead", () => {
-    expect(draft.body).toMatch(/One word back|تكفي كلمة واحدة/);
+    // The *property* — a single question a one-word reply answers — not a
+    // literal string. Pinning the exact sentence here is what allowed one
+    // identical closing line to survive on every email the product sent.
+    const [ask] = draft.body.split("\n\n").slice(-2, -1);
+    expect(ask).toMatch(/\?/);
+    expect(ask.match(/\?/g)).toHaveLength(1);
+    expect(ask.split(/\s+/).length).toBeLessThanOrEqual(16);
+  });
+
+  it("does not close every email with the same sentence", () => {
+    // The complaint that prompted this: two different companies, two different
+    // observations, one identical last line.
+    const other = initialTemplate({
+      company: { name: "Nordlicht Cafe", countryCode: "DE" },
+      facts: [
+        { id: "n1", text: "Nordlicht Cafe is a cafe in Hamburg.", confidenceLevel: "DETECTED" },
+        { id: "n2", text: "Nordlicht Cafe is listed as an operating business with contact details but has no website at all.", confidenceLevel: "DETECTED" },
+      ],
+      serviceKey: "WEBSITE_DEV",
+      serviceLabel: "website development",
+    });
+    const lastLine = (body) => body.trim().split("\n\n").slice(-2, -1)[0];
+    expect(lastLine(other.body)).not.toBe(lastLine(draft.body));
+  });
+
+  it("greets a named person when the business published one, and no one otherwise", () => {
+    const named = initialTemplate({
+      company: { name: "Muster Bau GmbH", countryCode: "DE" },
+      facts: [{ id: "m1", text: "The home page took 4.2s to respond.", confidenceLevel: "DETECTED" }],
+      serviceKey: "WEBSITE_DEV",
+      serviceLabel: "website development",
+      recipient: { fullName: "Sara Klein", firstName: "Sara" },
+    });
+    expect(named.body).toMatch(/^Hi Sara,/);
+    // Never a surname, and never a guessed name where none was published.
+    expect(named.body).not.toMatch(/Klein/);
+    expect(draft.body).toMatch(/^(?:Hello,|مرحباً)/);
+  });
+
+  it("uses a second observed fact when one is available", () => {
+    const twoFacts = initialTemplate({
+      company: { name: "Muster Bau GmbH", countryCode: "DE" },
+      facts: [
+        { id: "m1", text: "The home page took 4.2s to respond.", confidenceLevel: "DETECTED" },
+        { id: "m2", text: "It is currently hiring: Bauleiter.", confidenceLevel: "DETECTED" },
+      ],
+      serviceKey: "WEBSITE_DEV",
+      serviceLabel: "website development",
+    });
+    // Both facts are cited, so the grounding check can still trace every claim.
+    // Order follows which sentence each became, not the order they arrived in.
+    expect([...twoFacts.factIdsUsed].sort()).toEqual(["m1", "m2"]);
+    expect(twoFacts.body).toMatch(/Bauleiter/);
+  });
+
+  it("produces the same wording for the same lead every time", () => {
+    // Drafts get regenerated. A closing line that changes on every run makes a
+    // sent thread impossible to reconcile against what is on screen.
+    const build = () => initialTemplate({
+      company: { name: "Muster Bau GmbH", countryCode: "DE" },
+      facts: [{ id: "m1", text: "The home page took 4.2s to respond.", confidenceLevel: "DETECTED" }],
+      serviceKey: "WEBSITE_DEV",
+      serviceLabel: "website development",
+    });
+    expect(build().body).toBe(build().body);
   });
 
   it("does not list our other services", () => {
