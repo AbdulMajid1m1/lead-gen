@@ -40,7 +40,29 @@ const SENIORITY_RANK = { OWNER: 5, EXECUTIVE: 4, MARKETING: 3, OPERATIONS: 2, OT
  * Words that appear in title case on team pages but are never a person's name.
  * Without this every "Our Team", "Read More" and "Book Now" becomes a contact.
  */
-const NOT_A_NAME = /^(?:our|the|meet|about|contact|read|view|learn|book|call|email|team|staff|home|more|all|new|see|get|join|why|how|what|who|welcome|copyright|privacy|terms|menu|search|login|sign|next|prev|previous|back|close|open|show|hide|click|here|now|free|best|top|full|part|time|page|site|web|blog|news|help|faq|support|services?|products?|company|business|clients?|customers?|partners?|careers?|jobs?|apply|submit|send|share|follow|subscribe|newsletter)\b/i;
+const NOT_A_NAME = /^(?:our|the|meet|about|contact|read|view|learn|book|call|email|team|staff|home|more|all|new|see|get|join|why|how|what|who|welcome|copyright|privacy|terms|menu|search|login|sign|next|prev|previous|back|close|open|show|hide|click|here|now|free|best|top|full|part|time|page|site|web|blog|news|help|faq|support|services?|products?|company|business|clients?|customers?|partners?|careers?|jobs?|apply|submit|send|share|follow|subscribe|newsletter|stay|beyond|choose|take|discover|explore|find|start|begin|enjoy|experience|inside|within|towards|through|introducing|announcing|celebrating|building|creating|leading|performing|visual)\b/i;
+
+/**
+ * Words that never appear in a person's name, wherever they sit in the string.
+ *
+ * NOT_A_NAME above is anchored to the first word, which is right for it — "Best"
+ * and "Page" and "Read" are real surnames, so matching those anywhere would
+ * throw away real contacts. These are different: nobody is called Admissions or
+ * Scholarship, so they can be matched anywhere, and they have to be. Without
+ * this, any two capitalised words on a page became a person — a school's site
+ * yielded "Performing Arts", "REGISTRATION FEES" and "Affordable Fee" as
+ * contacts, and the composer duly opened an email with "Hi Affordable,".
+ */
+const NEVER_IN_A_NAME =
+  /\b(?:school|college|academy|university|campus|institute|programme|program|admission|admissions|enrol|enrolment|enrollment|registration|register|tuition|curriculum|grade|grades|student|students|pupil|pupils|parent|parents|alumni|faculty|department|syllabus|arts|sciences|library|laboratory|classroom|rooms|scholarship|multimedia|fee|fees|pricing|price|prices|payment|payments|discount|package|packages|course|courses|lesson|lessons|licence|license|enquiry|enquiries|inquiry|inquiries|links|tours|resource|resources|innovation|technology|admissions|vacancy|vacancies|testimonial|testimonials|gallery|brochure|prospectus|curriculum|timetable|calendar|policy|policies|email|phone|address|location|hours|opening)\b/i;
+
+/**
+ * The filler a role label is padded with — "General Enquiries", "Primary
+ * Secretary", "Deputy Head". Only ever consulted alongside TITLE_VOCABULARY, to
+ * decide whether a candidate is made *entirely* of job words.
+ */
+const GENERIC_NAME_WORD =
+  /^(?:general|primary|secondary|higher|high|middle|main|central|front|back|office|admin|administration|and|of|the|for|to|at|in|on|team|staff|group|dept|division|unit|desk|line|point|centre|center)$/i;
 
 /** A plausible personal name: 2–4 capitalised words, no digits or symbols. */
 const looksLikePersonName = (raw) => {
@@ -49,13 +71,29 @@ const looksLikePersonName = (raw) => {
   if (name.length < 4 || name.length > 60) return false;
   if (/[0-9@#$%^&*_=+<>{}[\]|\\/]/.test(name)) return false;
   if (NOT_A_NAME.test(name)) return false;
+  if (NEVER_IN_A_NAME.test(name)) return false;
+
+  // "Middle YearsProgramme", "HassanL.C.E.HHomoeopath" — a lowercase letter
+  // followed immediately by a capital is usually two strings that lost the
+  // space between them when the markup was flattened. Usually, not always:
+  // AlBusaidi, ElSayed, McDonald and MacArthur are written exactly that way, so
+  // the transition is only suspicious when it does not follow a name prefix.
+  const FUSED_PREFIX = /^(?:Mc|Mac|Al|El|Ad|De|Del|Di|Du|La|Le|Van|Von|Da|Dos|St|O)[\p{Lu}]/u;
+  if (name.split(" ").some((w) => /[a-z][A-Z]/.test(w) && !FUSED_PREFIX.test(w))) return false;
 
   const words = name.split(" ");
   if (words.length < 2 || words.length > 4) return false;
 
+  // A string made only of job words is a role label, not a person: "School
+  // Principal", "Human Resource", "General Enquiries". A real name always
+  // carries at least one word that is not part of the job.
+  if (TITLE_VOCABULARY.test(name) && words.every((w) => TITLE_VOCABULARY.test(w) || GENERIC_NAME_WORD.test(w))) return false;
+
   // Every word must read as a name part: initial capital (or a particle such as
   // "van", "bin", "al", "de" that legitimately stays lowercase).
-  const PARTICLE = /^(?:van|von|de|del|della|da|di|du|le|la|bin|ibn|al|el|abu|abd|mac|mc|o')$/i;
+  // "der", "den" and "ter" were missing, so "Maria van der Berg" was discarded
+  // as not a name at all.
+  const PARTICLE = /^(?:van|von|de|der|den|del|della|da|das|dos|di|du|le|la|ter|ten|bin|bint|ibn|al|el|abu|abd|mac|mc|o'|san|st)$/i;
   return words.every((w) => PARTICLE.test(w) || /^[\p{Lu}][\p{L}'’.-]*$/u.test(w));
 };
 
@@ -72,6 +110,12 @@ const cleanTitle = (raw) => {
   if (!raw) return null;
   const t = raw.replace(/\s+/g, " ").replace(/^[\s|,·•\-–—]+|[\s|,·•\-–—]+$/g, "").trim();
   if (!t || t.length < 2 || t.length > 120) return null;
+  // A job title is a label, not a sentence. "Our innovation hub is where
+  // creativity meets…" is body copy that happened to sit under a heading, and
+  // accepting it lets the heading itself pass as a person, because a title is
+  // one of the things that corroborates a name.
+  if (t.split(" ").length > 10) return null;
+  if (/\b(?:is|are|was|were|we|our|you|your|they|their|this|that|which|where|when)\b/i.test(t) && !TITLE_VOCABULARY.test(t)) return null;
   // Reject a second personal name appearing where a title should be — but only
   // when it carries no job vocabulary, so "Reception Manager" survives while a
   // stray "Sarah Mitchell" does not.

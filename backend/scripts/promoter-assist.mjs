@@ -591,7 +591,10 @@ const exportCompose = async () => {
 
   const out = [];
   for (const { id } of leads) {
-    const g = await gatherFacts(id);
+    // Always product-scoped here, so the website diagnostics the agency pitch
+    // uses are left out — they say nothing about whether a company needs this
+    // product, and an author handed them will reach for them.
+    const g = await gatherFacts(id, { forProduct: true });
     if (!g) continue;
     out.push({
       leadId: id,
@@ -644,7 +647,9 @@ const importDrafts = async () => {
   let imported = 0;
   const rejected = [];
   for (const d of drafts) {
-    const gathered = await gatherFacts(d.leadId);
+    // The same narrowed list export-compose handed out, or a draft would be
+    // rejected for grounding on a fact its author was never shown.
+    const gathered = await gatherFacts(d.leadId, { forProduct: true });
     if (!gathered) { rejected.push({ leadId: d.leadId, reason: "no such lead" }); continue; }
     if (!d.subject?.trim() || !d.body?.trim()) { rejected.push({ leadId: d.leadId, reason: "empty subject or body" }); continue; }
 

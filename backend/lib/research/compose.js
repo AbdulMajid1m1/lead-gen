@@ -10,6 +10,7 @@ import { initialTemplate, productInitialTemplate } from "./templates.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
 import { AI_FAST_MODEL, AI_COMPOSE_MAX_LEADS, PROMOTER_MAX_LEADS_PER_RUN } from "../../configs/envConfig.js";
 import { relativeAge } from "../scoring/decay.js";
+import { emailMatchesName } from "../extract/people.js";
 import { log } from "../../utils/logger.js";
 
 /** Leads per AI call. The system prompt is paid once per chunk, not per lead. */
@@ -26,8 +27,80 @@ const logger = log("research:compose");
  * was never true, which the user pastes into a real conversation.
  */
 
-/** Assemble the facts a lead is allowed to be described by. */
-export const gatherFacts = async (leadId) => {
+/**
+ * Signals that only mean something when the thing being sold is the website.
+ *
+ * These are the agency's diagnostics: the site is slow, it is on WooCommerce,
+ * it takes no bookings. Sound reasons to pitch web work, and actively harmful
+ * when the offering is a product that has nothing to do with the site. Left in,
+ * they produced a real email telling a Dubai school that "the store runs on
+ * WooCommerce and commonly needs checkout work" and then offering it payroll
+ * software — two unrelated thoughts in one paragraph, from a sender who plainly
+ * had not looked at the business.
+ *
+ * Everything not listed here describes the company's own situation — it is
+ * hiring, it is expanding, it published a named manager — and travels with any
+ * offering, so a promote run keeps those.
+ */
+const WEBSITE_PITCH_SIGNALS = new Set([
+  "NO_WEBSITE", "OUTDATED_WEBSITE", "NO_HTTPS", "NO_MOBILE_VIEWPORT", "SLOW_SITE",
+  "OLD_COPYRIGHT", "LEGACY_JS_LIB", "WORDPRESS_DETECTED", "WOOCOMMERCE_DETECTED",
+  "SHOPIFY_DETECTED", "WIX_SQUARESPACE", "MAGENTO_LEGACY", "NO_ONLINE_ORDERING",
+  "NO_BOOKING_SYSTEM", "NO_SCHEMA_ORG", "NO_ANALYTICS",
+]);
+
+/**
+ * An address worth stating.
+ *
+ * OSM supplies a house number and a street separately, and a record carrying
+ * only one of them yields "Its address is 51d شارع" — a fragment that reads as
+ * carelessness in an email and tells the reader nothing.
+ */
+/**
+ * The name to greet someone by.
+ *
+ * Taking the first token gives "Mr." for "Mr. Tariq Atwan" — schools and
+ * clinics publish their staff with honorifics almost without exception, so the
+ * greeting read "Hi Mr.,". Strip the honorific, and fall back to the whole
+ * string if that is all there was.
+ */
+const HONORIFIC = /^(?:mr|mrs|ms|miss|mx|dr|prof|professor|eng|engr|sheikh|shaikh|sir|madam|rev|fr|sr|capt|adv)\.?$/i;
+
+export const firstNameOf = (fullName) => {
+  const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean);
+  const named = parts.filter((p) => !HONORIFIC.test(p));
+  return (named[0] || parts[0] || "").replace(/[.,]+$/, "");
+};
+
+/**
+ * The industry as a person would say it.
+ *
+ * The catalogue labels categories for a filter menu — "School / academy",
+ * "Hair & beauty salon", "IT / software company" — and dropping one into a
+ * sentence produces "is a School / academy in Dubai", which reads as a database
+ * row rather than something anyone wrote.
+ */
+const humanIndustry = (label) => {
+  const first = String(label || "").split("/")[0].trim();
+  if (!first) return "business";
+  // Only lower-case a label that is not a proper noun already: "IT" stays "IT".
+  return /^[\p{Lu}][\p{Ll}]/u.test(first) ? first.charAt(0).toLowerCase() + first.slice(1) : first;
+};
+
+const addressIsUsable = (line) => {
+  const text = String(line || "").trim();
+  if (text.length < 10) return false;
+  return text.replace(/[\d\s.,-]+/g, " ").trim().split(/\s+/).filter((w) => w.length > 2).length >= 2;
+};
+
+/**
+ * Assemble the facts a lead is allowed to be described by.
+ *
+ * `forProduct` narrows them to what is true of the company rather than of its
+ * website, for a run that is promoting a product instead of selling the
+ * agency's own services.
+ */
+export const gatherFacts = async (leadId, { forProduct = false } = {}) => {
   const lead = await prisma.lead.findUnique({
     where: { id: leadId },
     include: {
@@ -43,7 +116,9 @@ export const gatherFacts = async (leadId) => {
           people: { orderBy: [{ seniority: "asc" }, { email: "desc" }], take: 1 },
         },
       },
-      reasons: { orderBy: { rank: "asc" } },
+      // The signal type is what tells a company-state reason apart from a
+      // website-diagnostic one; the reason text alone cannot be classified.
+      reasons: { orderBy: { rank: "asc" }, include: { signal: { select: { type: true } } } },
     },
   });
   if (!lead) return null;
@@ -53,20 +128,25 @@ export const gatherFacts = async (leadId) => {
   const add = (text, confidenceLevel, observedAt) =>
     facts.push({ id: facts.length + 1, text, confidenceLevel, observedAt: observedAt ? relativeAge(observedAt) : null });
 
-  add(`${c.name} is a ${c.industry || "business"}${c.city ? ` in ${c.city}` : ""}.`, "VERIFIED", c.firstSeenAt);
+  add(`${c.name} is a ${humanIndustry(c.industry)}${c.city ? ` in ${c.city}` : ""}.`, "VERIFIED", c.firstSeenAt);
   if (c.domains[0]) add(`Its website is ${c.domains[0].domain}.`, "VERIFIED", c.lastCrawledAt);
-  if (c.locations[0]?.addressLine) add(`Its address is ${c.locations[0].addressLine}.`, "VERIFIED", null);
+  if (addressIsUsable(c.locations[0]?.addressLine)) add(`Its address is ${c.locations[0].addressLine}.`, "VERIFIED", null);
 
-  for (const reason of lead.reasons) add(reason.text, reason.confidenceLevel, lead.scoredAt);
+  for (const reason of lead.reasons) {
+    if (forProduct && WEBSITE_PITCH_SIGNALS.has(reason.signal?.type)) continue;
+    add(reason.text, reason.confidenceLevel, lead.scoredAt);
+  }
 
-  const audit = c.audits[0];
+  // The audit and the CMS describe the website, so they go the same way as the
+  // website signals above when the offering is not the website.
+  const audit = forProduct ? null : c.audits[0];
   if (audit) {
     add(`Its website scores ${audit.overallScore}/100 on a technical audit.`, "DETECTED", audit.auditedAt);
     for (const f of (audit.findings || []).filter((x) => ["CRITICAL", "HIGH"].includes(x.severity)).slice(0, 3)) {
       add(f.detail, "DETECTED", audit.auditedAt);
     }
   }
-  const cms = c.tech.find((t) => t.category === "CMS" || t.category === "SITE_BUILDER");
+  const cms = forProduct ? null : c.tech.find((t) => t.category === "CMS" || t.category === "SITE_BUILDER");
   if (cms) add(`Its site is built on ${cms.techName}${cms.version ? ` ${cms.version}` : ""}.`, cms.confidence, cms.detectedAt);
   for (const job of c.jobPostings) add(`It is currently hiring: ${job.title}.`, "VERIFIED", job.lastSeenActiveAt);
 
@@ -78,7 +158,19 @@ export const gatherFacts = async (leadId) => {
   // theirs — addressing "Ahmed" on a shared info@ inbox that three people read
   // is worse than no name at all.
   const person = c.people?.[0] || null;
-  const addressable = person && email && (
+  // A name only earns a greeting if something corroborates that it is a person:
+  // a job title, a seniority the classifier actually recognised, or an address
+  // built from the name. The extractor is a heuristic over other people's
+  // markup, and when it was looser a school's fee table produced a "person"
+  // called Affordable Fee — which the composer then greeted by name. A second
+  // check here costs a first name on some real leads and is worth it, because
+  // the failure it prevents goes out in writing to a stranger.
+  const corroborated = person && (
+    Boolean(person.title)
+    || !["OTHER", "UNKNOWN"].includes(person.seniority)
+    || (person.email && emailMatchesName(person.email, person.fullName))
+  );
+  const addressable = person && corroborated && email && (
     person.email?.toLowerCase() === email.value.toLowerCase()
     || (email.roleHint !== "ROLE" && !/^(info|contact|hello|sales|admin|office)@/i.test(email.value))
   );
@@ -94,7 +186,7 @@ export const gatherFacts = async (leadId) => {
   // model; the template needs a name it can actually greet, and only when the
   // business published that person itself and the address reaches them.
   const recipient = addressable
-    ? { fullName: person.fullName, firstName: String(person.fullName).trim().split(/\s+/)[0], title: person.title || null }
+    ? { fullName: person.fullName, firstName: firstNameOf(person.fullName), title: person.title || null }
     : null;
 
   return { lead, company: c, facts, recipientHint, recipient };
@@ -219,7 +311,7 @@ export const composeForRun = async ({ runId, leadIds, tracker, serviceOverride =
   const gathered = [];
   for (const leadId of target) {
     try {
-      const g = await gatherFacts(leadId);
+      const g = await gatherFacts(leadId, { forProduct: Boolean(product) });
       if (g) gathered.push({ leadId, ...g });
     } catch (err) {
       logger.debug({ leadId, msg: err.message }, "fact gathering failed");
@@ -328,10 +420,12 @@ export const exportComposeContext = async () => {
  * imported email that mentions a phone, address or URL the facts don't
  * contain is rejected, whoever wrote it.
  */
-export const importDrafts = async ({ drafts, author = "external" }) => {
+export const importDrafts = async ({ drafts, author = "external", forProduct = false }) => {
   const summary = { imported: 0, rejected: [] };
   for (const d of drafts) {
-    const gathered = await gatherFacts(d.leadId);
+    // Checked against the same narrowed fact list the author was given, or a
+    // product email would be rejected for grounding on facts it never saw.
+    const gathered = await gatherFacts(d.leadId, { forProduct });
     if (!gathered) { summary.rejected.push({ leadId: d.leadId, reason: "lead not found" }); continue; }
     const grounded = bodyIsGrounded(d.body, gathered.facts);
     if (!grounded.ok) { summary.rejected.push({ leadId: d.leadId, reason: `invented "${grounded.offending}"` }); continue; }
