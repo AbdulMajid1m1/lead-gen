@@ -5,7 +5,7 @@ import {
   Rocket, Globe, CornerDownLeft, X, Plus, ExternalLink, ArrowLeft, Search,
   AlertTriangle, RefreshCw, Archive, Mail, PenLine, ChevronDown, ChevronRight,
   ShieldCheck, Sparkles, Users, MapPin, Target, Ban, Swords, Wallet, Coins,
-  Quote, ListChecks, Compass, Radar, Clock, Layers,
+  Quote, ListChecks, Compass, Radar, Clock, Layers, FileSearch,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageBody } from "../App.jsx";
@@ -17,6 +17,7 @@ import {
 import { ConfidenceCell, ConfidenceLegend } from "../components/ConfidenceCell.jsx";
 import { DiscoveryProgress } from "../components/DiscoveryProgress.jsx";
 import EmailComposer, { ThreadStatusChip } from "../components/EmailComposer.jsx";
+import { ProvenanceDrawer } from "../components/ProvenanceDrawer.jsx";
 import { COUNTRY_OPTIONS, countryLabel } from "../lib/countries.js";
 import { cn, formatDateTime, prettyUrl, relativeTime, scoreTone } from "../lib/format.js";
 
@@ -582,6 +583,10 @@ function ProductWorkspace({ productId, params, setParams }) {
   const [form, setForm] = useState(null);
   const [baseline, setBaseline] = useState(null);
   const [emailFor, setEmailFor] = useState(null);
+  // Evidence is reachable from the row itself. Judging whether a lead really
+  // fits the approved profile used to mean leaving the grid for its own page
+  // and losing your place in the results.
+  const [evidenceFor, setEvidenceFor] = useState(null);
   const [showUnverified, setShowUnverified] = useState(false);
 
   const { data: product, isPending, isError, error, refetch } = useQuery({
@@ -786,6 +791,7 @@ function ProductWorkspace({ productId, params, setParams }) {
           <RunResults
             runId={runId}
             setEmailFor={setEmailFor}
+            setEvidenceFor={setEvidenceFor}
             showUnverified={showUnverified}
             setShowUnverified={setShowUnverified}
           />
@@ -801,6 +807,13 @@ function ProductWorkspace({ productId, params, setParams }) {
           onClose={() => setEmailFor(null)}
         />
       )}
+
+      <ProvenanceDrawer
+        leadId={evidenceFor?.leadId}
+        companyName={evidenceFor?.name}
+        open={Boolean(evidenceFor)}
+        onClose={() => setEvidenceFor(null)}
+      />
     </div>
   );
 }
@@ -1512,7 +1525,7 @@ function LaunchPanel({ product, dirty, onLaunch, launching, activeRunId, onOpenR
   );
 }
 
-function RunResults({ runId, setEmailFor, showUnverified, setShowUnverified }) {
+function RunResults({ runId, setEmailFor, setEvidenceFor, showUnverified, setShowUnverified }) {
   const queryClient = useQueryClient();
 
   const { data: grid, isPending, isError, error, refetch } = useQuery({
@@ -1649,6 +1662,10 @@ function RunResults({ runId, setEmailFor, showUnverified, setShowUnverified }) {
                         <div className="flex flex-col items-start gap-1">
                           <Button variant="secondary" size="sm" onClick={() => setEmailFor(row)}>
                             <Mail size={12} />Email
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => setEvidenceFor(row)}
+                            title={`Every source behind ${row.name}, in the order it was collected`}>
+                            <FileSearch size={12} />Evidence
                           </Button>
                           <ThreadStatusChip thread={threadByLead.get(row.leadId)} />
                         </div>

@@ -537,6 +537,21 @@ export const buildPromotePlan = (product, options = {}) => {
     });
   });
 
+  // Companies that already use a competitor, whenever the ICP names one. This
+  // is the highest-intent source the run has — a public review is a confirmed
+  // category buyer stating its own pain — but it is scheduled here among the
+  // other discovery steps precisely so it earns no shortcut: its candidates go
+  // through the same merge, crawl and verification as everything else.
+  const competitors = (icp.competitorsToDisplace || []).map((c) => String(c || "").trim()).filter(Boolean);
+  if (competitors.length) {
+    steps.push({
+      ordinal: ordinal++,
+      kind: "COMPETITOR_USERS",
+      label: `Find companies already using ${competitors.slice(0, 3).join(", ")}`,
+      params: { maxCompanies: 12 },
+    });
+  }
+
   // Hiring, whenever the ICP names a job posting as evidence. The aggregator
   // finds employers this database has never seen; the ATS probe confirms the
   // posting on the company's own board rather than trusting the aggregator.

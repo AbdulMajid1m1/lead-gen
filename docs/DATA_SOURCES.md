@@ -24,6 +24,7 @@ no authentication/CAPTCHA/paywall bypass anywhere in the system.
 | **crt.sh** | `GET https://crt.sh/?q={domain}&output=json` | IMPLEMENTED, BEST-EFFORT (answered 502 during validation) | `issuer_name, common_name, name_value, entry_timestamp, not_before, not_after` | Best-effort only: 30s timeout, ≤1 req/10s, nightly batch. Powers "new domain / new subdomain" freshness signals. |
 | **Wikidata** | `wbsearchentities` + SPARQL | Public/stable | inception, HQ, industry, employee count | 1 req/s, custom UA. Enrichment only. |
 | **Target site crawl** | site's own `robots.txt` → `sitemap.xml` → prioritized pages | n/a | raw HTML | Governed by the crawler policy in ARCHITECTURE.md §4. |
+| **Competitor customers** | AI web search over public review sites (G2, Capterra, TrustRadius), vendor customer/case-study pages and directory listings | IMPLEMENTED (promote runs only) | company name, website, why it matches, source URLs | Search-index only — the review sites themselves are never scraped. Companies only, never reviewers: the prompt forbids returning a person, a username or a reviewer's personal details, and omits any review naming no identifiable organisation. Every candidate still passes the existence gate and the citation guard before it becomes a lead. |
 
 ## Evaluated but not implemented in v1
 

@@ -9,7 +9,7 @@ import { verifyCandidateClaims, passesExistenceGate } from "../research/verifier
 import { composeForRun } from "../research/compose.js";
 import { snapshotGrid } from "../research/grid.js";
 import { CostTracker, searchAndParse, citationsAreGrounded, isResearchAvailable } from "../llm/responses.js";
-import { PROMOTE_DISCOVER_SYSTEM, buildPromoteDiscoverUser, DISCOVER_SCHEMA } from "../research/prompts.js";
+import { PROMOTE_DISCOVER_SYSTEM, buildPromoteDiscoverUser, COMPETITOR_USERS_SYSTEM, buildCompetitorUsersUser, DISCOVER_SCHEMA } from "../research/prompts.js";
 import { ensureSource, recordSourceRecord } from "../provenance/recorder.js";
 import { normalizeCompanyName } from "../../utils/normalize.js";
 import { icpToSearchStrategies } from "../promoter/icp.js";
@@ -393,6 +393,18 @@ const runStep = async ({ kind, params, parsed, runId, touchedCompanyIds, stats, 
       return { found: res.created, uncited: res.uncited, pagesSearched: res.searched, notes: res.notes };
     }
 
+    case "COMPETITOR_USERS": {
+      // Only a promote run has an approved ICP naming competitors; a research
+      // run reaching here would have no product to displace anyone from.
+      if (!product) throw new Error("Competitor-customer mining only runs for a promoted product.");
+
+      const res = await discoverCompetitorUsers({ runId, product, tracker, maxCompanies: params.maxCompanies || 12 });
+      if (!res.ok) throw new Error(`AI web search unavailable: ${res.reason}`);
+      stats.companiesFound += res.created;
+      emit(runId, { type: "progress", stats });
+      return { found: res.created, uncited: res.uncited, competitorsSearched: res.competitors, pagesSearched: res.searched, notes: res.notes };
+    }
+
     case "RESOLVE_MERGE": {
       const brief = await loadBrief(runId);
       // A promote run has no brief, so its exclusions and its market come from
@@ -505,38 +517,21 @@ const PROMOTE_CLAIM_FIELDS = [
 ];
 
 /**
- * One promote web-search strategy, landed as quarantined candidates.
+ * The half of an AI discovery step that never varies.
  *
- * This is deliberately the same quarantine as discoverViaWebSearch writes —
- * AiCandidate rows with their citations, nothing touching Contact or
- * ExtractedFact — so RESOLVE_MERGE, AI_VERIFY and the existence gate treat a
- * promote candidate exactly like a research one. It is written here rather than
- * reusing that function because discoverViaWebSearch takes a ResearchBrief and
- * offers no way to substitute the system prompt, and a promote search that ran
- * on DISCOVER_SYSTEM would lose the one rule that matters most for it: never
- * return the product's own competitors as buyers of it.
+ * Everything from the immutable SourceRecord down to the quarantined
+ * AiCandidate rows: the provenance root, the citation guard, the
+ * AI_MAX_CANDIDATES ceiling. Deliberately the same quarantine as
+ * discoverViaWebSearch writes — AiCandidate rows with their claims and
+ * citations, nothing touching Contact or ExtractedFact — so RESOLVE_MERGE,
+ * AI_VERIFY and the existence gate cannot tell one promote source from another.
+ *
+ * Extracted when the competitor-customer search became the second caller. A
+ * third hand-copied citation guard would be a third place for a candidate to
+ * quietly stop being checked, and the guard is the only thing standing between
+ * a hallucinated company and a real email.
  */
-const discoverForProduct = async ({ runId, strategy, product, tracker, maxCompanies = 12 }) => {
-  if (!isResearchAvailable()) return { ok: false, reason: "AI_UNAVAILABLE", created: 0 };
-
-  const icp = product.icp || {};
-  const geography = primaryGeography(icp);
-  const result = await searchAndParse({
-    system: PROMOTE_DISCOVER_SYSTEM,
-    user: buildPromoteDiscoverUser({ strategy, icp, product, region: geography?.region || "worldwide", maxCompanies }),
-    schema: DISCOVER_SCHEMA,
-    schemaName: "company_discovery",
-    model: AI_SEARCH_MODEL,
-    searchContextSize: "medium",
-    country: geography?.countryCode || null,
-    city: null,
-    tracker,
-  });
-
-  if (!result?.data?.companies) {
-    return { ok: false, reason: tracker?.lastError ? "AI_ERROR" : "NO_RESULTS", created: 0 };
-  }
-
+const landCandidates = async ({ runId, result, strategyLabel, externalId, payload }) => {
   const source = await ensureSource({
     kind: "AI_WEB_SEARCH",
     name: "AI web search",
@@ -545,10 +540,10 @@ const discoverForProduct = async ({ runId, strategy, product, tracker, maxCompan
 
   const record = await recordSourceRecord({
     sourceId: source.id,
-    externalId: `${runId}:${strategy.label}`.slice(0, 255),
+    externalId: externalId.slice(0, 255),
     url: null,
     payload: {
-      strategy, promotedProductId: product.id,
+      ...payload,
       companies: result.data.companies, searchNotes: result.data.searchNotes,
       sources: result.sources, model: result.model,
     },
@@ -572,7 +567,7 @@ const discoverForProduct = async ({ runId, strategy, product, tracker, maxCompan
         data: {
           runId,
           sourceRecordId: record.id,
-          strategyLabel: strategy.label.slice(0, 120),
+          strategyLabel: strategyLabel.slice(0, 120),
           name: company.name.slice(0, 160),
           nameLocal: company.nameLocal?.slice(0, 160) ?? null,
           claimedWebsite: company.website?.slice(0, 300) ?? null,
@@ -613,4 +608,111 @@ const discoverForProduct = async ({ runId, strategy, product, tracker, maxCompan
   }
 
   return { ok: true, created, uncited, searched: (result.sources || []).length, notes: result.data.searchNotes };
+};
+
+/**
+ * One promote web-search strategy, landed as quarantined candidates.
+ *
+ * Written here rather than reusing discoverViaWebSearch because that function
+ * takes a ResearchBrief and offers no way to substitute the system prompt, and
+ * a promote search that ran on DISCOVER_SYSTEM would lose the one rule that
+ * matters most for it: never return the product's own competitors as buyers
+ * of it.
+ */
+const discoverForProduct = async ({ runId, strategy, product, tracker, maxCompanies = 12 }) => {
+  if (!isResearchAvailable()) return { ok: false, reason: "AI_UNAVAILABLE", created: 0 };
+
+  const icp = product.icp || {};
+  const geography = primaryGeography(icp);
+  const result = await searchAndParse({
+    system: PROMOTE_DISCOVER_SYSTEM,
+    user: buildPromoteDiscoverUser({ strategy, icp, product, region: geography?.region || "worldwide", maxCompanies }),
+    schema: DISCOVER_SCHEMA,
+    schemaName: "company_discovery",
+    model: AI_SEARCH_MODEL,
+    searchContextSize: "medium",
+    country: geography?.countryCode || null,
+    city: null,
+    tracker,
+  });
+
+  if (!result?.data?.companies) {
+    return { ok: false, reason: tracker?.lastError ? "AI_ERROR" : "NO_RESULTS", created: 0 };
+  }
+
+  return landCandidates({
+    runId,
+    result,
+    strategyLabel: strategy.label,
+    externalId: `${runId}:${strategy.label}`,
+    payload: { strategy, promotedProductId: product.id },
+  });
+};
+
+/** How many competitor names one search can carry before it stops being one search. */
+const MAX_COMPETITORS_PER_SEARCH = 6;
+
+/**
+ * Companies that already use one of the product's competitors.
+ *
+ * The highest-intent source available to a promote run: a company that pays a
+ * competitor today has the budget and the category need settled, and a public
+ * review tells us what it dislikes about the incumbent in its own words. The
+ * evidence is public review sites, directory listings and the competitors' own
+ * customer pages — never follower scraping, which breaches the networks' terms
+ * and produces names nobody can verify afterwards.
+ *
+ * Nothing about that intent buys it a shortcut: the results land in the same
+ * quarantine as every other AI source, so a competitor-customer candidate still
+ * has to survive merge, verification and the existence gate before it is a lead.
+ */
+const discoverCompetitorUsers = async ({ runId, product, tracker, maxCompanies = 12 }) => {
+  const icp = product.icp || {};
+  const competitors = (icp.competitorsToDisplace || [])
+    .map((c) => String(c || "").trim())
+    .filter(Boolean)
+    .slice(0, MAX_COMPETITORS_PER_SEARCH);
+
+  // The planner leaves this step out when the ICP names nobody, but the ICP can
+  // be edited after a plan is stored. An empty list is a no-op, not a failure —
+  // failing the step would mark an otherwise healthy run PARTIAL.
+  if (!competitors.length) {
+    return {
+      ok: true, created: 0, uncited: 0, searched: 0, competitors: 0,
+      notes: "The approved ICP names no competitors to displace, so there was nothing to search for.",
+    };
+  }
+
+  if (!isResearchAvailable()) return { ok: false, reason: "AI_UNAVAILABLE", created: 0 };
+
+  const geography = primaryGeography(icp);
+  const result = await searchAndParse({
+    system: COMPETITOR_USERS_SYSTEM,
+    user: buildCompetitorUsersUser({ competitors, icp, product, region: geography?.region || "worldwide", maxCompanies }),
+    schema: DISCOVER_SCHEMA,
+    schemaName: "company_discovery",
+    model: AI_SEARCH_MODEL,
+    searchContextSize: "medium",
+    country: geography?.countryCode || null,
+    city: null,
+    tracker,
+  });
+
+  if (!result?.data?.companies) {
+    return { ok: false, reason: tracker?.lastError ? "AI_ERROR" : "NO_RESULTS", created: 0 };
+  }
+
+  // A label of its own, so the provenance drawer says which source found a
+  // company rather than lumping it in with the ICP searches.
+  const strategyLabel = `Already using ${competitors.join(", ")}`;
+
+  const landed = await landCandidates({
+    runId,
+    result,
+    strategyLabel,
+    externalId: `${runId}:competitor-users`,
+    payload: { competitors, promotedProductId: product.id, strategy: { label: strategyLabel } },
+  });
+
+  return { ...landed, competitors: competitors.length };
 };

@@ -29,6 +29,11 @@ enum OutreachMessageKind {
   INITIAL
   FOLLOW_UP
   REPLY
+  /// A non-delivery report, matched back to the message it killed. Recorded as
+  /// a message rather than a flag because a bounce is a real thing the mail
+  /// system said to us, and the reason text is what distinguishes "no such
+  /// mailbox" from "mailbox full" from "your domain is being rejected".
+  BOUNCE
 }
 
 /// A connected mailbox used to send outreach and (optionally) poll for replies.
@@ -84,6 +89,12 @@ model EmailAccount {
   /// The sign-off this mailbox uses unless the composer picks another.
   signatureId      String?
   defaultSignature Signature? @relation(fields: [signatureId], references: [id], onDelete: SetNull)
+
+  /// When this mailbox started sending cold outreach, or null once it is past
+  /// the ramp. A brand-new sending identity that opens at full volume is the
+  /// classic way to land in spam on week one, so the daily cap starts small and
+  /// climbs from this date instead of applying in full immediately.
+  warmupStartedAt DateTime?
 
   lastSyncAt DateTime?
   createdAt  DateTime  @default(now())
@@ -153,9 +164,21 @@ model OutreachMessage {
   receivedAt  DateTime?
   fromAddress String?     @db.VarChar(255)
 
+  /// HARD | SOFT, on BOUNCE messages only.
+  ///
+  /// The distinction decides what happens to the address: a hard bounce means
+  /// the mailbox does not exist and must be suppressed before it is ever sent
+  /// to again, while a soft bounce (full mailbox, greylisting, a temporary
+  /// outage) says nothing about the address and must not be.
+  bounceType String? @db.VarChar(10)
+  /// The enhanced SMTP status the report carried, e.g. "5.1.1".
+  bounceCode String? @db.VarChar(20)
+
   createdAt DateTime @default(now())
 
   @@index([threadId, createdAt])
+  /// Powers the rolling bounce rate, which is read on every campaign tick.
+  @@index([kind, createdAt])
 }
 
 // ─── Bulk campaigns ───────────────────────────────────────────────────────────
@@ -212,6 +235,11 @@ model OutreachCampaign {
   windowEnd       Int          @default(18)
   /// Minutes east of UTC where the campaign was created (JS -getTimezoneOffset()).
   tzOffsetMinutes Int          @default(0)
+
+  /// Why a campaign stopped itself. Set when the bounce guard pauses one, so
+  /// the UI can say what happened rather than showing a campaign that simply
+  /// stopped for no stated reason.
+  pausedReason String? @db.VarChar(300)
 
   createdAt   DateTime  @default(now())
   completedAt DateTime?

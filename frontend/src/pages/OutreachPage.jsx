@@ -5,7 +5,7 @@ import {
   ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend,
 } from "recharts";
 import {
-  Send, Mail, MessageCircle, Reply, Pause, Play, XCircle, ChevronDown, ChevronRight, ArrowRight, Gauge,
+  Send, Mail, MessageCircle, Reply, Pause, Play, XCircle, ChevronDown, ChevronRight, ArrowRight, Gauge, AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageBody, PageHeader } from "../App.jsx";
@@ -312,6 +312,15 @@ const CampaignCard = ({ campaign, defaultOpen = false }) => {
           )}
         </div>
       </div>
+
+      {/* Why it stopped. A campaign the bounce guard paused must say so, or the
+          obvious response is to press Resume and trip it again next tick. */}
+      {campaign.status === "PAUSED" && campaign.pausedReason && (
+        <p className="mt-3 flex items-start gap-2 rounded-lg border border-[color-mix(in_oklch,var(--color-caution)_35%,transparent)] bg-[color-mix(in_oklch,var(--color-caution)_8%,transparent)] p-2.5 text-[11px] leading-relaxed text-[var(--text-muted)]">
+          <AlertTriangle size={12} className="mt-px shrink-0 text-[var(--color-caution)]" />
+          <span>{campaign.pausedReason}</span>
+        </p>
+      )}
 
       <div className="mt-3 space-y-2">
         {wantEmail && channelBar("Email", Mail, campaign.email)}

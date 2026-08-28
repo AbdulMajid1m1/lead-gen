@@ -331,11 +331,20 @@ export default function EmailComposer({ leadId, name, contacts = null, address =
               <ul className="max-h-56 space-y-2 overflow-y-auto border-t border-[var(--border)] px-3 py-2.5">
                 {(activeThread.messages || []).map((m) => (
                   <li key={m.id} className={cn("rounded-lg border p-2.5 text-[12px]",
-                    m.direction === "INBOUND"
+                    // A bounce is inbound but it is not good news, so it must
+                    // never wear the green a real reply does.
+                    m.kind === "BOUNCE"
+                      ? "border-[color-mix(in_oklch,var(--color-critical)_35%,transparent)] bg-[color-mix(in_oklch,var(--color-critical)_7%,transparent)]"
+                      : m.direction === "INBOUND"
                       ? "border-[color-mix(in_oklch,var(--color-positive)_35%,transparent)] bg-[color-mix(in_oklch,var(--color-positive)_7%,transparent)]"
                       : "border-[var(--border)] bg-[var(--surface-raised)]")}>
                     <p className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-[var(--text-subtle)]">
-                      <span>{m.direction === "INBOUND" ? `Reply from ${m.fromAddress || "them"}` : m.kind === "FOLLOW_UP" ? "Follow-up sent" : "Sent"}</span>
+                      <span>
+                        {m.kind === "BOUNCE"
+                          ? `Bounced${m.bounceType ? ` — ${m.bounceType.toLowerCase()}` : ""}${m.bounceCode ? ` (${m.bounceCode})` : ""}`
+                          : m.direction === "INBOUND" ? `Reply from ${m.fromAddress || "them"}`
+                          : m.kind === "FOLLOW_UP" ? "Follow-up sent" : "Sent"}
+                      </span>
                       <span className="tnum normal-case">{formatDateTime(m.sentAt || m.receivedAt || m.createdAt)}</span>
                     </p>
                     <p className="line-clamp-4 whitespace-pre-wrap leading-snug text-[var(--text-muted)]">{m.body}</p>

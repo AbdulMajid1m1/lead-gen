@@ -19,7 +19,7 @@ import { SIGNAL_CATALOG } from "../signals/signalCatalog.js";
  * PROMPT_VERSION is stored on every AI-derived row, so a lead found last month
  * can still be explained by the prompt that actually produced it.
  */
-export const PROMPT_VERSION = "1.2.0";
+export const PROMPT_VERSION = "1.3.0";
 
 const INDUSTRY_KEYS = Object.keys(OSM_CATEGORIES);
 const SIGNAL_KEYS = Object.keys(SIGNAL_CATALOG);
@@ -685,6 +685,90 @@ ${[
 ].map((e) => `  - ${e}`).join("\n")}
 
 Return at most ${maxCompanies} companies.`;
+
+// ─── 7b. Competitor customers → company discovery ─────────────────────────────
+// The highest-intent source in the system: a company already paying for a
+// competitor is a proven buyer of the category, and one that reviewed it in
+// public has also stated, in its own words, what it dislikes about the
+// incumbent. That is a far better hook than any inference we could draw.
+//
+// It is built on public review sites, directory listings and the competitors'
+// own published customer pages — never on follower scraping, which is what
+// rival products mean by "competitor tracking". Scraping a follower list
+// breaches the networks' terms and yields a name nobody can check; a review
+// page is a citable URL our verifier can re-fetch, so a candidate from here
+// passes through exactly the same gate as every other source.
+
+export const COMPETITOR_USERS_SYSTEM = `${DISCOVER_SYSTEM}
+
+You are searching for companies that ALREADY USE one of the named competitor
+products, on behalf of a rival product that wants to reach them. Six further
+rules follow from that; every rule above still holds.
+8. A company qualifies only on published evidence that it uses the competitor:
+   a review it left on a public review site (G2, Capterra, TrustRadius,
+   Software Advice and the like), a named customer logo, case study or
+   testimonial on the competitor's own website, or a public directory, partner
+   or integration listing naming it as a customer. Real, currently-operating
+   companies only.
+9. The subject is always the COMPANY, never the person. Never return a
+   reviewer, a named individual, a username or a display name, and never carry
+   a reviewer's job title, location or any other personal detail across as if
+   it described the company. We are finding organisations that use a product;
+   whoever is worth writing to is found later from that company's own published
+   pages.
+10. If a review names no identifiable organisation — it is anonymous or
+    pseudonymous, or attributed only to something like "HR Manager, mid-market
+    company" — omit it entirely. Guessing which company it came from produces a
+    confident sentence about a business that may never have used the product at
+    all.
+11. Never return the competitor itself, any other vendor selling software in
+    this category, or the product being promoted. A vendor's own listing on a
+    review site is not evidence that it is a customer.
+12. whyMatch must name the concrete evidence: which competitor, where you saw
+    it, and what the review or page actually said about their situation. "Left
+    a two-star G2 review of BambooHR saying per-seat pricing became unaffordable
+    past 80 staff" is the entire point of this search. "Appears to be a good
+    fit" carries nothing and is worse than omitting the company.
+13. This source is high-intent and low-volume by design. Returning two
+    well-evidenced companies — or none at all — is the expected outcome and is
+    correct. A padded list defeats the purpose of searching here rather than in
+    a directory.`;
+
+export const buildCompetitorUsersUser = ({ competitors, icp, product, region, maxCompanies = 12 }) =>
+  `Competitor products whose customers we want to find:
+${competitors.map((c) => `  - ${c}`).join("\n")}
+
+Where to look: public review sites (G2, Capterra, TrustRadius, Software Advice
+and equivalents), each competitor's own customers, case-study and testimonial
+pages, and public directory, partner or integration listings that name
+customers by company.
+
+Region: ${region}
+Search in English and in the local language; company names may not be in Latin script.
+
+These companies would be approached about: ${product.name} — ${product.category || "software"}.
+Ideal customer: ${icp.summary || "(not stated)"}
+
+Traits that make a competitor's customer especially worth returning (strong
+evidence of using a competitor still counts even when these are unknown):
+${[
+  ...(icp.industries || []).slice(0, 4).map((i) => `  - Industry: ${i}`),
+  icp.companySize?.min || icp.companySize?.max
+    ? `  - Size: ${icp.companySize.min ?? "?"}-${icp.companySize.max ?? "?"} employees`
+    : null,
+  ...(icp.painPoints || []).slice(0, 4).map((p) => `  - Complains about: ${p.pain}`),
+].filter(Boolean).join("\n") || "  - (none specified)"}
+
+Must NOT be returned:
+${[
+  ...competitors.map((c) => `${c} itself, or any other vendor selling software in this category`),
+  `${product.name} itself`,
+  "Any individual person, reviewer, username or display name",
+  "Reviews with no identifiable company behind them",
+  ...(icp.disqualifiers || []),
+].map((e) => `  - ${e}`).join("\n")}
+
+Return at most ${maxCompanies} companies. Fewer, including none, is expected.`;
 
 // ─── 8. Promotional outreach composition ──────────────────────────────────────
 // Inherits every rule of COMPOSE_SYSTEM, then replaces the offering: the email

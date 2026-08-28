@@ -1,6 +1,7 @@
 import prisma from "../../prismaClient.js";
 import { sendMail } from "./mailer.js";
 import { findReplies, canReceive } from "./inbox.js";
+import { recordBounce } from "./deliverability.js";
 import { sendWhatsAppText, getWhatsAppAccount, listWhatsAppAccounts } from "./whatsapp.js";
 import { resolveSignature, signatureSuffix } from "./signature.js";
 import { followUpTemplate, whatsappFollowUpTemplate } from "../research/templates.js";
@@ -394,6 +395,7 @@ export const syncReplies = async ({ account }) => {
   }
 
   let replies = 0;
+  let bounces = 0;
   for (const hit of hits) {
     const exists = hit.messageId
       ? await prisma.outreachMessage.findFirst({ where: { messageId: hit.messageId } })
@@ -402,6 +404,16 @@ export const syncReplies = async ({ account }) => {
 
     const thread = open.find((t) => t.id === hit.threadId);
     if (!thread) continue;
+
+    // A non-delivery report is not an answer. It reaches this loop matched to
+    // the thread by the very Message-ID it is reporting on, so without this
+    // branch a dead address would mark the thread REPLIED and hand the lead to
+    // a human as if somebody had written back.
+    if (hit.bounce?.isBounce) {
+      const recorded = await recordBounce({ threadId: hit.threadId, hit, classification: hit.bounce });
+      if (recorded) bounces += 1;
+      continue;
+    }
 
     await prisma.outreachMessage.create({
       data: {
@@ -429,8 +441,8 @@ export const syncReplies = async ({ account }) => {
     where: { id: account.id },
     data: { lastSyncAt: new Date(), status: "CONNECTED", lastError: null },
   });
-  logger.info({ checked: open.length, replies }, "reply sync complete");
-  return { checked: open.length, replies };
+  logger.info({ checked: open.length, replies, bounces }, "reply sync complete");
+  return { checked: open.length, replies, bounces };
 };
 
 /**
@@ -551,10 +563,12 @@ export const runOutreachMaintenance = async () => {
 
   const perAccount = [];
   let replies = 0;
+  let bounces = 0;
   let sent = 0;
   for (const account of accounts) {
     const sync = await syncReplies({ account });
     replies += sync.replies || 0;
+    bounces += sync.bounces || 0;
     const followUps = sync.error ? { sent: 0, skipped: "sync failed" } : await processDueFollowUps({ account });
     sent += followUps.sent || 0;
     perAccount.push({ channel: "EMAIL", accountId: account.id, email: account.email, sync, followUps });
@@ -574,6 +588,7 @@ export const runOutreachMaintenance = async () => {
     accounts: accounts.length,
     devices: devices.length,
     replies,
+    bounces,
     followUpsSent: sent + whatsappSent,
     emailFollowUps: sent,
     whatsappFollowUps: whatsappSent,

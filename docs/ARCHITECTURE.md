@@ -207,6 +207,35 @@ came from the product's own site) and nothing about the reader that is not in
 that lead's numbered facts. The same grounding guard that rejects an invented
 phone number in a research email rejects it in a promotional one.
 
+## 4d. Deliverability
+
+Bounce rate is the one metric a sending domain cannot recover from quickly:
+above ~3% reputation degrades, above 5% it degrades badly, and the damage
+outlives the campaign that caused it. The protection is in three layers.
+
+**Before sending** — `hygiene.js` and the campaign's own selection: MX lookup,
+malformed-address detection, broker-domain rejection, suppression list, and the
+`sendPolicy.js` legal gate.
+
+**While sending** — pacing, a per-account daily cap, and a working-hours window,
+because providers score burstiness and off-hours volume as spam signals. A
+mailbox with `warmupStartedAt` set is additionally capped by a ramp that opens
+at 5/day and reaches its normal cap at about three weeks; a new sending identity
+that opens at full volume is the classic way to land in spam in week one.
+
+**After sending** — the IMAP sync classifies non-delivery reports rather than
+treating them as replies, records each as a `BOUNCE` message with its enhanced
+SMTP status, sets the thread `BOUNCED`, and suppresses the address **on a hard
+bounce only** (a full mailbox says nothing about whether the address is real).
+`runCampaignTick` checks the rolling rate once per tick and pauses the campaign
+with a stated reason once it crosses the threshold on a large enough sample.
+
+> Until this existed, an NDR arrived carrying the original Message-ID in its
+> `References` header, matched the thread by it, and was recorded as a **reply** —
+> moving the lead to REPLIED, putting a dead address in the human review queue,
+> and inflating the reply rate. `ThreadStatus.BOUNCED` was read in one place and
+> written nowhere.
+
 ## 5. API surface
 
 Envelope is `{ success, message?, data? }` everywhere, matching the reference project.

@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Sparkles, Search, CornerDownLeft, X, ExternalLink, Mail,
-  AlertTriangle, History, Wallet, ChevronDown, ChevronRight, PenLine,
+  AlertTriangle, History, Wallet, ChevronDown, ChevronRight, PenLine, FileSearch,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageBody } from "../App.jsx";
@@ -11,6 +11,7 @@ import { api, subscribeToRun } from "../lib/api.js";
 import { Button, EmptyState, ErrorState, Skeleton, Spinner, Surface } from "../components/ui.jsx";
 import { ConfidenceCell, ConfidenceLegend } from "../components/ConfidenceCell.jsx";
 import { DiscoveryProgress } from "../components/DiscoveryProgress.jsx";
+import { ProvenanceDrawer } from "../components/ProvenanceDrawer.jsx";
 import EmailComposer, { ThreadStatusChip } from "../components/EmailComposer.jsx";
 import { scoreTone } from "../lib/format.js";
 
@@ -25,6 +26,9 @@ export default function ResearchPage() {
   const runId = params.get("run");
   const [input, setInput] = useState("");
   const [emailFor, setEmailFor] = useState(null);
+  // Evidence is reachable from the row itself. Judging a lead used to mean
+  // leaving the grid for its own page and losing your place in the results.
+  const [evidenceFor, setEvidenceFor] = useState(null);
   const [showUnverified, setShowUnverified] = useState(false);
   const inputRef = useRef(null);
   const queryClient = useQueryClient();
@@ -265,6 +269,10 @@ export default function ResearchPage() {
                             <Button variant="secondary" size="sm" onClick={() => setEmailFor(row)}>
                               <Mail size={12} />Email
                             </Button>
+                            <Button variant="ghost" size="sm" onClick={() => setEvidenceFor(row)}
+                              title={`Every source behind ${row.name}, in the order it was collected`}>
+                              <FileSearch size={12} />Evidence
+                            </Button>
                             <ThreadStatusChip thread={threadByLead.get(row.leadId)} />
                           </div>
                         </td>
@@ -317,6 +325,13 @@ export default function ResearchPage() {
           onClose={() => setEmailFor(null)}
         />
       )}
+
+      <ProvenanceDrawer
+        leadId={evidenceFor?.leadId}
+        companyName={evidenceFor?.name}
+        open={Boolean(evidenceFor)}
+        onClose={() => setEvidenceFor(null)}
+      />
     </div>
   );
 }

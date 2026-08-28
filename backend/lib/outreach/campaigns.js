@@ -4,6 +4,7 @@ import { getWhatsAppAccount } from "./whatsapp.js";
 import { pickWhatsAppNumber } from "./phoneRank.js";
 import { sendPolicyFor, isRoleAddress, isSendBlocked } from "./sendPolicy.js";
 import { domainHasMx, emailLooksMangled, BROKER_DOMAIN_RE } from "./hygiene.js";
+import { bounceRate, shouldPauseForBounces, warmupDailyCap, BOUNCE_PAUSE_THRESHOLD } from "./deliverability.js";
 import { composeEmailForLead, gatherFacts } from "../research/compose.js";
 import { whatsappInitialTemplate } from "../research/templates.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
@@ -211,8 +212,16 @@ const attemptEmail = async (campaign, recipient) => {
     const account = await getAccount(campaign.accountId);
     if (!account) return ["FAILED", "The sending account is gone or disabled."];
 
-    if ((await sentTodayCount("EMAIL", account.id)) >= DAILY_EMAIL_CAP) {
-      return ["PENDING", `Daily cap of ${DAILY_EMAIL_CAP} reached — resumes tomorrow.`];
+    // A mailbox still in its warm-up sends far less than the configured cap.
+    // The two messages are kept distinct because an operator who sees five
+    // emails go out and reads "daily cap of 150 reached" concludes the queue is
+    // broken, and the next thing they do is turn the pacing off.
+    const rampCap = warmupDailyCap(account);
+    const cap = Math.min(DAILY_EMAIL_CAP, rampCap);
+    if ((await sentTodayCount("EMAIL", account.id)) >= cap) {
+      return ["PENDING", rampCap < DAILY_EMAIL_CAP
+        ? `Warm-up limit of ${cap} reached — this mailbox is still ramping up to its full cap. Resumes tomorrow.`
+        : `Daily cap of ${cap} reached — resumes tomorrow.`];
     }
 
     // Verification gate: a bounce costs sender reputation the whole domain
@@ -265,6 +274,47 @@ const attemptWhatsApp = async (campaign, recipient) => {
 };
 
 /**
+ * Stop a campaign whose sending mailbox is bouncing, before it sends anything
+ * more. Never throws and never pauses on a small sample: the cost of a wrong
+ * pause is a campaign an operator has to restart, the cost of not pausing is a
+ * domain that takes weeks to recover.
+ *
+ * @returns {Promise<boolean>} whether the campaign was paused
+ */
+const pauseIfBouncing = async (campaign) => {
+  try {
+    const channels = Array.isArray(campaign.channels) ? campaign.channels : [];
+    if (!channels.includes("EMAIL")) return false;
+
+    const account = await getAccount(campaign.accountId);
+    if (!account) return false;
+
+    const stats = await bounceRate({ accountId: account.id });
+    if (!shouldPauseForBounces(stats)) return false;
+
+    const reason =
+      `Paused automatically: ${stats.bounced} of the last ${stats.sent} emails from ${account.email} came back undelivered `
+      + `(${(stats.rate * 100).toFixed(1)}%), over the ${(BOUNCE_PAUSE_THRESHOLD * 100).toFixed(0)}% a sending domain can absorb. `
+      + `Clean the remaining addresses before resuming.`;
+
+    await prisma.outreachCampaign.update({
+      where: { id: campaign.id },
+      data: { status: "PAUSED", pausedReason: reason.slice(0, 300) },
+    });
+    logger.warn(
+      { campaignId: campaign.id, name: campaign.name, email: account.email, rate: stats.rate, sent: stats.sent, bounced: stats.bounced },
+      "campaign paused — bounce rate above threshold",
+    );
+    return true;
+  } catch (err) {
+    // A failed rate check must not stop the queue; it just means this tick
+    // sends under the same rules it did before the guard existed.
+    logger.warn({ campaignId: campaign.id, msg: err.message }, "bounce guard check failed");
+    return false;
+  }
+};
+
+/**
  * Drain step, called by the worker every minute.
  *
  * Per campaign: honour the pace, then process recipients until one *actual
@@ -273,9 +323,16 @@ const attemptWhatsApp = async (campaign, recipient) => {
  */
 export const runCampaignTick = async () => {
   const campaigns = await prisma.outreachCampaign.findMany({ where: { status: "RUNNING" }, orderBy: { createdAt: "asc" } });
-  const summary = { campaigns: campaigns.length, sent: 0, skipped: 0, failed: 0, completed: 0 };
+  const summary = { campaigns: campaigns.length, sent: 0, skipped: 0, failed: 0, completed: 0, paused: 0 };
 
   for (const campaign of campaigns) {
+    // The bounce guard, once per tick rather than per recipient: a list that is
+    // bouncing is doing damage that outlives the campaign, and by the time a
+    // person notices, the sending domain is already the thing that needs
+    // repairing. Checked before the window and pacing checks so a campaign that
+    // is asleep for the night still gets stopped rather than resuming at 9am.
+    if (await pauseIfBouncing(campaign)) { summary.paused += 1; continue; }
+
     // AUTO campaigns sleep outside their local working-hours window and stop
     // for the day once the daily quota is reached; rows simply stay PENDING.
     if (!isWithinSendWindow(campaign)) continue;
@@ -351,7 +408,10 @@ export const campaignWithProgress = async (campaignId) => {
 
   return {
     id: campaign.id, name: campaign.name, channels: campaign.channels,
-    status: campaign.status, paceSeconds: campaign.paceSeconds,
+    // Carried to the UI so a campaign the bounce guard stopped can say so. A
+    // paused campaign with no stated reason invites the one wrong response —
+    // pressing Resume, which just trips the guard again on the next tick.
+    status: campaign.status, pausedReason: campaign.pausedReason, paceSeconds: campaign.paceSeconds,
     mode: campaign.mode, dailyLimit: campaign.dailyLimit,
     windowStart: campaign.windowStart, windowEnd: campaign.windowEnd,
     tzOffsetMinutes: campaign.tzOffsetMinutes,
@@ -386,7 +446,14 @@ export const setCampaignStatus = async (campaignId, status) => {
   }
   await prisma.outreachCampaign.update({
     where: { id: campaignId },
-    data: { status, ...(status === "CANCELLED" ? { completedAt: new Date() } : {}) },
+    data: {
+      status,
+      ...(status === "CANCELLED" ? { completedAt: new Date() } : {}),
+      // Resuming clears the old explanation rather than leaving it to be read
+      // as the current state. If the addresses were not actually cleaned, the
+      // guard writes a fresh reason on the next tick.
+      ...(status === "RUNNING" ? { pausedReason: null } : {}),
+    },
   });
   return { ok: true, campaign: await campaignWithProgress(campaignId) };
 };

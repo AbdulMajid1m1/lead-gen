@@ -376,6 +376,46 @@ Against the live local stack: the crawler read 5 real pages of tracefyhr.com and
 ### Known blocker — not a code defect
 **The OpenAI account has no credits.** The key is valid (the models endpoint answers) but completions return `429 You have no credits remaining`. The circuit breaker handles this exactly as designed: product research falls back to "write the ICP by hand", and a promote run's `AI_DISCOVER` step fails while the other 11 steps still complete. But **AI web search is the primary discovery engine for a promote run**, so until credits are added a promote run will find little or nothing. Add credits at platform.openai.com → billing; no redeploy is needed, and the breaker clears itself after 10 minutes.
 
+---
+
+## 12. Round two — after reviewing moneyprinter.me (2026-08-28)
+
+That product is the same idea: "Paste your website. Print money." — analyse the
+site, derive the buyer, find prospects via job postings and hiring signals, send
+AI-personalised sequences. Its advertised 4.6% reply rate is essentially the
+industry average (4.1%), so the loop is validated and there is no hidden trick to
+copy. Three of its edges were real and were taken; two were deliberately refused.
+
+**Taken**
+- **Deliverability guard.** Bounces are now detected, classified and acted on —
+  see ARCHITECTURE.md §4d. This also fixed a live bug: NDRs were being recorded
+  as *replies*, so dead addresses moved leads to REPLIED, entered the human
+  review queue and inflated the reply rate. Mailbox warming ramps a new sender
+  from 5/day to full over ~3 weeks, and a campaign whose bounce rate crosses 3%
+  pauses itself and says why.
+- **Competitor-customer mining.** A `COMPETITOR_USERS` discovery step finds
+  companies that already use a competitor named in the approved ICP, from public
+  review sites, vendor customer pages and directory listings. Highest-intent
+  source we have, and low-volume by design.
+- **Evidence in reach.** An Evidence button on the research and promoter grids
+  opens the existing provenance drawer without leaving the results.
+
+**Refused**
+- **LinkedIn sequences.** ToS-prohibited; automation-driven account restrictions
+  are up ~340%, and hiQ v. LinkedIn was decided *for* LinkedIn on breach of
+  contract. They are spending their customers' LinkedIn accounts to do this.
+- **AI parallel dialer.** Cold calling is a separate legal regime — TCPA, DNC
+  registries, two-party recording consent in many states — and a large build.
+
+**A correction to §11's framing.** "Per-lead research report" was listed as a
+gap; on inspection it was already built and is better than theirs. `/leads/:id`
+carries "Why this is a lead" with per-reason evidence, hiring activity, website
+audit, technology detection, score breakdown and a full provenance drawer, and
+the composer already lists the grounding facts with the used ones highlighted.
+Only its reachability from a grid was missing.
+
+---
+
 ### Recommended next steps
 1. Add OpenAI credits — everything else is gated behind this.
 2. Run the first real promotion for tracefyhr.com and read the drafted ICP critically. It is the input that determines every lead the system then finds.
