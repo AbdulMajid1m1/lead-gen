@@ -194,6 +194,37 @@ describe("icpToParsedQuery", () => {
     expect(parsed.query.jobTitleContains.length).toBeGreaterThan(0);
     expect(parsed.query.jobTitleContains.every((t) => t === t.toLowerCase())).toBe(true);
   });
+
+  it("never turns the prose of a signal into a job-title needle", () => {
+    // A buying signal is a sentence describing an event, not a title. Splitting
+    // one into words produced needles like "advertising", "first" and "role" —
+    // and because the filter does a `contains` against the title, the first of
+    // those matched every Advertising Manager vacancy in the market.
+    const wordy = icpToParsedQuery({
+      ...TRACEFY_ICP,
+      buyerTitles: { decisionMakers: [], champions: [] },
+      buyingSignals: [
+        { signal: "Advertising a first or additional HR, payroll or admin role", detectableVia: "JOB_POSTING", signalKey: "HIRING_HR_ROLE" },
+      ],
+    }).query.jobTitleContains;
+
+    for (const junk of ["advertising", "first", "additional", "role"]) {
+      expect(wordy, junk).not.toContain(junk);
+    }
+    // What it should keep is the role the sentence actually names.
+    expect(wordy.some((n) => n.trim() === "hr" || n === "payroll")).toBe(true);
+  });
+
+  it("contributes nothing from a signal sentence that names no known role", () => {
+    const vague = icpToParsedQuery({
+      ...TRACEFY_ICP,
+      buyerTitles: { decisionMakers: [], champions: [] },
+      buyingSignals: [
+        { signal: "Growing quickly and opening a second location", detectableVia: "JOB_POSTING", signalKey: null },
+      ],
+    }).query.jobTitleContains;
+    expect(vague).toEqual([]);
+  });
 });
 
 describe("icpToSearchStrategies", () => {

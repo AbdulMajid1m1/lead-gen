@@ -222,13 +222,10 @@ const GENERIC_TITLE_WORDS = new Set([
   "team", "staff", "department", "business", "corporate", "general",
 ]);
 
-const deriveJobTitleContains = (icp) => {
-  const sources = [
-    ...icp.buyingSignals.filter((s) => s.detectableVia === "JOB_POSTING").map((s) => s.signal),
-    ...icp.buyerTitles.decisionMakers,
-    ...icp.buyerTitles.champions,
-  ];
+/** Every needle the lexicon knows, for scanning prose that names a role in passing. */
+const ALL_TITLE_NEEDLES = [...new Set(HIRING_ROLE_TERMS.flatMap((r) => r.titleContains))];
 
+const deriveJobTitleContains = (icp) => {
   const needles = [];
   // Kept verbatim, never trimmed: the lexicon's needles carry a trailing space
   // on purpose ("hr " rather than "hr", so "chrome engineer" does not match),
@@ -238,16 +235,39 @@ const deriveJobTitleContains = (icp) => {
     if (value.trim() && !needles.includes(value)) needles.push(value);
   };
 
-  for (const source of sources) {
-    const text = ` ${normalizeJobTitle(source)} `;
+  const lexiconEntryFor = (text) =>
+    HIRING_ROLE_TERMS.find((role) => role.phrases.some((p) => text.includes(` ${p} `) || text.includes(`${p} `)));
+
+  // A buying signal is a sentence describing an event — "Advertising a first or
+  // additional HR, payroll or admin role". Splitting prose into words the way a
+  // job title can be split yields needles like "advertising", "first" and
+  // "role", and because buildWhere does a `contains` against the title, an
+  // "advertising" needle then matches every Advertising Manager vacancy in the
+  // market. So a sentence only ever contributes needles the lexicon recognises
+  // inside it; one that names no known role contributes nothing at all.
+  for (const signal of icp.buyingSignals.filter((s) => s.detectableVia === "JOB_POSTING")) {
+    const text = ` ${normalizeJobTitle(signal.signal)} `;
     if (text.trim().length < 2) continue;
 
-    const entry = HIRING_ROLE_TERMS.find((role) => role.phrases.some((p) => text.includes(` ${p} `) || text.includes(`${p} `)));
+    const entry = lexiconEntryFor(text);
     if (entry) {
       entry.titleContains.forEach(add);
       continue;
     }
+    ALL_TITLE_NEEDLES.filter((n) => text.includes(n.trim())).forEach(add);
+  }
 
+  // A buyer title genuinely is a title, so the word-level fallback is sound
+  // here: the words left after the generic ones are the role itself.
+  for (const title of [...icp.buyerTitles.decisionMakers, ...icp.buyerTitles.champions]) {
+    const text = ` ${normalizeJobTitle(title)} `;
+    if (text.trim().length < 2) continue;
+
+    const entry = lexiconEntryFor(text);
+    if (entry) {
+      entry.titleContains.forEach(add);
+      continue;
+    }
     for (const word of text.trim().split(" ")) {
       if (word.length >= 3 && !GENERIC_TITLE_WORDS.has(word)) add(word);
     }

@@ -209,31 +209,43 @@ const discoverProductPages = ({ html, origin, pageUrl }) => {
  *
  * Persistence is deliberately not done here — service.js owns every write, so
  * this stays callable from a test or a re-run without touching a row.
+ *
+ * `returnPages` includes the page text in the result. The normal path throws it
+ * away once the model has read it, but the export path in
+ * scripts/promoter-assist.mjs hands that same text to an assistant standing in
+ * for the model, and it cannot do that if the only thing it gets back is a list
+ * of URLs. `skipExtract` skips the AI call entirely, which is what that export
+ * wants: with no provider credit the call returns nothing after burning its
+ * timeout. Both default to the existing behaviour.
  */
-export const researchProduct = async ({ productId, tracker = null }) => {
+export const researchProduct = async ({ productId, tracker = null, returnPages = false, skipExtract = false }) => {
+  // Added only when asked for, so the ordinary caller's result keeps the shape
+  // it has always had rather than carrying a megabyte of page text it discards.
+  const withPages = (result, pages = []) => (returnPages ? { ...result, pages } : result);
+
   const product = await prisma.promotedProduct.findUnique({
     where: { id: productId },
     select: { id: true, url: true },
   });
   if (!product) {
-    return { ok: false, reason: "This product is no longer in the database.", pagesRead: 0, pageUrls: [], extracted: null };
+    return withPages({ ok: false, reason: "This product is no longer in the database.", pagesRead: 0, pageUrls: [], extracted: null });
   }
 
   const origin = normalizeProductUrl(product.url);
   if (!origin) {
-    return {
+    return withPages({
       ok: false,
       reason: `${product.url} is not a public web address, so there is nothing to read.`,
       pagesRead: 0,
       pageUrls: [],
       extracted: null,
-    };
+    });
   }
 
   const home = await fetchPage(origin);
   if (!home.ok) {
     logger.warn({ productId, origin, reason: home.blockReason }, "product homepage unreachable");
-    return { ok: false, reason: describeFailure(origin, home), pagesRead: 0, pageUrls: [], extracted: null };
+    return withPages({ ok: false, reason: describeFailure(origin, home), pagesRead: 0, pageUrls: [], extracted: null });
   }
 
   const homeUrl = home.finalUrl || origin;
@@ -274,14 +286,18 @@ export const researchProduct = async ({ productId, tracker = null }) => {
   const pageUrls = pages.map((p) => p.url);
   const pagesRead = pages.length;
 
+  if (skipExtract) {
+    return withPages({ ok: true, reason: "Extraction was skipped — the pages were read and returned as they are.", pagesRead, pageUrls, extracted: null }, pages);
+  }
+
   if (!isResearchAvailable()) {
-    return {
+    return withPages({
       ok: true,
       reason: "AI is unavailable — the pages were read but no product profile could be extracted.",
       pagesRead,
       pageUrls,
       extracted: null,
-    };
+    }, pages);
   }
 
   const result = await parseStructured({
@@ -297,13 +313,13 @@ export const researchProduct = async ({ productId, tracker = null }) => {
   const data = result?.data;
   if (!data || (!data.name && !data.summary)) {
     logger.warn({ productId, pagesRead }, "no product profile returned — the pages stand on their own");
-    return {
+    return withPages({
       ok: true,
       reason: "The pages were read but no product profile could be extracted from them.",
       pagesRead,
       pageUrls,
       extracted: null,
-    };
+    }, pages);
   }
 
   const extracted = {
@@ -322,5 +338,5 @@ export const researchProduct = async ({ productId, tracker = null }) => {
   };
 
   logger.info({ productId, pagesRead, features: extracted.features.length }, "product profile extracted");
-  return { ok: true, reason: null, pagesRead, pageUrls, extracted };
+  return withPages({ ok: true, reason: null, pagesRead, pageUrls, extracted }, pages);
 };

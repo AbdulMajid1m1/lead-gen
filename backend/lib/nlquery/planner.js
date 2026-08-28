@@ -576,8 +576,18 @@ export const buildPromotePlan = (product, options = {}) => {
   // there is no honest default here: a research run can fall back to sampling
   // local businesses because its query asked for a place, but a promote run
   // would just be buying leads its own ICP disqualifies.
-  const cities = q.location?.cities?.length ? q.location.cities.slice(0, 2) : [q.location?.name].filter(Boolean);
-  const categories = (q.industries || []).slice(0, 2);
+  // Every market the ICP ranked, not just the one the parsed query collapsed to,
+  // and a few industries rather than two. On a promote run the map engine is
+  // often the only discovery source that works — the global job aggregators do
+  // not cover Gulf SMBs, and web search needs an AI provider with credit — so
+  // searching one city for two categories leaves most of an approved profile
+  // unused. Still bounded: the crawl cap downstream is what governs the cost.
+  const rankedCities = [...(icp.geographies || [])]
+    .sort((a, b) => (a?.priority ?? 99) - (b?.priority ?? 99))
+    .map((g) => g?.region)
+    .filter(Boolean);
+  const cities = (rankedCities.length ? rankedCities : [q.location?.name].filter(Boolean)).slice(0, 2);
+  const categories = (q.industries || []).slice(0, 3);
   if (cities.length && categories.length) {
     for (const city of cities) {
       for (const categoryKey of categories) {
