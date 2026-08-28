@@ -3,13 +3,14 @@ import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { Logo } from "./components/Logo.jsx";
-import { LayoutDashboard, Search, Users, Radar, Settings, Moon, Sun, Sparkles, LogOut, Inbox, SendHorizonal, Handshake } from "lucide-react";
+import { LayoutDashboard, Search, Users, Radar, Settings, Moon, Sun, Sparkles, LogOut, Inbox, SendHorizonal, Handshake, Megaphone } from "lucide-react";
 import { api } from "./lib/api.js";
 import { cn } from "./lib/format.js";
 import OutreachPage from "./pages/OutreachPage.jsx";
 import SearchPage from "./pages/SearchPage.jsx";
 import ResearchPage from "./pages/ResearchPage.jsx";
 import ResearchHistoryPage from "./pages/ResearchHistoryPage.jsx";
+import PromoterPage from "./pages/PromoterPage.jsx";
 import LeadsPage from "./pages/LeadsPage.jsx";
 import LeadDetailPage from "./pages/LeadDetailPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
@@ -25,6 +26,9 @@ import { Spinner } from "./components/ui.jsx";
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/research", label: "Deep research", icon: Sparkles },
+  // The other way into lead finding: start from a product you sell rather than
+  // from a description of who you want, so it belongs beside deep research.
+  { to: "/promoter", label: "SaaS Promoter", icon: Megaphone },
   { to: "/search", label: "Quick search", icon: Search },
   { to: "/leads", label: "All leads", icon: Users },
   // `badge` marks the one item that carries a count. Sits directly under the
@@ -177,6 +181,7 @@ export default function App() {
           <Route path="/search" element={<SearchPage />} />
           <Route path="/research" element={<ResearchPage />} />
           <Route path="/research/history" element={<ResearchHistoryPage />} />
+          <Route path="/promoter" element={<PromoterPage />} />
           <Route path="/leads" element={<LeadsPage />} />
           <Route path="/leads/:id" element={<LeadDetailPage />} />
           <Route path="/outreach" element={<OutreachPage />} />

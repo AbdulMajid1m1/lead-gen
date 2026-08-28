@@ -7,6 +7,7 @@ import * as leads from "../controllers/subControllers/leadController.js";
 import * as discovery from "../controllers/subControllers/discoveryController.js";
 import * as stats from "../controllers/subControllers/statsController.js";
 import * as research from "../controllers/subControllers/researchController.js";
+import * as promoter from "../controllers/subControllers/promoterController.js";
 import * as outreach from "../controllers/subControllers/outreachController.js";
 import * as campaigns from "../controllers/subControllers/campaignController.js";
 import * as signatures from "../controllers/subControllers/signatureController.js";
@@ -55,6 +56,21 @@ router.post("/discovery-runs/:id/cancel", validate({ params: idParam }), discove
 router.post("/research", discoveryLimiter, validate({ body: research.researchSchema }), research.startResearch);
 router.get("/research-history", validate({ query: research.historySchema }), research.getHistory);
 router.get("/research-runs/:id/grid", validate({ params: idParam }), research.getResearchGrid);
+
+// ─── SaaS promoter: sell someone else's product instead of our own ───────────
+// A product URL is researched into a profile and a drafted ICP, and the ICP is
+// then edited and saved by a person. That save is the gate: POST /runs answers
+// 403 until it has happened, so no one is ever contacted on the strength of a
+// profile nobody read. The runs it launches are ordinary discovery runs, read
+// back through /discovery-runs and /research-runs above.
+router.get("/promoter/products", promoter.listProducts);
+router.post("/promoter/products", discoveryLimiter, validate({ body: promoter.productCreateSchema }), promoter.createProduct);
+router.get("/promoter/products/:id", validate({ params: idParam }), promoter.getProduct);
+router.patch("/promoter/products/:id", writeLimiter, validate({ params: idParam, body: promoter.productPatchSchema }), promoter.patchProduct);
+router.put("/promoter/products/:id/icp", writeLimiter, validate({ params: idParam, body: promoter.icpApproveSchema }), promoter.approveProductIcp);
+router.post("/promoter/products/:id/research", discoveryLimiter, validate({ params: idParam }), promoter.researchProduct);
+router.post("/promoter/products/:id/runs", discoveryLimiter, validate({ params: idParam, body: promoter.runLaunchSchema }), promoter.launchRun);
+router.post("/promoter/products/:id/archive", writeLimiter, validate({ params: idParam }), promoter.archiveProduct);
 
 // ─── Leads ────────────────────────────────────────────────────────────────────
 router.get("/leads", validate({ query: leads.listSchema }), leads.listLeads);

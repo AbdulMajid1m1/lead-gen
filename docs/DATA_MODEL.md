@@ -65,6 +65,7 @@ These are what make re-running the pipeline safe:
 | `Signal` | `@@unique([companyId, type, dedupeKey])` | one signal per underlying instance |
 | `Lead` | `@@unique([companyId])` | one lead per company |
 | `DedupeKey` | `@@unique([kind, value])` | an identity belongs to exactly one company |
+| `PromotedProduct` | `@@unique([url])` | re-pasting a product's URL re-opens it instead of splitting its runs across two rows |
 
 ## Notable design choices
 
@@ -80,3 +81,8 @@ These are what make re-running the pipeline safe:
   Cloudflare wall and an SSRF block are all distinguishable after the fact.
 - **`GeoPlace`** exists because Nominatim's usage policy *requires* caching —
   it is a compliance artefact, not just a performance one.
+- **`PromotedProduct.icpApprovedAt` is the SaaS promoter's gate.** A run cannot
+  be planned or launched while it is null, and editing the ICP clears it — an
+  approval timestamp sitting over text that changed after it was read is the one
+  state the gate exists to make impossible. The researched fields around it
+  carry the page each claim came from, like every other derived row here.

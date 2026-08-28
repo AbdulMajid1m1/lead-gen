@@ -24,6 +24,12 @@ model DiscoveryRun {
   searchQueryId String?
   searchQuery   SearchQuery? @relation(fields: [searchQueryId], references: [id])
 
+  /// Set when this run is sourcing leads for a promoted SaaS product rather
+  /// than for the agency's own services. Drives the PROMOTE plan mode and tells
+  /// the compose step which product an email is pitching.
+  promotedProductId String?
+  promotedProduct   PromotedProduct? @relation(fields: [promotedProductId], references: [id], onDelete: SetNull)
+
   /// the ordered plan the planner produced from the query
   plan  Json
   /// { companiesFound, crawled, blocked, jobsFound, leadsCreated, errors }
@@ -47,6 +53,7 @@ model DiscoveryRun {
 
   @@index([status])
   @@index([createdAt])
+  @@index([promotedProductId, createdAt])
 }
 
 model DiscoveryRunStep {

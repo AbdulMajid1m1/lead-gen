@@ -7,6 +7,7 @@ import { MIN_RESULTS_BEFORE_DISCOVER, AI_MAX_SEARCH_CALLS } from "../../configs/
 import { expandLocation } from "../research/brief.js";
 import { pickDisplayPhone, pickWhatsAppNumber } from "../outreach/phoneRank.js";
 import { sendPolicyFor, isRoleAddress } from "../outreach/sendPolicy.js";
+import { icpToSearchStrategies, icpToParsedQuery } from "../promoter/icp.js";
 
 /**
  * Turns a StructuredQuery into database results and, when the database cannot
@@ -489,4 +490,105 @@ export const buildResearchPlan = (parsed, brief) => {
   steps.push({ ordinal: ordinal++, kind: "SNAPSHOT", label: "Save the results to history", params: {} });
 
   return { steps, estimatedSeconds: steps.length * 30, mode: "RESEARCH" };
+};
+
+
+/**
+ * Build the plan for a promote run — sourcing leads for one named product.
+ *
+ * Deliberately the same step kinds as buildResearchPlan, so the runner executes
+ * almost all of it unchanged. What differs is where the targeting comes from: a
+ * research run is aimed by a parsed sentence, a promote run by the product's
+ * approved ICP, and the ICP is the only authority. Two consequences show up
+ * below — hiring is used whenever the ICP asks for it, because a job posting is
+ * the strongest buying signal this system can actually detect; and the map
+ * engine is skipped rather than given default categories, because sampling
+ * restaurants for an HR platform spends the run's budget on leads the ICP
+ * already excludes.
+ */
+export const buildPromotePlan = (product, options = {}) => {
+  // The human gate, enforced where the work is planned rather than only where
+  // it is launched: an unapproved ICP is one nobody has read, and every lead
+  // this plan would source gets emailed.
+  if (!product?.icpApprovedAt) throw new Error("This product's ICP has not been approved yet.");
+  const icp = product.icp || {};
+  // The same reading of the ICP the run itself is given, so the plan's map
+  // categories, job-title needles and market cannot disagree with what
+  // DB_MATCH and the aggregators go on to filter by.
+  const q = icpToParsedQuery(icp).query;
+
+  const steps = [];
+  let ordinal = 0;
+
+  steps.push({
+    ordinal: ordinal++,
+    kind: "DB_MATCH",
+    label: "Include matching companies already in the database",
+    params: {},
+  });
+
+  const strategies = (icpToSearchStrategies(icp) || []).slice(0, options.maxSearchCalls || AI_MAX_SEARCH_CALLS);
+  strategies.forEach((strategy, index) => {
+    steps.push({
+      ordinal: ordinal++,
+      kind: "AI_DISCOVER",
+      label: `AI web search — ${strategy.label}`,
+      params: { strategyIndex: index, maxCompanies: 12 },
+    });
+  });
+
+  // Hiring, whenever the ICP names a job posting as evidence. The aggregator
+  // finds employers this database has never seen; the ATS probe confirms the
+  // posting on the company's own board rather than trusting the aggregator.
+  const wantsHiring = (icp.buyingSignals || []).some((s) => s?.detectableVia === "JOB_POSTING");
+  if (wantsHiring) {
+    steps.push({
+      ordinal: ordinal++,
+      kind: "AGGREGATOR",
+      label: "Search public job aggregators for matching live postings",
+      params: { jobTitleContains: q.jobTitleContains, postedWithinDays: 30, location: q.location?.name || null },
+    });
+    steps.push({
+      ordinal: ordinal++,
+      kind: "ATS_PROBE",
+      label: "Check the companies' own job boards",
+      params: {},
+    });
+  }
+
+  // The map engine only earns its place when the ICP names both a real place
+  // and an industry that OpenStreetMap actually models. Without an industry
+  // there is no honest default here: a research run can fall back to sampling
+  // local businesses because its query asked for a place, but a promote run
+  // would just be buying leads its own ICP disqualifies.
+  const cities = q.location?.cities?.length ? q.location.cities.slice(0, 2) : [q.location?.name].filter(Boolean);
+  const categories = (q.industries || []).slice(0, 2);
+  if (cities.length && categories.length) {
+    for (const city of cities) {
+      for (const categoryKey of categories) {
+        steps.push({
+          ordinal: ordinal++,
+          kind: "OVERPASS",
+          label: `Map search — ${OSM_CATEGORIES[categoryKey]?.label || categoryKey} in ${city}`,
+          params: { categoryKey, location: city, radiusMeters: 12_000, limit: 100 },
+        });
+      }
+    }
+  }
+
+  steps.push({ ordinal: ordinal++, kind: "RESOLVE_MERGE", label: "Merge and de-duplicate everything found", params: {} });
+  steps.push({
+    ordinal: ordinal++,
+    kind: "CRAWL",
+    label: "Visit each website and collect published contact details",
+    params: { maxHosts: 30, maxPagesPerHost: 7, maxResolve: 15 },
+  });
+  steps.push({ ordinal: ordinal++, kind: "AI_VERIFY", label: "Verify every AI-claimed detail against a real page", params: {} });
+  steps.push({ ordinal: ordinal++, kind: "PLACES_VERIFY", label: "Cross-check each business against Google Places", params: {} });
+  steps.push({ ordinal: ordinal++, kind: "SIGNALS", label: "Derive signals from the collected evidence", params: {} });
+  steps.push({ ordinal: ordinal++, kind: "SCORE", label: "Score and rank the results", params: {} });
+  steps.push({ ordinal: ordinal++, kind: "AI_COMPOSE", label: "Write a personalised outreach email for each match", params: {} });
+  steps.push({ ordinal: ordinal++, kind: "SNAPSHOT", label: "Save the results to history", params: {} });
+
+  return { steps, estimatedSeconds: steps.length * 30, mode: "PROMOTE" };
 };

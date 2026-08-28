@@ -101,6 +101,20 @@ export const AI_COMPOSE_MAX_LEADS     = int(process.env.AI_COMPOSE_MAX_LEADS, 15
 // engines, verification fetches, email drafting), so it gets its own budget.
 export const RESEARCH_TIMEOUT_MS      = int(process.env.RESEARCH_TIMEOUT_MS, 15 * 60 * 1000);
 
+// ─── SaaS Promoter ────────────────────────────────────────────────────────────
+// A promote run does three AI stages before it sources anything (crawl the
+// product site, extract the product, draft the ICP), so it carries its own
+// budget rather than borrowing the research one.
+export const PROMOTER_RUN_BUDGET_USD = Number(process.env.PROMOTER_RUN_BUDGET_USD || 1.0);
+// How many pages of the product's own site to read. The pages that matter —
+// home, pricing, features, customers, about — are few and known; a deep crawl
+// of a marketing site adds noise, not signal.
+export const PROMOTER_MAX_PRODUCT_PAGES = int(process.env.PROMOTER_MAX_PRODUCT_PAGES, 8);
+// Deliberately small. Reply rates roughly halve between a 50-recipient campaign
+// and a 1,000-recipient one, so the product's default is a batch a human can
+// actually read before it sends.
+export const PROMOTER_MAX_LEADS_PER_RUN = int(process.env.PROMOTER_MAX_LEADS_PER_RUN, 50);
+
 // ─── Third-party discovery sources (all optional) ─────────────────────────────
 export const OVERPASS_URL   = process.env.OVERPASS_URL   || "https://overpass-api.de/api/interpreter";
 export const NOMINATIM_URL  = process.env.NOMINATIM_URL  || "https://nominatim.openstreetmap.org";

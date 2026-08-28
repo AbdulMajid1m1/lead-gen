@@ -19,7 +19,7 @@ import { SIGNAL_CATALOG } from "../signals/signalCatalog.js";
  * PROMPT_VERSION is stored on every AI-derived row, so a lead found last month
  * can still be explained by the prompt that actually produced it.
  */
-export const PROMPT_VERSION = "1.1.0";
+export const PROMPT_VERSION = "1.2.0";
 
 const INDUSTRY_KEYS = Object.keys(OSM_CATEGORIES);
 const SIGNAL_KEYS = Object.keys(SIGNAL_CATALOG);
@@ -406,3 +406,347 @@ export const BATCH_COMPOSE_SCHEMA = {
     },
   },
 };
+
+// ═══ SaaS Promoter ════════════════════════════════════════════════════════════
+// Four stages, each with its own prompt: read the product, derive who buys it,
+// go and find those companies, then write to them about it. The first two run
+// once per product; the last two run on every discovery run launched for it.
+//
+// The same four techniques as above still apply, plus one that is specific to
+// promoting: the product block and the lead block are kept strictly separate at
+// every stage. The model may state facts about the *product* freely — they came
+// from the product's own site and the user owns them — but it may only state
+// facts about the *recipient* that appear in that lead's numbered fact list.
+// Mixing the two is how a promotional email starts inventing things about the
+// company it is addressed to.
+
+// ─── 5. Product research ──────────────────────────────────────────────────────
+// Runs over pages WE fetched from the product's own site. Never browses.
+
+export const PRODUCT_RESEARCH_SYSTEM = `You are a product analyst. You will receive pages crawled from one SaaS
+product's own website, each marked with the URL it came from. You may use ONLY
+this text.
+
+Rules:
+1. Extract only what the pages actually say. Never invent a feature, a price, a
+   customer, an integration or a claim. If the pages do not evidence a field,
+   return null or an empty array for it — a short, accurate profile is worth far
+   more than a padded one, and everything here is used to write emails to real
+   people.
+2. Every extracted item carries the sourceUrl of the page it appeared on. Use
+   only URLs from the list you were given.
+3. Copy prices, plan names and capacities exactly as printed, including the
+   currency and the billing period.
+4. differentiators are the claims the product makes about why it is different —
+   in its own words, not your interpretation of the category.
+5. proofPoints are named customers, testimonials, case studies and stated
+   results. A logo strip with no names is not a proof point.
+6. geographyCues are concrete signals about where this sells: languages offered,
+   currencies supported, regions or countries named, local compliance mentioned.
+7. targetSizeCues are any stated team or company sizes ("up to 50 employees",
+   "for growing teams of 5-250").
+8. Output JSON only, matching the schema exactly.`;
+
+export const buildProductResearchUser = ({ url, pages }) =>
+  `Product URL: ${url}
+
+Pages crawled from this site:
+${pages.map(({ url: pageUrl, text }) => `=== ${pageUrl} ===\n${String(text).slice(0, 6_000)}`).join("\n\n")}`;
+
+const sourcedValue = {
+  type: "object",
+  additionalProperties: false,
+  required: ["value", "sourceUrl"],
+  properties: {
+    value: { type: "string" },
+    sourceUrl: { type: ["string", "null"], description: "The crawled page this appeared on." },
+  },
+};
+
+export const PRODUCT_RESEARCH_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "summary", "category", "features", "pricing", "differentiators",
+             "proofPoints", "competitors", "geographyCues", "targetSizeCues"],
+  properties: {
+    name: { type: "string", description: "The product's own name, as written on the site." },
+    summary: { type: "string", description: "One paragraph: what it is and what it does for whom." },
+    category: { type: ["string", "null"], description: "The software category, e.g. \"HR management software\"." },
+    features: { type: "array", maxItems: 12, items: sourcedValue },
+    pricing: {
+      type: "array", maxItems: 8,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["plan", "price", "capacity", "sourceUrl"],
+        properties: {
+          plan: { type: "string" },
+          price: { type: ["string", "null"], description: "Exactly as printed, with currency and period." },
+          capacity: { type: ["string", "null"], description: "What the plan covers, e.g. \"up to 50 employees\"." },
+          sourceUrl: { type: ["string", "null"] },
+        },
+      },
+    },
+    differentiators: { type: "array", maxItems: 8, items: sourcedValue },
+    proofPoints: { type: "array", maxItems: 8, items: sourcedValue },
+    competitors: { type: "array", maxItems: 8, items: sourcedValue },
+    geographyCues: { type: "array", maxItems: 8, items: sourcedValue },
+    targetSizeCues: { type: "array", maxItems: 5, items: sourcedValue },
+  },
+};
+
+// ─── 6. Product → ideal customer profile ──────────────────────────────────────
+// The one stage a human reviews before anything is sourced.
+
+export const PRODUCT_ICP_SYSTEM = `You are a B2B go-to-market analyst. Derive the ideal customer profile for a
+SaaS product from the verified research below.
+
+This ICP will drive automated prospecting, so every field must be
+machine-actionable — something a researcher could filter or search on, not a
+sentiment. "HR manager or founder at a 10-100 person company still running
+payroll in spreadsheets" is usable. "Businesses that value efficiency" is not.
+
+Weigh the evidence in this order, strongest first:
+1. Named customers and case studies — who demonstrably already buys it.
+2. Pricing structure — what budget, company size and buyer it implies. A $20/mo
+   self-serve tier and a "contact sales" tier describe different buyers.
+3. The language the site speaks — who it addresses and how sophisticated it
+   assumes they are.
+4. Features and integrations — they imply the stack and the workflow.
+5. Geography and language cues — where this can actually be sold today.
+
+Rules:
+1. Be specific and falsifiable. Prefer a narrow profile you can defend to a
+   broad one that is safe.
+2. buyingSignals must be things detectable in public data. Each one names how it
+   would be detected. Job postings are the strongest and most available signal:
+   a company hiring the role your product serves has both the pain and the
+   budget, right now.
+3. disqualifiers matter as much as the target. Include the inversion trap:
+   competitors and vendors who SELL this category are not buyers of it.
+4. geographies must be places the evidence supports — a currency, a language, a
+   named region, a customer. Never guess a market from the founder's name or
+   the domain suffix.
+5. suggestedSearchQueries are 3-5 concrete, distinct web-search instructions
+   that would surface companies matching this ICP. Each must target a different
+   slice — a directory, a hiring signal, a technology footprint, a community —
+   never five rewordings of one search.
+6. Output JSON only, matching the schema exactly.`;
+
+export const buildProductIcpUser = ({ product }) =>
+  `Product: ${product.name}
+Category: ${product.category || "(not stated)"}
+Summary: ${product.summary || "(not stated)"}
+
+Features:
+${(product.features || []).map((f) => `  - ${f.value}`).join("\n") || "  (none extracted)"}
+
+Pricing:
+${(product.pricing || []).map((p) => `  - ${p.plan}: ${p.price || "?"}${p.capacity ? ` (${p.capacity})` : ""}`).join("\n") || "  (none extracted)"}
+
+What it says makes it different:
+${(product.differentiators || []).map((d) => `  - ${d.value}`).join("\n") || "  (none extracted)"}
+
+Proof it names (customers, testimonials, results):
+${(product.proofPoints || []).map((p) => `  - ${p.value}`).join("\n") || "  (none extracted)"}
+
+Competitors it names: ${(product.competitors || []).map((c) => c.value).join(", ") || "(none named)"}
+Geography cues: ${(product.geographyCues || []).map((g) => g.value).join(", ") || "(none)"}
+Team-size cues: ${(product.targetSizeCues || []).map((t) => t.value).join(", ") || "(none)"}
+
+Allowed signal vocabulary for detectableVia=SIGNAL_CATALOG: ${SIGNAL_KEYS.join(", ")}`;
+
+export const PRODUCT_ICP_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["summary", "industries", "companySize", "geographies", "buyerTitles",
+             "painPoints", "buyingSignals", "disqualifiers", "competitorsToDisplace", "suggestedSearchQueries"],
+  properties: {
+    summary: { type: "string", description: "One sentence naming the ideal customer." },
+    industries: { type: "array", maxItems: 8, items: { type: "string" }, description: "Plain-language industries, not enum keys." },
+    companySize: {
+      type: "object",
+      additionalProperties: false,
+      required: ["min", "max", "note"],
+      properties: {
+        min: { type: ["integer", "null"], description: "Minimum headcount this suits." },
+        max: { type: ["integer", "null"], description: "Maximum headcount before it is outgrown." },
+        note: { type: ["string", "null"], description: "What the evidence for that range was." },
+      },
+    },
+    geographies: {
+      type: "array", maxItems: 8,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["region", "countryCode", "reason", "priority"],
+        properties: {
+          region: { type: "string", description: "A country, city or region worth searching." },
+          countryCode: { type: ["string", "null"], description: "ISO-3166 alpha-2, uppercase." },
+          reason: { type: "string", description: "The evidence that put this market on the list." },
+          priority: { type: "integer", description: "1 is highest." },
+        },
+      },
+    },
+    buyerTitles: {
+      type: "object",
+      additionalProperties: false,
+      required: ["decisionMakers", "champions"],
+      properties: {
+        decisionMakers: { type: "array", maxItems: 8, items: { type: "string" } },
+        champions: { type: "array", maxItems: 8, items: { type: "string" } },
+      },
+    },
+    painPoints: {
+      type: "array", maxItems: 8,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["pain", "productAnswer"],
+        properties: {
+          pain: { type: "string", description: "The problem in the buyer's own terms." },
+          productAnswer: { type: "string", description: "The specific capability that answers it." },
+        },
+      },
+    },
+    buyingSignals: {
+      type: "array", maxItems: 8,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["signal", "detectableVia", "signalKey"],
+        properties: {
+          signal: { type: "string", description: "The observable event or state." },
+          detectableVia: { type: "string", enum: ["JOB_POSTING", "TECH_STACK", "COMPANY_AGE", "WEBSITE_CONTENT", "DIRECTORY_LISTING", "SIGNAL_CATALOG", "OTHER"] },
+          signalKey: { type: ["string", "null"], enum: [...SIGNAL_KEYS, null], description: "Only when detectableVia is SIGNAL_CATALOG." },
+        },
+      },
+    },
+    disqualifiers: { type: "array", maxItems: 8, items: { type: "string" } },
+    competitorsToDisplace: { type: "array", maxItems: 8, items: { type: "string" } },
+    suggestedSearchQueries: {
+      type: "array", minItems: 2, maxItems: 5,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["label", "searchInstruction", "expectedSourceTypes"],
+        properties: {
+          label: { type: "string", description: "Short human label shown as a progress step." },
+          searchInstruction: { type: "string", description: "A concrete search instruction for a researcher." },
+          expectedSourceTypes: {
+            type: "array",
+            items: { type: "string", enum: ["DIRECTORY", "NEWS", "REVIEW_SITE", "VENDOR_PAGE", "SOCIAL", "MAPS_LISTING", "COMPANY_SITE", "JOB_BOARD", "OTHER"] },
+          },
+        },
+      },
+    },
+  },
+};
+
+// ─── 7. ICP → company discovery ───────────────────────────────────────────────
+// A promote-mode variant of DISCOVER: same evidence discipline, but the target
+// is defined by an approved ICP rather than by a parsed search phrase.
+
+export const PROMOTE_DISCOVER_SYSTEM = `${DISCOVER_SYSTEM}
+
+You are searching on behalf of a specific software product, for companies that
+would BUY it. Two further rules follow from that:
+8. Never return the product itself, its competitors, or any company that sells
+   software in the same category. They are the inversion of the target — a
+   payroll vendor is not a buyer of payroll software.
+9. whyMatch must name the evidence that this company fits the ideal customer
+   profile — the hiring post, the team size, the tooling gap you actually saw on
+   the page. Not that they are "a good fit for the product".`;
+
+export const buildPromoteDiscoverUser = ({ strategy, icp, product, region, maxCompanies = 12 }) =>
+  `Strategy: ${strategy.searchInstruction}
+
+Region: ${region}
+Search in English and in the local language; company names may not be in Latin script.
+
+We are looking for companies that would buy: ${product.name} — ${product.category || "software"}.
+Ideal customer: ${icp.summary || "(not stated)"}
+
+What makes a company a match:
+${[
+  ...(icp.industries || []).map((i) => `  - Industry: ${i}`),
+  icp.companySize?.min || icp.companySize?.max
+    ? `  - Size: ${icp.companySize.min ?? "?"}-${icp.companySize.max ?? "?"} employees`
+    : null,
+  ...(icp.buyerTitles?.decisionMakers || []).slice(0, 4).map((t) => `  - Has a ${t}`),
+  ...(icp.buyingSignals || []).slice(0, 4).map((s) => `  - Shows: ${s.signal}`),
+].filter(Boolean).join("\n") || "  - (none specified)"}
+
+Must NOT be returned:
+${[
+  ...(icp.disqualifiers || []),
+  ...(icp.competitorsToDisplace || []).map((c) => `${c} and other vendors in this category`),
+  `${product.name} itself`,
+].map((e) => `  - ${e}`).join("\n")}
+
+Return at most ${maxCompanies} companies.`;
+
+// ─── 8. Promotional outreach composition ──────────────────────────────────────
+// Inherits every rule of COMPOSE_SYSTEM, then replaces the offering: the email
+// pitches one named product rather than the agency's services.
+
+export const PROMOTE_COMPOSE_SYSTEM = `${COMPOSE_SYSTEM}
+
+THIS EMAIL PROMOTES ONE NAMED PRODUCT. That changes three things and nothing
+else — every rule above still holds, especially the length, the phone-first
+formatting, the no-links rule and the ban on inventing anything.
+
+1. TWO SEPARATE SOURCES OF TRUTH. You are given a PRODUCT block and, per
+   company, a numbered FACTS list. You may state anything from the PRODUCT
+   block as fact — it came from the product's own site. You may state NOTHING
+   about the recipient that is not in that company's numbered facts. Never let a
+   product claim become a claim about the reader ("your payroll takes 15
+   minutes" is an invention; "payroll runs in 15 minutes" is the product).
+
+2. THE HOOK IS STILL THEIRS, NOT OURS. The first sentence is still the specific
+   observation from their facts that explains why you are writing to them today.
+   A hiring post, a growth marker, a tooling gap. Never open with the product,
+   never open with what it does, never open with a compliment about their
+   company. The product does not appear until after their problem does.
+
+3. ONE CAPABILITY, ONE NUMBER. The value sentence names exactly one capability
+   from the PRODUCT block, chosen because it answers the pain your hook implies,
+   and at most one concrete number from it (a price, a time, a count). A list of
+   features tells the reader only that this is a mass email.
+
+Never claim the reader uses a competitor, has a problem, or is dissatisfied
+unless one of their own numbered facts says so. Never state or imply a customer
+count, a rating or a result that is not in the PRODUCT block.`;
+
+export const buildProductBlock = ({ product }) => `PRODUCT (facts you may state about what is being offered):
+Name: ${product.name}
+What it is: ${product.summary || product.category || "software"}
+The one angle to lead with: ${product.pitchAngle || "(none set — use the summary)"}
+Capabilities you may name:
+${(product.features || []).slice(0, 6).map((f) => `  - ${f.value}`).join("\n") || "  (none)"}
+Concrete numbers you may use:
+${(product.pricing || []).slice(0, 3).map((p) => `  - ${p.plan}: ${p.price || "?"}${p.capacity ? ` for ${p.capacity}` : ""}`).join("\n") || "  (none)"}
+Why it is different:
+${(product.differentiators || []).slice(0, 4).map((d) => `  - ${d.value}`).join("\n") || "  (none)"}
+Sender: ${product.senderContext || `writing on behalf of ${product.name}`}`;
+
+export const buildPromoteComposeUser = ({ product, leads }) =>
+  `${buildProductBlock({ product })}
+
+═══ COMPANIES TO WRITE TO ═══
+Each company below has its own numbered facts. Use only that company's facts to
+describe that company.
+
+${leads
+  .map(
+    ({ index, companyName, recipientHint, facts, city = null, countryCode = null, industry = null }) =>
+      `=== Company ${index} ===
+Company: ${companyName}${industry ? `\nIndustry: ${industry}` : ""}${city || countryCode ? `\nLocation: ${[city, countryCode].filter(Boolean).join(", ")}` : ""}
+Recipient: ${recipientHint}
+Facts:
+${facts.map((f) => `  [${f.id}] ${f.text} (${f.confidenceLevel}${f.observedAt ? `, observed ${f.observedAt}` : ""})`).join("\n")}`,
+  )
+  .join("\n\n")}`;
+
+/** Same shape as BATCH_COMPOSE_SCHEMA — the compose pipeline reads both alike. */
+export const PROMOTE_COMPOSE_SCHEMA = BATCH_COMPOSE_SCHEMA;

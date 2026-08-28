@@ -20,6 +20,11 @@ enum ServiceType {
   // a SaaS like TracefyHR can be sold through the same engine — the outreach
   // email must pitch the platform, not dev services.
   HR_SOFTWARE
+  // The generalisation of the line above. A lead found by a SaaS Promoter run
+  // is selling one specific PromotedProduct, and which product that is lives on
+  // the run and the draft rather than in this enum — so promoting a second
+  // product is a row, not a migration.
+  SAAS_PRODUCT
 }
 
 enum SourceKind {

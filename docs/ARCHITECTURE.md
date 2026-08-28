@@ -169,6 +169,44 @@ discovery budget, and the deadline never skips `SIGNALS`/`SCORE`/`SNAPSHOT` —
 those are local and cheap, and skipping them would throw away the entire run's
 collected evidence.
 
+## 4c. SaaS promoter (selling someone else's product)
+
+Everything above finds companies that need *our* services and lets the strongest
+signal pick the angle. A promote run inverts that: the offering is fixed and
+known, and the question is who needs it.
+
+```
+product URL → crawl its own site → extract the product profile
+                                          ↓
+                              AI drafts an ideal customer profile
+                                          ↓
+                    ══ a human reads, edits and approves it ══   ← the gate
+                                          ↓
+              the approved ICP becomes an ordinary discovery plan
+              (mode: PROMOTE — same steps, same quarantine, same
+               verification and existence gates as deep research)
+                                          ↓
+                    compose pitches the product, not our services
+                                          ↓
+                    the existing campaign engine sends it, with
+                    sendPolicy.js applied exactly as it always is
+```
+
+**One row, not a migration.** Which product a run is selling lives on
+`DiscoveryRun.promotedProductId` and on each `LeadEmailDraft`, so promoting a
+second product adds a row rather than a `ServiceType` value.
+
+**The gate is enforced three times** — in the planner, in the service, and in
+the controller. Skipping it means emailing strangers chosen by a profile nobody
+read, so a run launched from a script or a stale browser tab must hit the same
+refusal a button does.
+
+**Product copy and recipient facts never merge.** The compose prompt receives
+them as two separate blocks: the model may state anything about the product (it
+came from the product's own site) and nothing about the reader that is not in
+that lead's numbered facts. The same grounding guard that rejects an invented
+phone number in a research email rejects it in a promotional one.
+
 ## 5. API surface
 
 Envelope is `{ success, message?, data? }` everywhere, matching the reference project.
@@ -193,6 +231,15 @@ GET   /api/research-runs/:id/grid     → { rows[], unverified[], brief, aiUsage
 GET   /api/research-history           → past runs with their saved results
 GET   /api/leads/:id/email-drafts     → drafts with the facts each was grounded on
 POST  /api/leads/:id/email-drafts     → rewrite
+
+GET   /api/promoter/products                  → { products }
+POST  /api/promoter/products          { url } → { product }   202, research runs in the background
+GET   /api/promoter/products/:id              → { product } with its recent runs
+PATCH /api/promoter/products/:id              { name?, pitchAngle?, proofLink?, senderContext? }
+PUT   /api/promoter/products/:id/icp          { icp, … } → approves it; editing via PATCH retracts approval
+POST  /api/promoter/products/:id/research     → re-read the site   202
+POST  /api/promoter/products/:id/runs         → { runId, steps }   403 until the ICP is approved
+POST  /api/promoter/products/:id/archive
 ```
 
 Rate limits: search 30/10min/IP, discover 6/hour/IP, general 300/10min/IP.
@@ -201,7 +248,13 @@ Rate limits: search 30/10min/IP, discover 6/hour/IP, general 300/10min/IP.
 
 React 19 + Vite + Tailwind v4 + TanStack Query + react-router v7.
 
-Routes: `/` dashboard · `/search` · `/leads` · `/leads/:id` · `/discovery` · `/settings`.
+Routes: `/` dashboard · `/research` · `/promoter` · `/search` · `/leads` · `/leads/:id` · `/outreach` · `/inbox` · `/clients` · `/discovery` · `/settings`.
+
+`/promoter` is one page driven by `?product=` and `?run=`: a URL bar and product
+list, then a two-column workspace with the extracted product profile on the left
+(read-only, every claim carrying the page it came from) and the editable ideal
+customer profile on the right, behind a sticky approve bar. Once approved it
+launches a run and reuses the deep-research results grid unchanged.
 
 Key components — `QueryBar` (free text plus *parsed chips* showing how the query
 was understood, each chip editable), `LeadCard` (score ring, freshness badge,

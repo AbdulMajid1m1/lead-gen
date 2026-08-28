@@ -3,11 +3,12 @@ import { parseStructured, isResearchAvailable, CostTracker } from "../llm/respon
 import {
   COMPOSE_SYSTEM, buildComposeUser, COMPOSE_SCHEMA,
   BATCH_COMPOSE_SYSTEM, buildBatchComposeUser, BATCH_COMPOSE_SCHEMA,
+  PROMOTE_COMPOSE_SYSTEM, buildPromoteComposeUser, PROMOTE_COMPOSE_SCHEMA,
   PROMPT_VERSION,
 } from "./prompts.js";
-import { initialTemplate } from "./templates.js";
+import { initialTemplate, productInitialTemplate } from "./templates.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
-import { AI_FAST_MODEL, AI_COMPOSE_MAX_LEADS } from "../../configs/envConfig.js";
+import { AI_FAST_MODEL, AI_COMPOSE_MAX_LEADS, PROMOTER_MAX_LEADS_PER_RUN } from "../../configs/envConfig.js";
 import { relativeAge } from "../scoring/decay.js";
 import { log } from "../../utils/logger.js";
 
@@ -118,7 +119,9 @@ export const bodyIsGrounded = (body, facts) => {
 export const composeEmailForLead = async ({ leadId, runId = null, tracker = null, serviceOverride = null }) => {
   const gathered = await gatherFacts(leadId);
   if (!gathered) return null;
-  const { lead, company, facts, recipientHint } = gathered;
+  // `recipient` is used by the template fallback below; leaving it out of this
+  // destructuring threw a ReferenceError on every lead whose AI draft failed.
+  const { lead, company, facts, recipientHint, recipient } = gathered;
   // The searcher's own offering wins over the lead's dominant signal: a run
   // started to sell HR software must pitch HR software, even to a company
   // whose larger signal happens to be tech hiring.
@@ -165,10 +168,10 @@ export const composeEmailForLead = async ({ leadId, runId = null, tracker = null
 const templateDraft = ({ company, lead, facts, serviceLabel, serviceKey, recipient = null }) =>
   initialTemplate({ company, facts, serviceKey: serviceKey || lead.primaryOpportunity, serviceLabel, recipient });
 
-const saveDraft = async ({ leadId, runId, draft, facts, generatedBy, model }) =>
+const saveDraft = async ({ leadId, runId, draft, facts, generatedBy, model, promotedProductId = null }) =>
   prisma.leadEmailDraft.create({
     data: {
-      leadId, runId,
+      leadId, runId, promotedProductId,
       subject: draft.subject.slice(0, 200),
       body: draft.body.slice(0, 4000),
       aboutCompany: (draft.aboutCompany || "").slice(0, 1000),
@@ -198,9 +201,17 @@ const draftIsAcceptable = (draft, facts) => {
  * system prompt per chunk) instead of one call per lead. Any lead whose AI
  * draft is missing or fails grounding falls back to the deterministic
  * template, so every lead always ends the pass with an email.
+ *
+ * Passing `product` switches the offering to one named SaaS product: the prompt
+ * trio and the fallback template change, and every draft is stamped with the
+ * product it pitches. Nothing else moves — the same grounding guard rejects the
+ * same inventions, whichever thing is being sold.
  */
-export const composeForRun = async ({ runId, leadIds, tracker, serviceOverride = null }) => {
-  const target = leadIds.slice(0, AI_COMPOSE_MAX_LEADS);
+export const composeForRun = async ({ runId, leadIds, tracker, serviceOverride = null, product = null }) => {
+  // A promote run gets its own ceiling. Its leads were all sourced against one
+  // approved ICP, so the whole set is worth writing to, where a research run's
+  // tail is speculative and deliberately cut short.
+  const target = leadIds.slice(0, product ? PROMOTER_MAX_LEADS_PER_RUN : AI_COMPOSE_MAX_LEADS);
   let written = 0;
   let templated = 0;
 
@@ -221,20 +232,28 @@ export const composeForRun = async ({ runId, leadIds, tracker, serviceOverride =
     for (let i = 0; i < gathered.length; i += BATCH_SIZE) {
       if (!isResearchAvailable()) break; // breaker may have tripped mid-pass
       const chunk = gathered.slice(i, i + BATCH_SIZE);
+      // The lead side of the payload is identical either way — only the
+      // offering differs, so a promote batch swaps the prompt trio and nothing
+      // about how the companies themselves are described.
+      const leadPayload = chunk.map((g, idx) => ({
+        index: idx + 1,
+        companyName: g.company.name,
+        recipientHint: g.recipientHint,
+        facts: g.facts,
+        city: g.company.city, countryCode: g.company.countryCode, industry: g.company.industry,
+      }));
       const result = await parseStructured({
-        system: BATCH_COMPOSE_SYSTEM,
-        user: buildBatchComposeUser({
-          leads: chunk.map((g, idx) => ({
-            index: idx + 1,
-            companyName: g.company.name,
-            serviceLabel: SERVICE_LABELS[serviceOverride || g.lead.primaryOpportunity] || "software development",
-            recipientHint: g.recipientHint,
-            facts: g.facts,
-            city: g.company.city, countryCode: g.company.countryCode, industry: g.company.industry,
-          })),
-        }),
-        schema: BATCH_COMPOSE_SCHEMA,
-        schemaName: "outreach_email_batch",
+        system: product ? PROMOTE_COMPOSE_SYSTEM : BATCH_COMPOSE_SYSTEM,
+        user: product
+          ? buildPromoteComposeUser({ product, leads: leadPayload })
+          : buildBatchComposeUser({
+              leads: leadPayload.map((l, idx) => ({
+                ...l,
+                serviceLabel: SERVICE_LABELS[serviceOverride || chunk[idx].lead.primaryOpportunity] || "software development",
+              })),
+            }),
+        schema: product ? PROMOTE_COMPOSE_SCHEMA : BATCH_COMPOSE_SCHEMA,
+        schemaName: product ? "promoted_outreach_email_batch" : "outreach_email_batch",
         model: AI_FAST_MODEL,
         timeoutMs: 120_000,
         tracker,
@@ -243,8 +262,11 @@ export const composeForRun = async ({ runId, leadIds, tracker, serviceOverride =
       for (const draft of result?.data?.emails || []) {
         const g = chunk[draft.leadIndex - 1];
         if (!g || !pending.has(g.leadId)) continue;
+        // The grounding guard is not relaxed for a promote draft: a model that
+        // invents a phone number while pitching a product has done exactly the
+        // damage this check exists to stop.
         if (!draftIsAcceptable(draft, g.facts)) continue;
-        await saveDraft({ leadId: g.leadId, runId, draft, facts: g.facts, generatedBy: "LLM", model: result.model });
+        await saveDraft({ leadId: g.leadId, runId, draft, facts: g.facts, generatedBy: "LLM", model: result.model, promotedProductId: product?.id || null });
         pending.delete(g.leadId);
         written += 1;
       }
@@ -255,12 +277,17 @@ export const composeForRun = async ({ runId, leadIds, tracker, serviceOverride =
   for (const g of pending.values()) {
     try {
       const serviceKey = serviceOverride || g.lead.primaryOpportunity;
-      const draft = templateDraft({
-        company: g.company, lead: g.lead, facts: g.facts,
-        serviceLabel: SERVICE_LABELS[serviceKey] || "software development",
-        serviceKey, recipient: g.recipient,
-      });
-      await saveDraft({ leadId: g.leadId, runId, draft, facts: g.facts, generatedBy: "RULE", model: null });
+      // A promote lead falls back to the product's own copy, never to the
+      // agency service copy — a run started to sell an HR platform must not
+      // quietly send a website-development pitch when the model is down.
+      const draft = product
+        ? productInitialTemplate({ company: g.company, facts: g.facts, product, recipient: g.recipient })
+        : templateDraft({
+            company: g.company, lead: g.lead, facts: g.facts,
+            serviceLabel: SERVICE_LABELS[serviceKey] || "software development",
+            serviceKey, recipient: g.recipient,
+          });
+      await saveDraft({ leadId: g.leadId, runId, draft, facts: g.facts, generatedBy: "RULE", model: null, promotedProductId: product?.id || null });
       written += 1;
       templated += 1;
     } catch (err) {

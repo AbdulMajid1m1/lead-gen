@@ -516,6 +516,192 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel, reci
 };
 
 /**
+ * The value sentence of a promoted-product email, varied the same deterministic
+ * way the ask and the pivot are.
+ *
+ * Every phrasing is a statement about the product or about companies in
+ * general, never about the reader. "That is where X helps" follows their own
+ * observed fact without claiming they have a problem; "your payroll is a mess"
+ * would be an invention, and inventions are what this whole file exists to
+ * prevent.
+ */
+const PRODUCT_VALUE = [
+  (name, angle) => `Companies at that stage often end up looking at ${name} — ${angle}.`,
+  (name, angle) => `That is usually where ${name} earns its place: ${angle}.`,
+  (name, angle) => `${name} is built for that moment — ${angle}.`,
+];
+
+/**
+ * The ask, product-scoped. Still one question a one-word reply answers, and
+ * still varied per company so two recipients never see the same closing line.
+ */
+const PRODUCT_CTA = [
+  "Worth a look? One word back is enough.",
+  "Want the two-line version of how it fits? A one-word reply is plenty.",
+  "Shall I send a short summary? One word back is enough.",
+];
+
+const PRODUCT_CTA_AR = [
+  "هل يستحق نظرة؟ تكفي كلمة واحدة.",
+  "هل أرسل لك ملخصاً قصيراً؟ يكفي رد بكلمة واحدة.",
+];
+
+/**
+ * The one thing an email may say about the product.
+ *
+ * Only the pitch angle, the name and the summary are allowed through — the
+ * feature list and the proof points are not, because a template cannot judge
+ * which of them answers the hook it just wrote. URLs are stripped: a link in a
+ * cold first touch measurably costs deliverability, and a product's own copy is
+ * the most likely place one hides.
+ */
+/** Products are often registered under their domain; the email says the name. */
+const productDisplayName = (product) =>
+  String(product?.name || "").trim().replace(/\.(com|net|org|io|co|ai|app|dev|sa)$/i, "");
+
+const productAngle = (product) => {
+  const raw = String(product?.pitchAngle || product?.summary || "").trim();
+  const cleaned = raw
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/\bwww\.\S+/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/[.\s]+$/, "")
+    .trim();
+  // A pitch angle that opens by naming the product would have the email say the
+  // name twice in one sentence, which reads as a banner rather than a sentence.
+  const name = productDisplayName(product);
+  if (!name || !cleaned.toLowerCase().startsWith(name.toLowerCase())) return lowerFirst(cleaned);
+  // Removing the name leaves a bare predicate ("puts payroll in one place"),
+  // which needs a subject back or the sentence it lands in has none.
+  const predicate = cleaned.slice(name.length).replace(/^[\s:—,-]+/, "");
+  return `it ${lowerFirst(predicate)}`;
+};
+
+/**
+ * Observation kinds that describe the company rather than its website.
+ *
+ * A promote email pivots from the hook straight to the product, so the two have
+ * to belong to the same thought. "Your site runs WordPress" followed by an HR
+ * platform is a non-sequitur the reader notices immediately, while "you are
+ * hiring" followed by an HR platform is the whole argument.
+ */
+const COMPANY_STATE_KINDS = new Set(["HIRING", "EXPANSION"]);
+
+/**
+ * The initial pitch for a promoted product.
+ *
+ * Same shape and the same ceilings as initialTemplate — hook from their own
+ * observed facts, one value sentence, one small ask — with the offering
+ * swapped. The rule that separates the two halves is absolute: the hook may
+ * only say what a fact says, and the product copy may only describe the
+ * product. Letting a product claim leak into the hook ("your payroll takes too
+ * long") is the failure this arrangement exists to prevent.
+ */
+export const productInitialTemplate = ({ company, facts, product, recipient = null }) => {
+  // A fact about the company's own state is preferred over the strongest
+  // observation overall, because it is the only kind of hook the product can
+  // follow without changing the subject.
+  const observation =
+    facts.find((f) => f !== facts[0] && COMPANY_STATE_KINDS.has(classifyObservation(f.text)))
+    || pickObservation(facts);
+  const hasWebsite = facts.some((f) => /^Its website is /.test(f.text));
+  let kind = classifyObservation(observation.text);
+  if (kind === "DEFAULT" && hasWebsite) kind = "HAS_SITE_DEFAULT";
+  const hook = HOOK_COPY[kind] || HOOK_COPY.DEFAULT;
+  const hookIsCompanyState = COMPANY_STATE_KINDS.has(kind);
+
+  const name = productDisplayName(product);
+  const angle = productAngle(product) || `what ${name} does`;
+
+  // As initialTemplate's, plus the one form it cannot handle: gatherFacts
+  // writes hiring facts as "It is currently hiring: …", and "I noticed it is
+  // currently hiring" leaves the reader looking for whoever "it" is.
+  const quote = (text) => {
+    if (text.startsWith(company.name)) return text;
+    const lowered = lowerFirst(text);
+    const addressed = lowered.replace(/^it is\b/, "you are").replace(/^it's\b/, "you're");
+    if (addressed !== lowered) return addressed;
+    return /^(?:currently |actively )?(?:hiring|recruiting|advertising|expanding|opening|running|using|serving)\b/.test(lowered)
+      ? `you're ${lowered}`
+      : lowered;
+  };
+
+  const firstName = recipient?.firstName?.trim();
+  const greeting = firstName ? `Hi ${firstName},` : "Hello,";
+
+  const seed = `${company.name || ""}${observation.id || ""}${name}`;
+  const cta = PRODUCT_CTA[variantIndex(seed, PRODUCT_CTA.length)];
+  const value = PRODUCT_VALUE[variantIndex(`${seed}v`, PRODUCT_VALUE.length)];
+
+  const candidate = pickSupporting(facts, observation.id);
+  const compose = (extra, askLine, valueFn) => [
+    greeting,
+    `I noticed ${quote(observation.text)}`,
+    extra ? `Also ${lowerFirst(extra.text)}` : null,
+    valueFn(name, angle),
+    askLine,
+    "Best regards",
+  ].filter(Boolean).join("\n\n");
+
+  const wordCount = (body) => body.trim().split(/\s+/).length;
+  const extraFitsAlone = candidate
+    && `Also ${lowerFirst(candidate.text)}`.split(/\s+/).length <= PARAGRAPH_WORD_LIMIT;
+
+  // Same order of surrender as initialTemplate: the second observation goes
+  // first, then the varied ask, then the varied value phrasing. The 70-word
+  // ceiling is not negotiable — these are read on a phone.
+  const shortestCta = [...PRODUCT_CTA].sort((a, b) => a.split(/\s+/).length - b.split(/\s+/).length)[0];
+  const attempts = [
+    { extra: extraFitsAlone ? candidate : null, ask: cta, val: value },
+    { extra: null, ask: cta, val: value },
+    { extra: null, ask: shortestCta, val: value },
+    { extra: null, ask: shortestCta, val: PRODUCT_VALUE[2] },
+  ];
+  const chosen =
+    attempts.find((a) => wordCount(compose(a.extra, a.ask, a.val)) <= BODY_WORD_LIMIT)
+    || attempts[attempts.length - 1];
+
+  const english = compose(chosen.extra, chosen.ask, chosen.val);
+
+  // Arabic first for a Gulf market, but only behind a company-state hook. The
+  // website-shaped Arabic openers promise a digital-presence conversation this
+  // email is not going to have, so those leads get the English message alone
+  // rather than an Arabic sentence that sets up the wrong subject.
+  const bilingual = (ARABIC.test(company.name) || ARABIC_MARKETS.has(company.countryCode))
+    && hookIsCompanyState && Boolean(hook.openerAr && hook.subjectAr);
+
+  // The product's own copy exists only in English, so the Arabic block keeps it
+  // on a line of its own. Splicing an English clause into the middle of an
+  // Arabic sentence renders as scrambled word order in most mail clients.
+  const arabic = bilingual
+    ? [
+        "مرحباً،",
+        hook.openerAr(company.name),
+        `قد يكون ${name} مناسباً هنا:`,
+        `${angle.charAt(0).toUpperCase()}${angle.slice(1)}.`,
+        PRODUCT_CTA_AR[variantIndex(`${company.name || ""}ar${name}`, PRODUCT_CTA_AR.length)],
+        "مع التحية",
+      ].join("\n\n")
+    : null;
+
+  // The hook's own subject only when the hook is about the company. Opening an
+  // HR-software email with "your website speed" is a promise the body breaks,
+  // so everything else is titled by what is actually being offered.
+  const subject = bilingual ? hook.subjectAr()
+    : hookIsCompanyState && hook.subject ? hook.subject()
+    // Verbatim, not lower-cased: the category is where an acronym lives, and
+    // "hR management software" in an inbox is worse than no subject at all.
+    : product?.category || name;
+
+  return {
+    aboutCompany: aboutFromFacts({ company, facts }),
+    subject: String(subject).slice(0, 200),
+    body: arabic ? `${arabic}\n\n———\n\n${english}` : english,
+    factIdsUsed: [observation.id, chosen.extra?.id].filter(Boolean),
+  };
+};
+
+/**
  * Follow-ups when a thread has had no reply. Deliberately shorter each time;
  * the second is also the last.
  */

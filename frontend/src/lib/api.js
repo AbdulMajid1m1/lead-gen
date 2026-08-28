@@ -99,6 +99,20 @@ export const api = {
   listEmailDrafts: (leadId) => request(`/leads/${leadId}/email-drafts`),
   regenerateEmailDraft: (leadId) => request(`/leads/${leadId}/email-drafts`, { method: "POST" }),
 
+  // ─── SaaS Promoter ─────────────────────────────────────────────────────────
+  // A product URL in, an approved ICP out, then discovery runs against it. The
+  // run these launch is an ordinary discovery run, so its progress and results
+  // are read back through subscribeToRun and getResearchGrid above.
+  listPromotedProducts: () => request("/promoter/products"),
+  createPromotedProduct: (body) => request("/promoter/products", { method: "POST", body }),
+  getPromotedProduct: (id) => request(`/promoter/products/${id}`),
+  // Saving the ICP is what approves it — the run endpoint refuses until it has.
+  savePromotedProductIcp: (id, body) => request(`/promoter/products/${id}/icp`, { method: "PUT", body }),
+  updatePromotedProduct: (id, body) => request(`/promoter/products/${id}`, { method: "PATCH", body }),
+  researchPromotedProduct: (id) => request(`/promoter/products/${id}/research`, { method: "POST" }),
+  launchPromoterRun: (id, body) => request(`/promoter/products/${id}/runs`, { method: "POST", body }),
+  archivePromotedProduct: (id) => request(`/promoter/products/${id}/archive`, { method: "POST" }),
+
   // ─── Outreach: mailbox, sending, reply tracking, follow-ups ────────────────
   // ─── Bulk campaigns & stats ─────────────────────────────────────────────────
   listLeadIds: (params) => request(`/leads/ids${qs(params)}`),

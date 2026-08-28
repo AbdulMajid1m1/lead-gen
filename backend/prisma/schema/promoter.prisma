@@ -1,0 +1,83 @@
+/// A SaaS product this console promotes on someone's behalf.
+///
+/// The rest of the engine sells one thing — the agency's own services — and
+/// decides the angle from whichever signal a lead happens to show. A promoted
+/// product inverts that: the offering is fixed and known up front, and the
+/// question becomes who needs it. Everything downstream (discovery, scoring,
+/// composition) still runs through the same pipeline; this row is what tells it
+/// what is being sold.
+///
+/// Research fields are extracted from the product's own site and each carries
+/// the page it was seen on, exactly like every other derived row in the system.
+/// The ICP is different: the model drafts it, a human edits it, and the edited
+/// version is authoritative from then on — nothing may source leads until
+/// icpApprovedAt is set.
+model PromotedProduct {
+  id     String                @id @default(cuid())
+  /// normalised origin (scheme + host, no trailing slash) — one product per site
+  url    String                @unique @db.VarChar(300)
+  name   String                @db.VarChar(160)
+  status PromotedProductStatus @default(RESEARCHING)
+
+  // ─── Product research: extracted from the product's own pages ──────────────
+  /// one paragraph on what the product is
+  summary         String? @db.VarChar(2000)
+  /// free-text category, e.g. "HR management software"
+  category        String? @db.VarChar(120)
+  /// [{ value, sourceUrl }]
+  features        Json?
+  /// [{ plan, price, capacity, sourceUrl }]
+  pricing         Json?
+  /// [{ value, sourceUrl }] — what makes it different, in its own words
+  differentiators Json?
+  /// [{ value, sourceUrl }] — testimonials, named customers, stated results
+  proofPoints     Json?
+  /// [{ value, sourceUrl }] — competitors the site names itself
+  competitors     Json?
+  /// [{ value, sourceUrl }] — languages, currencies, regions the site signals
+  geographyCues   Json?
+  /// the pages that were crawled to produce all of the above
+  researchedUrls  Json?
+
+  // ─── ICP: AI-drafted, human-approved ──────────────────────────────────────
+  /// industries, companySize, geographies, buyerTitles, painPoints,
+  /// buyingSignals, disqualifiers, competitorsToDisplace, suggestedSearchQueries
+  icp           Json?
+  /// The human gate. Discovery refuses to run while this is null, so no lead is
+  /// ever sourced against an ICP nobody read.
+  icpApprovedAt DateTime?
+
+  // ─── Compose assets: the product-scoped equivalent of templates.js copy ────
+  /// the single value proposition an email is allowed to lead with
+  pitchAngle    String? @db.VarChar(400)
+  /// ONE link, used in follow-ups only — never in a first email
+  proofLink     String? @db.VarChar(300)
+  /// who is sending and how they relate to the product, in one sentence
+  senderContext String? @db.VarChar(400)
+
+  /// audit trail for the research + ICP generation
+  model         String?  @db.VarChar(60)
+  promptVersion String?  @db.VarChar(20)
+  /// { calls, searchCalls, inputTokens, outputTokens, estCostUsd }
+  aiUsage       Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  runs   DiscoveryRun[]
+  drafts LeadEmailDraft[]
+
+  @@index([status, updatedAt])
+}
+
+/// Where a promoted product sits in the two-gate flow.
+///
+/// ICP_REVIEW is the gate that matters: it is the one state a human must move
+/// the product out of, and it exists precisely so an unreviewed ICP cannot
+/// silently start contacting people.
+enum PromotedProductStatus {
+  RESEARCHING // crawling the site and drafting the ICP
+  ICP_REVIEW  // waiting on a human to read and approve the ICP
+  READY       // approved — discovery runs may be launched
+  FAILED      // the site could not be researched (blocked, unreachable, empty)
+  ARCHIVED
+}

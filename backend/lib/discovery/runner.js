@@ -8,7 +8,11 @@ import { discoverViaWebSearch, resolveCandidates } from "../research/discover.js
 import { verifyCandidateClaims, passesExistenceGate } from "../research/verifier.js";
 import { composeForRun } from "../research/compose.js";
 import { snapshotGrid } from "../research/grid.js";
-import { CostTracker } from "../llm/responses.js";
+import { CostTracker, searchAndParse, citationsAreGrounded, isResearchAvailable } from "../llm/responses.js";
+import { PROMOTE_DISCOVER_SYSTEM, buildPromoteDiscoverUser, DISCOVER_SCHEMA } from "../research/prompts.js";
+import { ensureSource, recordSourceRecord } from "../provenance/recorder.js";
+import { normalizeCompanyName } from "../../utils/normalize.js";
+import { icpToSearchStrategies } from "../promoter/icp.js";
 import { buildWhere } from "../nlquery/planner.js";
 import pLimit from "p-limit";
 import { ingestAggregators } from "../ingest/aggregatorIngest.js";
@@ -16,7 +20,7 @@ import { crossCheckWithPlaces } from "../verify/placesCrossCheck.js";
 import { createPlacesBudget, isPlacesAvailable } from "../adapters/googlePlaces.js";
 import { evaluateCompanySignals } from "../signals/signalEngine.js";
 import { scoreCompany } from "../scoring/scoreEngine.js";
-import { DISCOVERY_MAX_COMPANIES, DISCOVERY_MAX_CRAWL_HOSTS, DISCOVERY_TIMEOUT_MS, RESEARCH_TIMEOUT_MS, AI_MAX_CITATION_FETCHES, CRAWLER_CONCURRENCY, GOOGLE_PLACES_MAX_CALLS_PER_RUN } from "../../configs/envConfig.js";
+import { DISCOVERY_MAX_COMPANIES, DISCOVERY_MAX_CRAWL_HOSTS, DISCOVERY_TIMEOUT_MS, RESEARCH_TIMEOUT_MS, AI_MAX_CITATION_FETCHES, AI_MAX_CANDIDATES, AI_SEARCH_MODEL, CRAWLER_CONCURRENCY, GOOGLE_PLACES_MAX_CALLS_PER_RUN, PROMOTER_MAX_LEADS_PER_RUN } from "../../configs/envConfig.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("discovery");
@@ -82,9 +86,19 @@ const executeRun = async (runId, parsed) => {
   }
   inFlight += 1;
 
-  const planned = await prisma.discoveryRun.findUnique({ where: { id: runId }, select: { plan: true } });
-  const isResearch = planned?.plan?.mode === "RESEARCH";
-  const deadline = Date.now() + (isResearch ? RESEARCH_TIMEOUT_MS : DISCOVERY_TIMEOUT_MS);
+  const planned = await prisma.discoveryRun.findUnique({ where: { id: runId }, select: { plan: true, promotedProductId: true } });
+  // A promote run does at least as much work as a research run — the same two
+  // discovery engines, the same verification tail — so it gets the same budget.
+  // On the short one it was hitting the deadline mid-crawl.
+  const isLongRun = ["RESEARCH", "PROMOTE"].includes(planned?.plan?.mode);
+  const deadline = Date.now() + (isLongRun ? RESEARCH_TIMEOUT_MS : DISCOVERY_TIMEOUT_MS);
+  // The promoted product, read once for the whole run. Re-reading it per step
+  // would let an edit made mid-run change the offering halfway through a batch
+  // of emails. Loaded straight from prisma rather than through the promoter
+  // service, which imports this file.
+  const product = planned?.promotedProductId
+    ? await prisma.promotedProduct.findUnique({ where: { id: planned.promotedProductId } })
+    : null;
   const stats = { companiesFound: 0, crawled: 0, blocked: 0, jobsFound: 0, leadsCreated: 0, errors: 0 };
   const touchedCompanyIds = new Set();
   // Spend governor for the AI steps. Shared across the whole run so one search
@@ -122,7 +136,7 @@ const executeRun = async (runId, parsed) => {
     emit(runId, { type: "step.started", ordinal: step.ordinal, kind: step.kind, label: step.label });
 
     try {
-      const counts = await runStep({ kind: step.kind, params: planStep.params || {}, parsed, runId, touchedCompanyIds, stats, deadline, tracker });
+      const counts = await runStep({ kind: step.kind, params: planStep.params || {}, parsed, runId, touchedCompanyIds, stats, deadline, tracker, product });
       await prisma.discoveryRunStep.update({
         where: { id: step.id },
         data: { status: "SUCCEEDED", finishedAt: new Date(), counts },
@@ -156,7 +170,7 @@ const executeRun = async (runId, parsed) => {
   logger.info({ runId, status, ...stats }, "discovery run complete");
 };
 
-const runStep = async ({ kind, params, parsed, runId, touchedCompanyIds, stats, deadline, tracker }) => {
+const runStep = async ({ kind, params, parsed, runId, touchedCompanyIds, stats, deadline, tracker, product = null }) => {
   switch (kind) {
     case "OVERPASS": {
       const res = await ingestArea({
@@ -353,6 +367,20 @@ const runStep = async ({ kind, params, parsed, runId, touchedCompanyIds, stats, 
 
 
     case "AI_DISCOVER": {
+      // A promote run has no ResearchBrief at all — its targeting lives in the
+      // product's approved ICP — so it must never reach the brief lookup below.
+      if (product) {
+        const strategies = icpToSearchStrategies(product.icp || {}) || [];
+        const strategy = strategies[params.strategyIndex ?? 0];
+        if (!strategy) throw new Error("The product's ICP contains no search strategy at this position.");
+
+        const res = await discoverForProduct({ runId, strategy, product, tracker, maxCompanies: params.maxCompanies || 12 });
+        if (!res.ok) throw new Error(`AI web search unavailable: ${res.reason}`);
+        stats.companiesFound += res.created;
+        emit(runId, { type: "progress", stats });
+        return { found: res.created, uncited: res.uncited, pagesSearched: res.searched, notes: res.notes };
+      }
+
       const brief = await loadBrief(runId);
       if (!brief) throw new Error("No research brief is available for this run.");
       const strategy = brief.searchStrategies?.[params.strategyIndex ?? 0];
@@ -367,9 +395,18 @@ const runStep = async ({ kind, params, parsed, runId, touchedCompanyIds, stats, 
 
     case "RESOLVE_MERGE": {
       const brief = await loadBrief(runId);
+      // A promote run has no brief, so its exclusions and its market come from
+      // the ICP. The country matters beyond tidiness: a company resolved
+      // without one reads as an unknown market to sendPolicyFor(), which
+      // answers RESTRICTED and withholds every lead the run just produced.
+      const icp = product ? product.icp || {} : null;
       const res = await resolveCandidates(runId, {
-        exclusions: brief?.exclusions || [],
-        countryCode: brief?.location?.countryCode || null,
+        exclusions: icp
+          ? [...(icp.competitorsToDisplace || []), product.name].filter(Boolean)
+          : brief?.exclusions || [],
+        countryCode: icp
+          ? primaryGeography(icp)?.countryCode || null
+          : brief?.location?.countryCode || null,
       });
       // Newly resolved companies join the crawl/scoring set for the later steps.
       const resolved = await prisma.aiCandidate.findMany({
@@ -420,6 +457,13 @@ const runStep = async ({ kind, params, parsed, runId, touchedCompanyIds, stats, 
         orderBy: { score: "desc" },
         select: { id: true },
       });
+      if (product) {
+        const res = await composeForRun({
+          runId, leadIds: leads.slice(0, PROMOTER_MAX_LEADS_PER_RUN).map((l) => l.id), tracker, product,
+        });
+        emit(runId, { type: "progress", stats });
+        return res;
+      }
       const brief = await loadBrief(runId);
       const res = await composeForRun({ runId, leadIds: leads.map((l) => l.id), tracker, serviceOverride: brief?.service || null });
       emit(runId, { type: "progress", stats });
@@ -446,4 +490,127 @@ export const getRunWithSteps = (runId) =>
 const loadBrief = async (runId) => {
   const row = await prisma.researchBrief.findUnique({ where: { runId } });
   return row?.brief ?? null;
+};
+
+/** The market a promote run is aimed at — priority 1 is highest, not first. */
+const primaryGeography = (icp) =>
+  [...(icp?.geographies || [])].sort((a, b) => (a?.priority ?? 99) - (b?.priority ?? 99))[0] || null;
+
+const PROMOTE_CLAIM_FIELDS = [
+  ["email", "EMAIL", "email"],
+  ["phone", "PHONE", "phone"],
+  ["whatsapp", "WHATSAPP", "whatsapp"],
+  ["addressText", "ADDRESS", "address"],
+  ["website", "WEBSITE", "website"],
+];
+
+/**
+ * One promote web-search strategy, landed as quarantined candidates.
+ *
+ * This is deliberately the same quarantine as discoverViaWebSearch writes —
+ * AiCandidate rows with their citations, nothing touching Contact or
+ * ExtractedFact — so RESOLVE_MERGE, AI_VERIFY and the existence gate treat a
+ * promote candidate exactly like a research one. It is written here rather than
+ * reusing that function because discoverViaWebSearch takes a ResearchBrief and
+ * offers no way to substitute the system prompt, and a promote search that ran
+ * on DISCOVER_SYSTEM would lose the one rule that matters most for it: never
+ * return the product's own competitors as buyers of it.
+ */
+const discoverForProduct = async ({ runId, strategy, product, tracker, maxCompanies = 12 }) => {
+  if (!isResearchAvailable()) return { ok: false, reason: "AI_UNAVAILABLE", created: 0 };
+
+  const icp = product.icp || {};
+  const geography = primaryGeography(icp);
+  const result = await searchAndParse({
+    system: PROMOTE_DISCOVER_SYSTEM,
+    user: buildPromoteDiscoverUser({ strategy, icp, product, region: geography?.region || "worldwide", maxCompanies }),
+    schema: DISCOVER_SCHEMA,
+    schemaName: "company_discovery",
+    model: AI_SEARCH_MODEL,
+    searchContextSize: "medium",
+    country: geography?.countryCode || null,
+    city: null,
+    tracker,
+  });
+
+  if (!result?.data?.companies) {
+    return { ok: false, reason: tracker?.lastError ? "AI_ERROR" : "NO_RESULTS", created: 0 };
+  }
+
+  const source = await ensureSource({
+    kind: "AI_WEB_SEARCH",
+    name: "AI web search",
+    attribution: `Companies surfaced by OpenAI web search (${result.model}); every claim independently verified before use.`,
+  });
+
+  const record = await recordSourceRecord({
+    sourceId: source.id,
+    externalId: `${runId}:${strategy.label}`.slice(0, 255),
+    url: null,
+    payload: {
+      strategy, promotedProductId: product.id,
+      companies: result.data.companies, searchNotes: result.data.searchNotes,
+      sources: result.sources, model: result.model,
+    },
+  });
+
+  const existing = await prisma.aiCandidate.count({ where: { runId } });
+  let created = 0;
+  let uncited = 0;
+
+  for (const company of result.data.companies) {
+    if (existing + created >= AI_MAX_CANDIDATES) break;
+    if (!company?.name?.trim()) continue;
+    if (!normalizeCompanyName(company.name)) continue;
+
+    // Same citation guard: a source URL the search never retrieved means the
+    // model wrote a plausible link rather than reporting one it read.
+    const grounded = citationsAreGrounded(company.sourceUrls || [], result.sources || []);
+
+    try {
+      await prisma.aiCandidate.create({
+        data: {
+          runId,
+          sourceRecordId: record.id,
+          strategyLabel: strategy.label.slice(0, 120),
+          name: company.name.slice(0, 160),
+          nameLocal: company.nameLocal?.slice(0, 160) ?? null,
+          claimedWebsite: company.website?.slice(0, 300) ?? null,
+          claimedCity: company.city?.slice(0, 80) ?? null,
+          industryGuess: company.industryGuess?.slice(0, 60) ?? null,
+          whyMatch: (company.whyMatch || "").slice(0, 300),
+          matchConfidence: grounded ? (company.matchConfidence || "MEDIUM") : "LOW",
+          uncited: !grounded,
+          status: grounded ? "PENDING" : "REJECTED_UNCITED",
+          rejectedReason: grounded ? null : "Cited a source page that the web search did not actually retrieve.",
+          claims: {
+            create: PROMOTE_CLAIM_FIELDS
+              .filter(([key]) => company[key])
+              .map(([key, field, sourceKey]) => ({
+                field,
+                value: String(company[key]).slice(0, 500),
+                foundOnUrl: company.detailSources?.[sourceKey]?.slice(0, 600)
+                  || company.sourceUrls?.[0]?.slice(0, 600)
+                  || null,
+              })),
+          },
+          citations: {
+            create: (company.sourceUrls || []).slice(0, 5).map((url) => ({
+              url: String(url).slice(0, 600),
+              inSources: (result.sources || []).some((s) => s === url),
+            })),
+          },
+        },
+      });
+      created += 1;
+      if (!grounded) uncited += 1;
+    } catch (err) {
+      // A duplicate name inside one run is expected; anything else is logged.
+      if (!String(err.message).includes("Unique constraint")) {
+        logger.debug({ name: company.name, msg: err.message }, "promote candidate not recorded");
+      }
+    }
+  }
+
+  return { ok: true, created, uncited, searched: (result.sources || []).length, notes: result.data.searchNotes };
 };

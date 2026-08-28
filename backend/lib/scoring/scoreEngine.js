@@ -310,6 +310,10 @@ const SERVICE_LABELS = {
   SAAS_DEV: "SaaS development",
   CUSTOM_SOFTWARE: "custom software development",
   HR_SOFTWARE: "HR software",
+  // Promote runs pitch a named product, so the label the composer actually uses
+  // comes from the PromotedProduct row. This is the fallback for anything that
+  // renders a service name without that context.
+  SAAS_PRODUCT: "software",
 };
 
 const rationaleForService = (service, contributions) => {
