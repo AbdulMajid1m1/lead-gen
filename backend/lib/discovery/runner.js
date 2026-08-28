@@ -367,7 +367,10 @@ const runStep = async ({ kind, params, parsed, runId, touchedCompanyIds, stats, 
 
     case "RESOLVE_MERGE": {
       const brief = await loadBrief(runId);
-      const res = await resolveCandidates(runId, { exclusions: brief?.exclusions || [] });
+      const res = await resolveCandidates(runId, {
+        exclusions: brief?.exclusions || [],
+        countryCode: brief?.location?.countryCode || null,
+      });
       // Newly resolved companies join the crawl/scoring set for the later steps.
       const resolved = await prisma.aiCandidate.findMany({
         where: { runId, companyId: { not: null } },

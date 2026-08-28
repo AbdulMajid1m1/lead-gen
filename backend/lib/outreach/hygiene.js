@@ -53,12 +53,49 @@ export const domainHasMx = async (domain) => {
   return ok;
 };
 
-/** A 1-3 letter local part that isn't a known real mailbox — the deobfuscator-bug signature. */
+/**
+ * The English word-endings that are left over when a word is split on "at".
+ *
+ * The deobfuscator used to treat the "at" inside an ordinary word as a hidden
+ * at-sign, so "…more information point it…" became `inform@ion.it`. The split
+ * always leaves the tail of the word standing where the domain should be, and
+ * that tail comes from a small closed set — a real business domain is never
+ * "ion" or "ment". Checking the *domain* rather than the local part is what
+ * separates these from `careers@stripe.com`, which has the same shape.
+ *
+ * An MX lookup does not settle it: `ion.it`, `ion.live` and `ion.be` are real
+ * domains that accept mail, so the address is deliverable — to a company that
+ * has nothing to do with the lead. That is worse than a bounce.
+ */
+const WORD_TAIL_LABELS = new Set([
+  "ion", "ions", "ional", "ing", "ings", "ment", "ments", "ients", "ient",
+  "ure", "ures", "ed", "es", "e", "h", "or", "ors", "us", "ic", "ics", "ive",
+]);
+
+/** Shortest reconstructed word we will treat as evidence of the split. */
+const MIN_SPLIT_WORD = 7;   // "operate" is the shortest real case seen
+
+/**
+ * True when the address cannot be a real mailbox.
+ *
+ * Two signatures, both from the same extraction bug: a local part too short to
+ * be a mailbox, and a domain whose first label is an English word-ending that
+ * only a mid-word split could have produced.
+ */
 export const emailLooksMangled = (value) => {
-  const m = /^([^@\s]+)@[^@\s]+$/.exec(String(value || ""));
+  const m = /^([^@\s]+)@([^@\s]+)$/.exec(String(value || ""));
   if (!m) return true;
   const local = m[1].toLowerCase();
-  return local.length <= 3 && !SHORT_LOCAL_ALLOW.has(local);
+  const [label] = m[2].toLowerCase().split(".");
+
+  if (local.length <= 3 && !SHORT_LOCAL_ALLOW.has(local)) return true;
+
+  // `inform` + `at` + `ion` is `information`; `careers` + `at` + `stripe` is
+  // not a word, and `stripe` is not a word-ending, so it is left alone.
+  if (WORD_TAIL_LABELS.has(label) && /^[a-z]+$/.test(local)
+      && local.length + 2 + label.length >= MIN_SPLIT_WORD) return true;
+
+  return false;
 };
 
 const suppress = async (contact, reason) => {

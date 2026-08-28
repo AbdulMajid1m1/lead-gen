@@ -124,6 +124,11 @@ enum SignalType {
   CONTACT_FORM_FOUND
   GROWTH_MENTION
   MANUAL_PROCESS_HINT
+  NAMED_CONTACT_FOUND
+  // Disqualifiers. Weightless by design: they do not lower a score, they mark a
+  // lead as one that must not be contacted at all.
+  BUSINESS_CLOSED
+  WEBSITE_NOT_OWNED
 }
 
 enum LeadType {

@@ -34,9 +34,43 @@ const REGION_HINTS = [
   { match: /\b(?:united states|usa|america)\b/i, countryCode: "US", cities: ["New York", "Los Angeles"] },
 ];
 
+/**
+ * City → country, for the markets this product actually sells into.
+ *
+ * REGION_HINTS only recognises country and region names, so a city-level query
+ * ("dental clinics in Abu Dhabi") produced a location with no countryCode at
+ * all. That is not cosmetic: a company created from that run inherits no
+ * country, and sendPolicyFor() reads a missing country as an unknown market and
+ * answers RESTRICTED — so the leads a city query finds were withheld from
+ * outreach even where cold email is plainly lawful. Written out by hand, like
+ * REGION_HINTS, so a wrong answer is visible and correctable.
+ */
+const CITY_HINTS = [
+  [/\b(?:dubai|abu dhabi|sharjah|ajman|fujairah|ras al khaimah)\b/i, "AE"],
+  [/\b(?:riyadh|jeddah|dammam|khobar|mecca|makkah|medina|madinah)\b/i, "SA"],
+  [/\bdoha\b/i, "QA"],
+  [/\bkuwait city\b/i, "KW"],
+  [/\b(?:manama|seef|juffair)\b/i, "BH"],
+  [/\b(?:muscat|salalah)\b/i, "OM"],
+  [/\b(?:london|manchester|birmingham|leeds|glasgow|liverpool|bristol|edinburgh|sheffield|nottingham|leicester|cardiff|newcastle|belfast)\b/i, "GB"],
+  [/\b(?:paris|lyon|marseille|nice|toulouse|bordeaux|lille)\b/i, "FR"],
+  [/\b(?:dublin|cork|galway)\b/i, "IE"],
+  [/\b(?:brussels|antwerp|ghent)\b/i, "BE"],
+  [/\b(?:lisbon|lisboa|porto)\b/i, "PT"],
+  [/\b(?:new york|los angeles|chicago|austin|miami|houston|boston|seattle|denver|atlanta)\b/i, "US"],
+];
+
 /** Fill countryCode + cities for a country/region-level location. */
 export const expandLocation = (location) => {
   if (!location?.name) return location;
+
+  // A city name carries its country even though it expands to no city list —
+  // the place is already specific enough to search.
+  if (!location.countryCode) {
+    const city = CITY_HINTS.find(([re]) => re.test(location.name));
+    if (city) location = { ...location, countryCode: city[1] };
+  }
+
   if (location.cities?.length) return location;
   const hint = REGION_HINTS.find((h) => h.match.test(location.name));
   if (!hint) return location;

@@ -85,17 +85,39 @@ const REMOVE_MARKERS = /(?:-|\.|_)?(?:REMOVE(?:THIS|ME)?|ENTFERNEN|KEIN[- ]?SPAM
 const alternation = (words) => words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
 
 /**
+ * A separator word must stand alone. `\b` is the obvious tool and the wrong
+ * one: it is defined on ASCII word characters, so it never fires beside "ät"
+ * or "chiocciola"'s accented cousins. These lookarounds say the same thing in
+ * a way that is blind to the alphabet — the character either side may be
+ * whitespace, a bracket or punctuation, but never a letter or a digit.
+ */
+const FENCE_OPEN = "(?<![A-Za-z0-9])";
+const FENCE_CLOSE = "(?![A-Za-z0-9])";
+
+/**
  * One address written with word separators. Both the at *and* the dot must be
  * disguised — requiring only the "at" is what once turned the prose
  * "Learn more at stripe.com" into the contact "an@stripe.com".
+ *
+ * Every separator is fenced so it cannot be flanked by an ASCII letter or
+ * digit, which is what stops the match running *through* an ordinary word.
+ * (Plain `\b` cannot do this job: "ät" begins with a non-word character, so
+ * `\bät\b` never matches and the German forms are lost.) Without the fence
+ * the "at" inside
+ * "information" is a separator like any other, so "…more information point
+ * it…" resolved to the contact `inform@ion.it` — and because half of
+ * PLAUSIBLE_TLD is also ordinary English ("it", "in", "me", "be", "live",
+ * "today", "run", "clinic", "digital"), the TLD check below could not catch it.
+ * A real obfuscation always leaves a boundary: "info (at) acme punkt de" and
+ * "buero ät muster-bau punkt de" both still decode.
  */
 const WORD_OBFUSCATED_RE = new RegExp(
   [
     "\\b([A-Za-z0-9._%+-]{1,64})",
-    `\\s*[\\[({<]?\\s*(?:${alternation(AT_WORDS)})\\s*[\\])}>]?\\s*`,
+    `\\s*[\\[({<]?\\s*${FENCE_OPEN}(?:${alternation(AT_WORDS)})${FENCE_CLOSE}\\s*[\\])}>]?\\s*`,
     "([A-Za-z0-9-]{1,63})",
-    `(?:\\s*[\\[({<]?\\s*(?:${alternation(DOT_WORDS)}|\\.)\\s*[\\])}>]?\\s*([A-Za-z0-9-]{1,63}))?`,
-    `\\s*[\\[({<]?\\s*(?:${alternation(DOT_WORDS)})\\s*[\\])}>]?\\s*`,
+    `(?:\\s*[\\[({<]?\\s*(?:${FENCE_OPEN}(?:${alternation(DOT_WORDS)})${FENCE_CLOSE}|\\.)\\s*[\\])}>]?\\s*([A-Za-z0-9-]{1,63}))?`,
+    `\\s*[\\[({<]?\\s*${FENCE_OPEN}(?:${alternation(DOT_WORDS)})${FENCE_CLOSE}\\s*[\\])}>]?\\s*`,
     "([A-Za-z]{2,24})\\b",
   ].join(""),
   "gi",
