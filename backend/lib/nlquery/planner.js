@@ -586,8 +586,12 @@ export const buildPromotePlan = (product, options = {}) => {
     .sort((a, b) => (a?.priority ?? 99) - (b?.priority ?? 99))
     .map((g) => g?.region)
     .filter(Boolean);
+  // Two markets by two categories. Each map step is now one Overpass request
+  // per tag, which is what made multi-tag categories work at all but also makes
+  // a busy one take a couple of minutes; six steps would spend the whole run's
+  // time budget before the crawler ever started.
   const cities = (rankedCities.length ? rankedCities : [q.location?.name].filter(Boolean)).slice(0, 2);
-  const categories = (q.industries || []).slice(0, 3);
+  const categories = (q.industries || []).slice(0, 2);
   if (cities.length && categories.length) {
     for (const city of cities) {
       for (const categoryKey of categories) {
