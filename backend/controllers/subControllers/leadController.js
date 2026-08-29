@@ -20,6 +20,11 @@ export const listSchema = z.object({
   /// country was never established. Values come from GET /api/leads/countries.
   country: z.string().max(400).optional(),
   industry: z.string().max(120).optional(),
+  /// Narrows the list to the leads a SaaS Promoter product actually sourced,
+  /// so the promoter page can reuse this endpoint rather than growing a second
+  /// listing that filters and pages differently from All leads.
+  productId: z.string().min(1).max(64).optional(),
+  runId: z.string().min(1).max(64).optional(),
   freshness: z.enum(["NEW_TODAY", "NEW_THIS_WEEK", "THIS_MONTH", "THIS_QUARTER", "OLDER"]).optional(),
   sort: z.enum(["score", "freshness", "created"]).default("created"),
   page: z.coerce.number().int().min(1).default(1),
@@ -68,6 +73,9 @@ const buildListWhere = (q, { ignoreStatus = false } = {}) => {
     }
   }
   if (q.industry) where.AND.push({ company: { industry: { contains: q.industry, mode: "insensitive" } } });
+  // A lead belongs to a promoted product through the run that found it.
+  if (q.productId) where.AND.push({ discoveryRun: { promotedProductId: q.productId } });
+  if (q.runId) where.AND.push({ discoveryRunId: q.runId });
   if (q.freshness && FRESHNESS_DAYS[q.freshness]) {
     where.AND.push({ newestEvidenceAt: { gte: new Date(Date.now() - FRESHNESS_DAYS[q.freshness] * 86_400_000) } });
   } else if (q.freshness === "OLDER") {
