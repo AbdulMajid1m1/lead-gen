@@ -578,7 +578,7 @@ const HowItWorks = () => (
 /* ── 2–4. One product ────────────────────────────────────────────────────── */
 
 function ProductWorkspace({ productId, params, setParams }) {
-  const runId = params.get("run");
+  const explicitRunId = params.get("run");
   const queryClient = useQueryClient();
   const [form, setForm] = useState(null);
   const [baseline, setBaseline] = useState(null);
@@ -597,6 +597,13 @@ function ProductWorkspace({ productId, params, setParams }) {
     queryFn: () => api.getPromotedProduct(productId).then((data) => data.product),
     refetchInterval: (query) => (query.state.data?.status === "RESEARCHING" ? 4000 : false),
   });
+
+  // Which run the results below show. The URL wins when it names one, so a
+  // link to a particular run still opens it; otherwise fall back to the newest.
+  // Without that fallback, finishing a run and returning to the product showed
+  // only the profile again — the leads were there, listed one click away under
+  // "Find leads", and the page looked like it had found nothing.
+  const runId = explicitRunId || product?.runs?.[0]?.runId || null;
 
   const dirty = Boolean(form && baseline) && JSON.stringify(form) !== JSON.stringify(baseline);
   // Read inside the sync effect below, which must not re-run when dirty flips.
