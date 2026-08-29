@@ -19,7 +19,7 @@ import { SIGNAL_CATALOG } from "../signals/signalCatalog.js";
  * PROMPT_VERSION is stored on every AI-derived row, so a lead found last month
  * can still be explained by the prompt that actually produced it.
  */
-export const PROMPT_VERSION = "1.3.0";
+export const PROMPT_VERSION = "1.4.0";
 
 const INDUSTRY_KEYS = Object.keys(OSM_CATEGORIES);
 const SIGNAL_KEYS = Object.keys(SIGNAL_CATALOG);
@@ -776,33 +776,89 @@ Return at most ${maxCompanies} companies. Fewer, including none, is expected.`;
 
 export const PROMOTE_COMPOSE_SYSTEM = `${COMPOSE_SYSTEM}
 
-THIS EMAIL PROMOTES ONE NAMED PRODUCT. That changes three things and nothing
-else — every rule above still holds, especially the length, the phone-first
-formatting, the no-links rule and the ban on inventing anything.
+THIS EMAIL PROMOTES ONE NAMED PRODUCT. Every rule above still holds — the
+length, the phone-first formatting, the no-links rule, the ban on inventing
+anything. What follows replaces the offering and adds one step before writing.
 
-1. TWO SEPARATE SOURCES OF TRUTH. You are given a PRODUCT block and, per
-   company, a numbered FACTS list. You may state anything from the PRODUCT
-   block as fact — it came from the product's own site. You may state NOTHING
-   about the recipient that is not in that company's numbered facts. Never let a
-   product claim become a claim about the reader ("your payroll takes 15
-   minutes" is an invention; "payroll runs in 15 minutes" is the product).
+═══ FIRST, WORK OUT WHAT THIS BUSINESS IS ═══
+Before you write a word, read that company's numbered facts and answer three
+questions to yourself. Do not put this reasoning in the email; it decides what
+the email says.
 
-2. THE HOOK IS STILL THEIRS, NOT OURS. The first sentence is still the specific
-   observation from their facts that explains why you are writing to them today.
-   A hiring post, a growth marker, a tooling gap. Never open with the product,
-   never open with what it does, never open with a compliment about their
-   company. The product does not appear until after their problem does.
+  a. WHAT KIND OF ORGANISATION IS THIS, concretely? Not "a business" — a
+     52-pupil-per-year private school, a construction contractor, a dental
+     clinic with three branches. The industry, the city and the size cues in
+     the facts are what you have.
+  b. WHAT DOES ITS WORKFORCE ACTUALLY LOOK LIKE? A school runs term-time
+     contracts, teaching assistants and a September intake. A construction firm
+     runs site crews on timesheets and overtime. A clinic runs shift rotas
+     across long opening hours. An agency runs salaried staff and freelancers.
+     This is the difference between an email that lands and one that does not.
+  c. WHICH ONE PAIN, from the BUYER PAINS list you are given, is most likely to
+     bite THIS organisation, given (a) and (b)? Pick exactly one. The list is
+     ordered by nothing; relevance to this company is the only criterion.
 
-3. ONE CAPABILITY, ONE NUMBER. The value sentence names exactly one capability
-   from the PRODUCT block, chosen because it answers the pain your hook implies,
-   and at most one concrete number from it (a price, a time, a count). A list of
-   features tells the reader only that this is a mass email.
+═══ THEN WRITE ═══
+1. TWO SEPARATE SOURCES OF TRUTH. You may state anything in the PRODUCT block
+   as fact — it came from the product's own site. You may state NOTHING about
+   the recipient that is not in that company's numbered facts. Never let a
+   product claim become a claim about the reader: "payroll runs in 15 minutes"
+   is the product; "your payroll takes 15 minutes" is an invention.
+
+2. NEVER ASSERT THEIR PAIN — ASK ABOUT IT. You do not know that this school is
+   running leave on paper, and telling a stranger what is wrong with their
+   operation is how a cold email gets deleted. Put the pain as a question they
+   can answer, or as a plain statement about that kind of organisation:
+     GOOD: "How are you handling leave approvals across the term-time staff?"
+     GOOD: "Most schools your size are still doing this on a shared spreadsheet."
+     BAD:  "Your leave process is manual and costing you time."
+   A question is also the strongest possible close, because answering it IS the
+   reply you want.
+
+3. THE HOOK IS THEIRS, NOT OURS. The first sentence is the specific, verifiable
+   reason you are writing to them TODAY, drawn from their facts: they are
+   hiring, they are opening a branch, they run an active careers page. Never
+   open with the product, never with what it does, never with a compliment.
+   When the facts carry nothing time-shaped, open with what they are and where
+   — "You're running three branches in Dubai" — and go straight to the pain
+   question. Never manufacture urgency the facts do not support.
+
+4. ONE CAPABILITY, ONE NUMBER. The value sentence names exactly one capability
+   from the PRODUCT block — the one that answers the pain you chose — and at
+   most one concrete number from it. A list of features tells the reader only
+   that this is a mass email.
+
+5. CONNECT THE THREE. Hook, pain and capability must be one thought. A hiring
+   hook goes with an onboarding or headcount pain, and the capability that
+   answers it. A hook about a new branch goes with multi-site staff, not with
+   invoicing. If you cannot connect them, change the pain, not the hook.
+
+6. THE ASK IS SMALL AND SPECIFIC. One question, answerable in a word or a line.
+   Never a meeting, never a demo, never a calendar link — asking for time in a
+   first cold email roughly halves the reply rate. Prefer an ask that is the
+   natural next sentence after the pain question, not a bolted-on "interested?".
 
 Never claim the reader uses a competitor, has a problem, or is dissatisfied
 unless one of their own numbered facts says so. Never state or imply a customer
-count, a rating or a result that is not in the PRODUCT block.`;
+count, a rating or a result that is not in the PRODUCT block. Nothing about
+their website, their CMS or their page speed belongs in this email at all —
+that is a different product being sold by someone else.`;
 
-export const buildProductBlock = ({ product }) => `PRODUCT (facts you may state about what is being offered):
+/**
+ * What the writer is allowed to say about the offering, plus who it is for.
+ *
+ * The buyer pains come from the approved ICP. They were the missing half: the
+ * profile already says "payroll is re-keyed every month → automated salary
+ * calculations", which is exactly the sentence that makes an email land, and
+ * the composer had never been shown it. Without them every email fell back to
+ * the product's own tagline, which reads as a brochure whoever receives it.
+ */
+export const buildProductBlock = ({ product }) => {
+  const icp = product.icp || {};
+  const pains = (icp.painPoints || []).filter((p) => p?.pain);
+  const titles = [...(icp.buyerTitles?.decisionMakers || []), ...(icp.buyerTitles?.champions || [])];
+
+  return `PRODUCT (facts you may state about what is being offered):
 Name: ${product.name}
 What it is: ${product.summary || product.category || "software"}
 The one angle to lead with: ${product.pitchAngle || "(none set — use the summary)"}
@@ -812,7 +868,15 @@ Concrete numbers you may use:
 ${(product.pricing || []).slice(0, 3).map((p) => `  - ${p.plan}: ${p.price || "?"}${p.capacity ? ` for ${p.capacity}` : ""}`).join("\n") || "  (none)"}
 Why it is different:
 ${(product.differentiators || []).slice(0, 4).map((d) => `  - ${d.value}`).join("\n") || "  (none)"}
-Sender: ${product.senderContext || `writing on behalf of ${product.name}`}`;
+Sender: ${product.senderContext || `writing on behalf of ${product.name}`}
+
+BUYER PAINS — pick exactly ONE, the one most likely to bite this particular
+organisation, and pair it with the capability shown beside it:
+${pains.map((p) => `  - ${p.pain}\n      answered by: ${p.productAnswer || "(no capability named)"}`).join("\n") || "  (none in the approved profile — fall back to the angle above)"}
+
+Who usually decides this: ${titles.slice(0, 6).join(", ") || "(not stated)"}
+Typical size that fits: ${icp.companySize?.min ?? "?"}-${icp.companySize?.max ?? "?"} staff`;
+};
 
 export const buildPromoteComposeUser = ({ product, leads }) =>
   `${buildProductBlock({ product })}
