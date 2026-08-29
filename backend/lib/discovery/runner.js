@@ -323,7 +323,14 @@ const runStep = async ({ kind, params, parsed, runId, touchedCompanyIds, stats, 
     case "SIGNALS": {
       let evaluated = 0;
       for (const companyId of touchedCompanyIds) {
-        if (Date.now() > deadline) break;
+        // No deadline check, deliberately. SIGNALS is one of the FINALISING
+        // steps the run loop above refuses to skip, for the stated reason that
+        // the time budget must only stop further *collection*. Breaking here
+        // honoured the budget and defeated that: on an overrunning run every
+        // company was left with no signals, SCORE then rejected all of them as
+        // NO_SIGNALS, and a run that had crawled 27 sites successfully reported
+        // zero leads. This loop touches only rows we already hold — it makes no
+        // network request — so there is nothing here for a budget to protect.
         try {
           await evaluateCompanySignals(companyId);
           evaluated += 1;
