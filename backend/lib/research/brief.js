@@ -32,6 +32,11 @@ const REGION_HINTS = [
   { match: /\bpakistan\b/i, countryCode: "PK", cities: ["Karachi", "Lahore", "Islamabad"] },
   { match: /\bindia\b/i, countryCode: "IN", cities: ["Mumbai", "Bangalore"] },
   { match: /\b(?:united states|usa|america)\b/i, countryCode: "US", cities: ["New York", "Los Angeles"] },
+  // US states are named as often as countries in this product's queries, and a
+  // state is exactly the case REGION_HINTS exists for: too coarse to search as
+  // one point, but carrying a country the company would otherwise never get.
+  { match: /\bflorida\b/i, countryCode: "US", cities: ["Miami", "Orlando"] },
+  { match: /\btexas\b/i, countryCode: "US", cities: ["Houston", "Dallas"] },
 ];
 
 /**
@@ -58,6 +63,10 @@ const CITY_HINTS = [
   [/\b(?:brussels|antwerp|ghent)\b/i, "BE"],
   [/\b(?:lisbon|lisboa|porto)\b/i, "PT"],
   [/\b(?:new york|los angeles|chicago|austin|miami|houston|boston|seattle|denver|atlanta)\b/i, "US"],
+  // Florida and Texas metros, so a city-level query in either state resolves a
+  // country the same way "Dubai" does.
+  [/\b(?:orlando|tampa|jacksonville|fort lauderdale|west palm beach|st petersburg|sarasota|naples|boca raton)\b/i, "US"],
+  [/\b(?:dallas|san antonio|fort worth|el paso|arlington|plano|corpus christi|lubbock|mckinney|sugar land)\b/i, "US"],
 ];
 
 /** Fill countryCode + cities for a country/region-level location. */
