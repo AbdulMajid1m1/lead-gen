@@ -20,6 +20,7 @@ import {
 import { DiscoveryProgress } from "../components/DiscoveryProgress.jsx";
 import EmailComposer from "../components/EmailComposer.jsx";
 import { BulkSendSheet } from "../components/BulkSendSheet.jsx";
+import { useAuth } from "../lib/auth.jsx";
 import { ProvenanceDrawer } from "../components/ProvenanceDrawer.jsx";
 import { COUNTRY_OPTIONS, countryLabel } from "../lib/countries.js";
 import {
@@ -761,6 +762,11 @@ const PIPELINE = [
 
 function LeadsTab({ productId, product, activeRun, onOpenTab }) {
   const navigate = useNavigate();
+  const { can } = useAuth();
+  // Bulk sending is Outreach, not SaaS Promoter: someone who may run the
+  // promoter but was not given Outreach should not be shown a send bar the API
+  // would refuse. Selecting leads stays useful for everything else the tab does.
+  const canSend = can("outreach");
   const grid = useServerGrid({
     initialSort: "created",
     initialPageSize: 25,
@@ -1023,7 +1029,7 @@ function LeadsTab({ productId, product, activeRun, onOpenTab }) {
         stickyHeader
       />
 
-      {selectedIds.size > 0 && (
+      {canSend && selectedIds.size > 0 && (
         <BulkBar
           count={selectedIds.size}
           meta={selectionMeta}
@@ -1033,7 +1039,7 @@ function LeadsTab({ productId, product, activeRun, onOpenTab }) {
       )}
 
       <BulkSendSheet
-        open={Boolean(sheet)}
+        open={canSend && Boolean(sheet)}
         onClose={() => setSheet(null)}
         initialChannels={sheet?.channels || ["EMAIL"]}
         selection={{ ids: selectedIdList, ...selectionMeta }}

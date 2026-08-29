@@ -132,6 +132,14 @@ model OutreachThread {
   followUpsSent  Int       @default(0)
   nextFollowUpAt DateTime?
 
+  /// The console account that opened this conversation. Null on threads that
+  /// predate attribution, and on anything the scheduler started by itself.
+  startedById String?
+  startedBy   AdminUser? @relation("OutreachThreadStartedBy", fields: [startedById], references: [id], onDelete: SetNull)
+  /// Their name at the time, so the thread still says who reached out after the
+  /// account is deleted and the foreign key above has gone to null.
+  startedByName String? @db.VarChar(160)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -140,6 +148,7 @@ model OutreachThread {
   @@index([leadId])
   @@index([status, nextFollowUpAt])
   @@index([waAccountId, status])
+  @@index([startedById])
 }
 
 model OutreachMessage {
@@ -164,6 +173,16 @@ model OutreachMessage {
   receivedAt  DateTime?
   fromAddress String?     @db.VarChar(255)
 
+  /// Who sent this, on OUTBOUND messages. The mailbox already records *which
+  /// identity* the mail left from; this records *which colleague* pressed send,
+  /// which is a different question once more than one person can send. Null
+  /// means the system sent it — a scheduled follow-up with nobody behind it.
+  sentById String?
+  sentBy   AdminUser? @relation("OutreachMessageSentBy", fields: [sentById], references: [id], onDelete: SetNull)
+  /// Snapshot of their name, so a deleted account does not erase the record of
+  /// who contacted a lead.
+  sentByName String? @db.VarChar(160)
+
   /// HARD | SOFT, on BOUNCE messages only.
   ///
   /// The distinction decides what happens to the address: a hard bounce means
@@ -179,6 +198,8 @@ model OutreachMessage {
   @@index([threadId, createdAt])
   /// Powers the rolling bounce rate, which is read on every campaign tick.
   @@index([kind, createdAt])
+  /// "What did this person send, and when" — the per-sender activity view.
+  @@index([sentById, sentAt])
 }
 
 // ─── Bulk campaigns ───────────────────────────────────────────────────────────
@@ -241,12 +262,19 @@ model OutreachCampaign {
   /// stopped for no stated reason.
   pausedReason String? @db.VarChar(300)
 
+  /// Who launched this campaign. Every send it makes is attributed to them, so
+  /// a bulk run is as accountable as a message typed by hand.
+  createdById String?
+  createdBy   AdminUser? @relation("OutreachCampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdByName String? @db.VarChar(160)
+
   createdAt   DateTime  @default(now())
   completedAt DateTime?
 
   recipients CampaignRecipient[]
 
   @@index([status, createdAt])
+  @@index([createdById])
 }
 
 model CampaignRecipient {

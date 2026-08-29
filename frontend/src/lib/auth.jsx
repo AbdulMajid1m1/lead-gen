@@ -10,6 +10,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, setUnauthorizedHandler } from "./api.js";
+import { can as hasPermission, canManageTeam, isReadOnly } from "./permissions.js";
 
 const AuthContext = createContext(null);
 
@@ -65,9 +66,28 @@ export const AuthProvider = ({ children }) => {
     return () => setUnauthorizedHandler(null);
   }, [sessionExpired]);
 
+  /**
+   * What this account may see, as decided by the server.
+   *
+   * `/auth/me` already expands a super admin's implicit "everything", so the
+   * client never re-derives the rule — it only reads the answer. These checks
+   * shape the UI; they are not the security boundary, and every one of them is
+   * enforced again by the API.
+   */
+  const can = useCallback((...keys) => hasPermission(user, ...keys), [user]);
+
   const value = useMemo(
-    () => ({ user, checking, signIn, signOut, sessionExpired }),
-    [user, checking, signIn, signOut, sessionExpired],
+    () => ({
+      user,
+      checking,
+      signIn,
+      signOut,
+      sessionExpired,
+      can,
+      canManageTeam: canManageTeam(user),
+      readOnly: isReadOnly(user),
+    }),
+    [user, checking, signIn, signOut, sessionExpired, can],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

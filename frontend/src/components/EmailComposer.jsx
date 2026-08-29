@@ -3,11 +3,12 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   X, Copy, Send, RefreshCw, ChevronDown, ChevronRight, Mail, Phone,
-  MessageCircle, MapPin, CheckCircle2, Clock, CornerUpLeft, Settings, PenLine,
+  MessageCircle, MapPin, CheckCircle2, Clock, CornerUpLeft, Settings, PenLine, Lock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../lib/api.js";
-import { Badge, Button, Input, Select, Spinner, Textarea } from "./ui.jsx";
+import { Badge, Button, EmptyState, Input, Select, Spinner, Textarea } from "./ui.jsx";
+import { useAuth } from "../lib/auth.jsx";
 import { cn, formatDateTime } from "../lib/format.js";
 
 /**
@@ -25,6 +26,17 @@ export const THREAD_STATUS_META = {
 
 const followUpDue = (t) =>
   t.status === "AWAITING_REPLY" && t.nextFollowUpAt && new Date(t.nextFollowUpAt) <= new Date();
+
+/**
+ * Who sent one outbound message.
+ *
+ * The live relation first, then the name snapshot the row carries — that
+ * fallback is what keeps a lead's history readable after the colleague's
+ * account has been removed. Null is a real answer, not missing data: it means
+ * the scheduler sent it with nobody at the keyboard.
+ */
+export const senderName = (message) =>
+  message?.sentBy?.name || message?.sentBy?.email || message?.sentByName || null;
 
 export const ThreadStatusChip = ({ thread }) => {
   if (!thread) return null;
@@ -92,7 +104,48 @@ const SignaturePicker = ({ signatures, signature, value, onChange, channel }) =>
   );
 };
 
-export default function EmailComposer({ leadId, name, contacts = null, address = null, onClose, initialChannel = "EMAIL" }) {
+/**
+ * The composer, gated on the Outreach permission.
+ *
+ * A wrapper rather than an early return inside the component below: the panel
+ * runs a dozen hooks, and a conditional return above them would break the rules
+ * of hooks. Gating here also means the queries it makes — mailboxes, devices,
+ * signatures — are never fired for someone the API would refuse them to.
+ *
+ * The API refuses the send regardless; this exists so the refusal arrives as an
+ * explanation up front rather than as a failed click at the end of a draft.
+ */
+export default function EmailComposer(props) {
+  const { can } = useAuth();
+  if (can("outreach")) return <OutreachComposer {...props} />;
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-[var(--scrim)] backdrop-blur-[3px]" onClick={props.onClose} aria-hidden />
+      <aside
+        role="dialog"
+        aria-label="Outreach"
+        className="relative flex h-full w-full max-w-lg flex-col border-l border-[var(--border)] bg-[var(--surface-raised)] shadow-[var(--shadow-lg)]"
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
+          <h2 className="truncate text-sm font-semibold">{props.name}</h2>
+          <button onClick={props.onClose} className="rounded-lg p-1.5 text-[var(--text-muted)] hover:bg-[var(--surface-sunken)]" aria-label="Close">
+            <X size={16} />
+          </button>
+        </header>
+        <div className="flex flex-1 items-center px-5">
+          <EmptyState
+            icon={Lock}
+            title="Outreach is not part of your access"
+            description="You can read this lead, but sending to it needs the Outreach section. A super admin can grant it from Team & permissions."
+          />
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function OutreachComposer({ leadId, name, contacts = null, address = null, onClose, initialChannel = "EMAIL" }) {
   const [showFacts, setShowFacts] = useState(false);
   const [to, setTo] = useState("");
   const [subject, setSubject] = useState("");
@@ -345,7 +398,9 @@ export default function EmailComposer({ leadId, name, contacts = null, address =
                         {m.kind === "BOUNCE"
                           ? `Bounced${m.bounceType ? ` — ${m.bounceType.toLowerCase()}` : ""}${m.bounceCode ? ` (${m.bounceCode})` : ""}`
                           : m.direction === "INBOUND" ? `Reply from ${m.fromAddress || "them"}`
-                          : m.kind === "FOLLOW_UP" ? "Follow-up sent" : "Sent"}
+                          // Who pressed send, not which mailbox it left from —
+                          // with a shared inbox those are different questions.
+                          : `${m.kind === "FOLLOW_UP" ? "Follow-up" : "Sent"} by ${senderName(m) || "the system"}`}
                       </span>
                       <span className="tnum normal-case">{formatDateTime(m.sentAt || m.receivedAt || m.createdAt)}</span>
                     </p>

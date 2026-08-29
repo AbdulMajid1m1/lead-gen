@@ -293,6 +293,9 @@ const CampaignCard = ({ campaign, defaultOpen = false }) => {
               {campaign.total} leads · {campaign.mode === "AUTO"
                 ? `auto · ≤${campaign.dailyLimit}/day, ${String(campaign.windowStart).padStart(2, "0")}:00–${String(campaign.windowEnd).padStart(2, "0")}:00`
                 : `every ${campaign.paceSeconds}s`} · started {formatDateTime(campaign.createdAt)}
+              {/* Every message this queue sends is recorded against whoever
+                  launched it, so the run is as attributable as a typed email. */}
+              {campaign.createdByName && ` by ${campaign.createdByName}`}
             </span>
           </span>
         </button>

@@ -86,6 +86,9 @@ const ThreadRow = ({ thread, onFollowUp, onJudge, busy }) => {
   const lead = thread.lead;
   const last = thread.messages?.[0];
   const sender = thread.account?.email || thread.waAccount?.label;
+  // Which mailbox it left from answers "how"; this answers "who" — the two came
+  // apart the moment more than one person could send from the same inbox.
+  const owner = thread.startedBy?.name || thread.startedBy?.email || thread.startedByName;
 
   // Only the newest inbound message is worth quoting — an outbound preview is
   // just our own copy read back to us.
@@ -134,6 +137,7 @@ const ThreadRow = ({ thread, onFollowUp, onJudge, busy }) => {
           <p className="mt-0.5 truncate text-[11px] text-[var(--text-subtle)]">
             {thread.recipientEmail}
             {sender && ` · via ${sender}`}
+            {owner && ` · by ${owner}`}
             {lead?.primaryOpportunity && ` · ${SERVICE_LABELS[lead.primaryOpportunity] || lead.primaryOpportunity}`}
           </p>
 

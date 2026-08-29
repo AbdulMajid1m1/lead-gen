@@ -6,6 +6,7 @@ import { sendPolicyFor, isRoleAddress, isSendBlocked } from "./sendPolicy.js";
 import { domainHasMx, emailLooksMangled, BROKER_DOMAIN_RE } from "./hygiene.js";
 import { bounceRate, shouldPauseForBounces, warmupDailyCap, BOUNCE_PAUSE_THRESHOLD } from "./deliverability.js";
 import { composeEmailForLead, gatherFacts } from "../research/compose.js";
+import { toActor } from "./attribution.js";
 import { whatsappInitialTemplate } from "../research/templates.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
 import { log } from "../../utils/logger.js";
@@ -117,7 +118,12 @@ export { pickWhatsAppNumber };
 export const createCampaign = async ({
   name, leadIds, channels, accountId = null, waAccountId = null, paceSeconds = 45,
   mode = "DIRECT", dailyLimit = null, windowStart = 9, windowEnd = 18, tzOffsetMinutes = 0,
+  createdBy = null,
 }) => {
+  // The launcher owns every message the queue will send on their behalf, so the
+  // attribution is resolved once here rather than per send — a campaign drained
+  // over three days must still credit the person who started it.
+  const actor = toActor(createdBy);
   const wantEmail = channels.includes("EMAIL");
   const wantWa = channels.includes("WHATSAPP");
 
@@ -196,15 +202,24 @@ export const createCampaign = async ({
       mode,
       dailyLimit: mode === "AUTO" ? (dailyLimit || AUTO_DEFAULT_DAILY_LIMIT) : null,
       windowStart, windowEnd, tzOffsetMinutes,
+      createdById: actor?.id ?? null, createdByName: actor?.name ?? null,
       status: sendable.length ? "RUNNING" : "COMPLETED",
       completedAt: sendable.length ? null : new Date(),
       recipients: { create: recipients },
     },
   });
 
-  logger.info({ campaignId: campaign.id, leads: leads.length, sendable: sendable.length, channels }, "campaign created");
+  logger.info({ campaignId: campaign.id, leads: leads.length, sendable: sendable.length, channels, createdBy: actor?.id || "system" }, "campaign created");
   return { ok: true, campaign: await campaignWithProgress(campaign.id), skippedUpfront: recipients.length - sendable.length };
 };
+
+/**
+ * The console account a campaign's sends are recorded against: whoever launched
+ * it. Null for campaigns created before attribution existed, which then read as
+ * system sends rather than being misattributed to someone.
+ */
+const campaignActor = (campaign) =>
+  campaign.createdById ? { id: campaign.createdById, name: campaign.createdByName } : null;
 
 /** One send attempt for one recipient on one channel. Never throws. */
 const attemptEmail = async (campaign, recipient) => {
@@ -243,6 +258,7 @@ const attemptEmail = async (campaign, recipient) => {
     const res = await sendInitialEmail({
       account, leadId: recipient.leadId,
       to: recipient.emailDetail, subject: draft.subject, body: draft.body, draftId: draft.id,
+      sentBy: campaignActor(campaign),
     });
     return res.ok ? ["SENT", recipient.emailDetail] : [/failed/i.test(res.error) ? "FAILED" : "SKIPPED", res.error.slice(0, 300)];
   } catch (err) {
@@ -266,6 +282,7 @@ const attemptWhatsApp = async (campaign, recipient) => {
 
     const res = await sendWhatsAppForLead({
       leadId: recipient.leadId, phone: recipient.waDetail, message, waAccountId: device.id,
+      sentBy: campaignActor(campaign),
     });
     return res.ok ? ["SENT", recipient.waDetail] : [/not (?:connected|linked)|device/i.test(res.error) ? "FAILED" : "SKIPPED", res.error.slice(0, 300)];
   } catch (err) {
@@ -416,6 +433,9 @@ export const campaignWithProgress = async (campaignId) => {
     windowStart: campaign.windowStart, windowEnd: campaign.windowEnd,
     tzOffsetMinutes: campaign.tzOffsetMinutes,
     accountId: campaign.accountId, waAccountId: campaign.waAccountId,
+    // Who launched it. Every send it makes is recorded against this person, so
+    // the list view names them rather than leaving a bulk run anonymous.
+    createdById: campaign.createdById, createdByName: campaign.createdByName,
     createdAt: campaign.createdAt, completedAt: campaign.completedAt, lastSentAt: campaign.lastSentAt,
     total,
     email: shape(emailStates, "emailState"),

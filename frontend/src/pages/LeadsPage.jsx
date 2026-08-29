@@ -6,6 +6,7 @@ import { api } from "../lib/api.js";
 import { LeadCard } from "../components/LeadCard.jsx";
 import { Badge, Button, EmptyState, ErrorState, MultiSelect, SkeletonCard, Surface } from "../components/ui.jsx";
 import { BulkSendSheet } from "../components/BulkSendSheet.jsx";
+import { useAuth } from "../lib/auth.jsx";
 import { toast } from "sonner";
 import { SERVICE_LABELS, STATUS_LABELS, FRESHNESS_LABELS, cn } from "../lib/format.js";
 
@@ -42,6 +43,12 @@ export default function LeadsPage() {
   const [page, setPage] = useState(1);
   // Selection for bulk send: a Set of lead ids plus what we know about their
   // reachability (used by the sheet's summary line).
+  const { can } = useAuth();
+  // Bulk sending is Outreach, not All leads: someone who may read the pipeline
+  // but was not given Outreach should not be shown a send bar the API would
+  // refuse. The selection itself stays useful — it survives paging either way.
+  const canSend = can("outreach");
+
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [selectionMeta, setSelectionMeta] = useState({ withEmail: 0, withPhone: 0, withWhatsApp: 0, emailBlocked: 0, blockedCountries: [] });
   const [sheet, setSheet] = useState(null); // null | { channels: [...] }
@@ -293,7 +300,7 @@ export default function LeadsPage() {
           wrapper must not eat clicks meant for content beside/behind the pill
           (the pagination buttons live in that band), so only the pill itself
           accepts pointer events. */}
-      {selectedIds.size > 0 && (
+      {canSend && selectedIds.size > 0 && (
         <div className="pointer-events-none fixed inset-x-0 bottom-16 z-40 flex justify-center px-4 md:bottom-5 md:pl-60">
           <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-strong)] bg-[var(--surface-raised)] px-4 py-2.5 shadow-[var(--shadow-lg)]">
             <Badge tone="var(--accent)">{selectedIds.size} selected</Badge>
@@ -331,7 +338,7 @@ export default function LeadsPage() {
       )}
 
       <BulkSendSheet
-        open={Boolean(sheet)}
+        open={canSend && Boolean(sheet)}
         onClose={() => setSheet(null)}
         initialChannels={sheet?.channels || ["EMAIL"]}
         selection={{ ids: [...selectedIds], ...selectionMeta }}

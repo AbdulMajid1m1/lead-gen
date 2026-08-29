@@ -167,6 +167,19 @@ export const api = {
   me: () => request("/auth/me"),
   changePassword: (body) => request("/auth/change-password", { method: "POST", body }),
 
+  // ─── Team & permissions (super admin only) ─────────────────────────────────
+  // The catalogue comes from the server rather than being restated here, so the
+  // tick boxes in the admin form can never offer a permission the API does not
+  // enforce.
+  permissionCatalog: () => request("/users/permissions"),
+  listUsers: () => request("/users"),
+  createUser: (body) => request("/users", { method: "POST", body }),
+  updateUser: (id, body) => request(`/users/${id}`, { method: "PATCH", body }),
+  setUserPassword: (id, password) => request(`/users/${id}/password`, { method: "POST", body: { password } }),
+  unlockUser: (id) => request(`/users/${id}/unlock`, { method: "POST" }),
+  revokeUserSessions: (id) => request(`/users/${id}/sessions/revoke`, { method: "POST" }),
+  deleteUser: (id) => request(`/users/${id}`, { method: "DELETE" }),
+
   dashboard: () => request("/stats/dashboard"),
   signalCatalog: () => request("/signals/catalog"),
 

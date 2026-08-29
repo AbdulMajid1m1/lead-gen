@@ -292,6 +292,10 @@ export const send = asyncHandler(async (req, res) => {
 
   const result = await sendInitialEmail({
     account, leadId, to, subject, body, draftId: draftId || null, signatureId,
+    // Which mailbox it left from is already on the thread; this records which
+    // colleague pressed send, which is the question a shared mailbox cannot
+    // answer on its own.
+    sentBy: req.auth.user,
   });
   if (!result.ok) throw createError(400, result.error);
 
@@ -364,7 +368,13 @@ export const listThreads = asyncHandler(async (req, res) => {
     orderBy: { updatedAt: "desc" },
     take: leadId ? 20 : 500,
     include: leadId
-      ? { messages: { orderBy: { createdAt: "asc" } } }
+      ? {
+          startedBy: { select: { id: true, name: true, email: true } },
+          messages: {
+            orderBy: { createdAt: "asc" },
+            include: { sentBy: { select: { id: true, name: true, email: true } } },
+          },
+        }
       : { messages: { orderBy: { createdAt: "desc" }, take: 1, select: { direction: true, kind: true, createdAt: true } } },
   });
   res.json({ success: true, data: { threads } });
@@ -390,14 +400,14 @@ export const followUpNow = asyncHandler(async (req, res) => {
     if (device.status !== "CONNECTED") {
       throw createError(400, `"${device.label}" is ${device.status.toLowerCase()} — reconnect it in Settings to send.`);
     }
-    const result = await sendWhatsAppFollowUp({ device, threadId: req.params.id });
+    const result = await sendWhatsAppFollowUp({ device, threadId: req.params.id, sentBy: req.auth.user });
     if (!result.ok) throw createError(400, result.error);
     return res.json({ success: true, message: "WhatsApp follow-up sent.", data: { thread: result.thread } });
   }
 
   const account = await getAccount(thread.accountId || null);
   if (!account) throw createError(400, "The mailbox this thread was sent from is no longer connected.");
-  const result = await sendFollowUp({ account, threadId: req.params.id });
+  const result = await sendFollowUp({ account, threadId: req.params.id, sentBy: req.auth.user });
   if (!result.ok) throw createError(400, result.error);
   res.json({ success: true, message: "Follow-up sent.", data: { thread: result.thread } });
 });
@@ -556,6 +566,7 @@ export const whatsappSend = asyncHandler(async (req, res) => {
   const { leadId, phone, message, waAccountId, signatureId } = req.body;
   const result = await sendWhatsAppForLead({
     leadId, phone, message, waAccountId: waAccountId || null, signatureId,
+    sentBy: req.auth.user,
   });
   if (!result.ok) throw createError(400, result.error);
   res.status(201).json({ success: true, message: "WhatsApp message sent.", data: { thread: result.thread } });

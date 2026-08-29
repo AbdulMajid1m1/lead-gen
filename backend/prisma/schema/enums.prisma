@@ -285,10 +285,16 @@ enum WhatsAppAccountStatus {
   ERROR
 }
 
-/// Console access level. VIEWER exists so a future read-only seat does not
-/// require a schema change; every provisioned account today is an ADMIN.
+/// Console access level.
+///
+/// ADMIN is the super admin: implicit access to every screen, and the only seat
+/// that can provision colleagues or change what they may see. MEMBER and VIEWER
+/// see exactly the screens granted in AdminUser.permissions — VIEWER being the
+/// read-only seat this enum was always shaped for, which now means it: it is
+/// refused every non-GET request rather than merely being labelled.
 enum AdminRole {
   ADMIN
+  MEMBER
   VIEWER
 }
 

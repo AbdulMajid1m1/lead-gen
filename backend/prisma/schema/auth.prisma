@@ -1,12 +1,15 @@
-// Admin authentication.
+// Console accounts, sessions and what each account is allowed to see.
 //
-// The product has no public sign-up: accounts are provisioned, never
-// registered. That is why there is no email-verification or password-reset
-// flow here — an operator with database access is the recovery path.
+// The product has no public sign-up: accounts are provisioned by a super admin
+// (or, for the very first one, from the environment), never registered. That is
+// why there is no email-verification or password-reset flow here — an operator
+// with database access, and now any ADMIN seat, is the recovery path.
 //
 // Sessions are opaque server-side rows rather than self-contained JWTs. A JWT
 // cannot be revoked before it expires, and "log this device out now" is a
 // requirement for a console that can send mail from the company's mailboxes.
+// It is also what makes a permission change take effect immediately: rights are
+// re-read from the row on every request rather than baked into a token.
 
 model AdminUser {
   id           String    @id @default(cuid())
@@ -18,18 +21,37 @@ model AdminUser {
   role         AdminRole @default(ADMIN)
   isActive     Boolean   @default(true)
 
+  // Which screens this account may reach, as keys from lib/auth/permissions.js.
+  // Ignored for ADMIN, whose role *is* the grant — so a super admin can never
+  // be locked out of their own console by an empty list.
+  permissions String[] @default([])
+
   // Throttling state for credential stuffing. Kept on the user rather than in
   // Redis so a lockout survives a cache flush and a worker restart.
   failedLoginCount Int       @default(0)
   lockedUntil      DateTime?
   lastLoginAt      DateTime?
 
+  // Who provisioned this seat. SetNull rather than Cascade: removing the person
+  // who created an account must never remove the account itself.
+  createdById String?
+  createdBy   AdminUser?  @relation("AdminUserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdUsers AdminUser[] @relation("AdminUserCreatedBy")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   sessions AdminSession[]
 
+  // Outreach attribution. All SetNull: deleting a colleague must not delete the
+  // conversations they held with leads, and the denormalised *ByName snapshots
+  // on those rows keep the history readable once the account is gone.
+  sentMessages     OutreachMessage[]  @relation("OutreachMessageSentBy")
+  startedThreads   OutreachThread[]   @relation("OutreachThreadStartedBy")
+  createdCampaigns OutreachCampaign[] @relation("OutreachCampaignCreatedBy")
+
   @@index([email])
+  @@index([role, isActive])
 }
 
 model AdminSession {

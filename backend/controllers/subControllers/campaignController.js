@@ -34,7 +34,10 @@ export const create = asyncHandler(async (req, res) => {
   const { name, leadIds, channels, accountId, waAccountId, paceSeconds,
     mode, dailyLimit, windowStart, windowEnd, tzOffsetMinutes } = req.body;
   const result = await createCampaign({ name, leadIds, channels, accountId, waAccountId, paceSeconds,
-    mode, dailyLimit, windowStart, windowEnd, tzOffsetMinutes });
+    mode, dailyLimit, windowStart, windowEnd, tzOffsetMinutes,
+    // Every message this queue sends over the coming days is attributed to the
+    // person who launched it, exactly as a hand-typed send would be.
+    createdBy: req.auth.user });
   if (!result.ok) throw createError(400, result.error);
   res.status(201).json({
     success: true,

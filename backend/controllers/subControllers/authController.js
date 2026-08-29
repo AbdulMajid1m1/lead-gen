@@ -19,6 +19,7 @@ import {
   revokeAllSessionsForUser,
   revokeSession,
 } from "../../lib/auth/session.js";
+import { publicUser } from "../../lib/auth/serialize.js";
 import { readSessionToken } from "../../middlewares/requireAuth.js";
 import { LOGIN_LOCK_MINUTES, LOGIN_MAX_ATTEMPTS } from "../../configs/envConfig.js";
 import { logger } from "../../utils/logger.js";
@@ -36,15 +37,6 @@ export const loginSchema = z.object({
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, "Enter your current password.").max(200),
   newPassword: z.string().min(1).max(200),
-});
-
-/** Shape sent to the client. Never includes passwordHash or lockout counters. */
-const publicUser = (user) => ({
-  id: user.id,
-  email: user.email,
-  name: user.name,
-  role: user.role,
-  lastLoginAt: user.lastLoginAt,
 });
 
 const INVALID = "Incorrect email or password.";

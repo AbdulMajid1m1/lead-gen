@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { Logo } from "./components/Logo.jsx";
-import { LayoutDashboard, Search, Users, Radar, Settings, Moon, Sun, Sparkles, LogOut, Inbox, SendHorizonal, Handshake, Megaphone } from "lucide-react";
+import { Moon, Sun, LogOut, Lock, Eye } from "lucide-react";
 import { api } from "./lib/api.js";
 import { cn } from "./lib/format.js";
 import OutreachPage from "./pages/OutreachPage.jsx";
@@ -19,39 +19,26 @@ import InboxPage from "./pages/InboxPage.jsx";
 import ClientsPage from "./pages/ClientsPage.jsx";
 import ClientDetailPage from "./pages/ClientDetailPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
+import UsersPage from "./pages/UsersPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import { useAuth } from "./lib/auth.jsx";
-import { Spinner } from "./components/ui.jsx";
-
-const NAV = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/research", label: "Deep research", icon: Sparkles },
-  // The other way into lead finding: start from a product you sell rather than
-  // from a description of who you want, so it belongs beside deep research.
-  { to: "/promoter", label: "SaaS Promoter", icon: Megaphone },
-  { to: "/search", label: "Quick search", icon: Search },
-  { to: "/leads", label: "All leads", icon: Users },
-  // `badge` marks the one item that carries a count. Sits directly under the
-  // lead-finding screens because it is where a lead goes after you contact it.
-  { to: "/outreach", label: "Outreach", icon: SendHorizonal },
-  { to: "/inbox", label: "Inbox", icon: Inbox, badge: true },
-  // The post-sale half of the pipeline: everyone the outreach above already won.
-  { to: "/clients", label: "Clients", icon: Handshake },
-  { to: "/discovery", label: "Discovery runs", icon: Radar },
-  { to: "/settings", label: "Settings", icon: Settings },
-];
+import { landingPathFor, navFor } from "./lib/permissions.js";
+import { Button, EmptyState, Spinner } from "./components/ui.jsx";
 
 /**
  * How many outreach threads are actually waiting on the user: replies nobody
  * has judged, plus follow-ups that have come due.
  *
  * Shares its query key with the Inbox page, so opening the page costs nothing
- * and acting on a thread updates the badge without a second request.
+ * and acting on a thread updates the badge without a second request. Skipped
+ * entirely for an account without the Inbox, which would otherwise poll an
+ * endpoint it is forbidden from reading every sixty seconds.
  */
-const useAttentionCount = () => {
+const useAttentionCount = (enabled) => {
   const { data } = useQuery({
     queryKey: ["outreach-inbox", "", ""],
     queryFn: () => api.outreachInbox({ bucket: "", channel: "" }),
+    enabled,
     refetchInterval: 60_000,
     // A failed badge must never take the app down with it.
     retry: false,
@@ -68,11 +55,45 @@ const useTheme = () => {
   return [theme, setTheme];
 };
 
+/**
+ * What someone sees when they reach a screen they were not given.
+ *
+ * Shown rather than silently redirected: a URL from a colleague's message that
+ * bounces you somewhere else with no explanation reads as a broken app, and the
+ * next thing that happens is a support question instead of a permission request.
+ */
+const NoAccess = ({ landing }) => {
+  const navigate = useNavigate();
+  return (
+    <div className="mx-auto max-w-6xl px-5 py-16 md:px-8">
+      <EmptyState
+        icon={Lock}
+        title="You do not have access to this section"
+        description="Your account has not been given this part of the console. A super admin can grant it from Team & permissions."
+        action={landing
+          ? <Button variant="secondary" onClick={() => navigate(landing, { replace: true })}>Take me somewhere I can work</Button>
+          : null}
+      />
+    </div>
+  );
+};
+
+/** An account with no sections at all — provisioned but not yet granted anything. */
+const NothingGranted = () => (
+  <div className="mx-auto max-w-6xl px-5 py-16 md:px-8">
+    <EmptyState
+      icon={Lock}
+      title="Nothing has been shared with you yet"
+      description="Your account is active but no sections have been granted. Ask a super admin to give you access from Team & permissions."
+    />
+  </div>
+);
+
 export default function App() {
   const [theme, setTheme] = useTheme();
   const location = useLocation();
-  const { user, checking, signOut } = useAuth();
-  const attention = useAttentionCount();
+  const { user, checking, signOut, can, canManageTeam, readOnly } = useAuth();
+  const attention = useAttentionCount(Boolean(user) && can("inbox"));
 
   // A route change should always start at the top of the new page.
   useEffect(() => { window.scrollTo(0, 0); }, [location.pathname]);
@@ -96,6 +117,20 @@ export default function App() {
     );
   }
 
+  const nav = navFor(user);
+  const landing = landingPathFor(user);
+
+  /**
+   * Route-level enforcement, mirroring the sidebar filter.
+   *
+   * Hiding a nav item is presentation; this is what makes typing the URL fail
+   * too. Both are convenience — the API refuses the same request a third time —
+   * but a console that renders a screen it cannot fill is worse than one that
+   * says plainly that the screen is not yours.
+   */
+  const guard = (permission, element) =>
+    can(permission) ? element : <NoAccess landing={landing} />;
+
   return (
     <div className="flex min-h-full">
       <aside className="fixed inset-y-0 left-0 hidden w-56 flex-col border-r border-[var(--border)] bg-[var(--surface-raised)] md:flex">
@@ -104,7 +139,7 @@ export default function App() {
         </div>
 
         <nav className="flex-1 space-y-0.5 px-3">
-          {NAV.map(({ to, label, icon: Icon, end, badge }) => (
+          {nav.map(({ to, label, icon: Icon, end, badge }) => (
             <NavLink
               key={to}
               to={to}
@@ -134,6 +169,13 @@ export default function App() {
           <div className="truncate px-2.5 pb-1 text-[11px] text-[var(--text-muted)]" title={user.email}>
             {user.name || user.email}
           </div>
+          {/* A read-only seat is told so once, here, rather than discovering it
+              one disabled button at a time. */}
+          {readOnly && (
+            <div className="mb-1 flex items-center gap-1.5 rounded-lg bg-[var(--surface-sunken)] px-2.5 py-1.5 text-[11px] text-[var(--text-muted)]">
+              <Eye size={12} className="shrink-0" />Read-only access
+            </div>
+          )}
           <button
             onClick={() => { signOut(); }}
             className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-sunken)] hover:text-[var(--text)]"
@@ -152,7 +194,7 @@ export default function App() {
 
       {/* Mobile navigation */}
       <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t border-[var(--border)] bg-[color-mix(in_oklch,var(--surface-raised)_86%,transparent)] backdrop-blur-lg md:hidden">
-        {NAV.map(({ to, label, icon: Icon, end, badge }) => (
+        {nav.map(({ to, label, icon: Icon, end, badge }) => (
           <NavLink
             key={to}
             to={to}
@@ -177,19 +219,31 @@ export default function App() {
 
       <main className="min-w-0 flex-1 pb-20 md:pb-0 md:pl-56">
         <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/research" element={<ResearchPage />} />
-          <Route path="/research/history" element={<ResearchHistoryPage />} />
-          <Route path="/promoter" element={<PromoterPage />} />
-          <Route path="/leads" element={<LeadsPage />} />
-          <Route path="/leads/:id" element={<LeadDetailPage />} />
-          <Route path="/outreach" element={<OutreachPage />} />
-          <Route path="/inbox" element={<InboxPage />} />
-          <Route path="/clients" element={<ClientsPage />} />
-          <Route path="/clients/:id" element={<ClientDetailPage />} />
-          <Route path="/discovery" element={<DiscoveryPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          {/* The index is the dashboard for anyone who has it, and the first
+              screen they *do* have for everyone else — so a promoter who was
+              never given the dashboard lands on their own work, not a wall. */}
+          <Route
+            path="/"
+            element={
+              can("dashboard") ? <DashboardPage />
+                : landing ? <Navigate to={landing} replace />
+                : <NothingGranted />
+            }
+          />
+          <Route path="/search" element={guard("search", <SearchPage />)} />
+          <Route path="/research" element={guard("research", <ResearchPage />)} />
+          <Route path="/research/history" element={guard("research", <ResearchHistoryPage />)} />
+          <Route path="/promoter" element={guard("promoter", <PromoterPage />)} />
+          <Route path="/leads" element={guard("leads", <LeadsPage />)} />
+          <Route path="/leads/:id" element={guard("leads", <LeadDetailPage />)} />
+          <Route path="/outreach" element={guard("outreach", <OutreachPage />)} />
+          <Route path="/inbox" element={guard("inbox", <InboxPage />)} />
+          <Route path="/clients" element={guard("clients", <ClientsPage />)} />
+          <Route path="/clients/:id" element={guard("clients", <ClientDetailPage />)} />
+          <Route path="/discovery" element={guard("discovery", <DiscoveryPage />)} />
+          <Route path="/settings" element={guard("settings", <SettingsPage />)} />
+          <Route path="/users" element={canManageTeam ? <UsersPage /> : <NoAccess landing={landing} />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
 

@@ -4,6 +4,7 @@ import { findReplies, canReceive } from "./inbox.js";
 import { recordBounce } from "./deliverability.js";
 import { sendWhatsAppText, getWhatsAppAccount, listWhatsAppAccounts } from "./whatsapp.js";
 import { resolveSignature, signatureSuffix } from "./signature.js";
+import { toActor } from "./attribution.js";
 import { followUpTemplate, whatsappFollowUpTemplate } from "../research/templates.js";
 import { gatherFacts } from "../research/compose.js";
 import { onInitialSent, onFollowUpSent, onReplyReceived, onFollowUpsExhausted } from "./leadStatus.js";
@@ -101,7 +102,10 @@ export const phoneSendIsBlocked = async ({ lead, phone }) => {
  * Send a WhatsApp message for a lead and open (or extend) a tracked thread.
  * Same lifecycle as email: lead goes CONTACTED, replies land in the thread.
  */
-export const sendWhatsAppForLead = async ({ leadId, phone, message, waAccountId = null, signatureId = undefined }) => {
+export const sendWhatsAppForLead = async ({
+  leadId, phone, message, waAccountId = null, signatureId = undefined, sentBy = null,
+}) => {
+  const actor = toActor(sentBy);
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { company: true } });
   if (!lead) return { ok: false, error: "Lead not found." };
 
@@ -143,6 +147,7 @@ export const sendWhatsAppForLead = async ({ leadId, phone, message, waAccountId 
         kind: isManualFollowUp ? "FOLLOW_UP" : "INITIAL",
         subject: "WhatsApp message", body: text.slice(0, 8000),
         messageId: sent.messageId, sentAt: new Date(),
+        sentById: actor?.id ?? null, sentByName: actor?.name ?? null,
       },
     });
     thread = await prisma.outreachThread.update({
@@ -161,11 +166,13 @@ export const sendWhatsAppForLead = async ({ leadId, phone, message, waAccountId 
         recipientEmail: digits, subject: `WhatsApp — ${lead.company.name}`.slice(0, 255),
         status: "AWAITING_REPLY", lastOutboundAt: new Date(),
         nextFollowUpAt: nextFollowUpDate(device, 0),
+        startedById: actor?.id ?? null, startedByName: actor?.name ?? null,
         messages: {
           create: {
             direction: "OUTBOUND", kind: "INITIAL",
             subject: "WhatsApp message", body: text.slice(0, 8000),
             messageId: sent.messageId, sentAt: new Date(),
+            sentById: actor?.id ?? null, sentByName: actor?.name ?? null,
           },
         },
       },
@@ -177,7 +184,7 @@ export const sendWhatsAppForLead = async ({ leadId, phone, message, waAccountId 
     recipient: digits, via: device.label,
   });
 
-  logger.info({ leadId, phone: digits, threadId: thread.id, nextFollowUpAt: thread.nextFollowUpAt }, "WhatsApp outreach sent");
+  logger.info({ leadId, phone: digits, threadId: thread.id, sentBy: actor?.id || "system", nextFollowUpAt: thread.nextFollowUpAt }, "WhatsApp outreach sent");
   return { ok: true, thread };
 };
 
@@ -186,8 +193,9 @@ export const sendWhatsAppForLead = async ({ leadId, phone, message, waAccountId 
  * Marks the lead CONTACTED and schedules the first follow-up.
  */
 export const sendInitialEmail = async ({
-  account, leadId, to, subject, body, draftId = null, signatureId = undefined,
+  account, leadId, to, subject, body, draftId = null, signatureId = undefined, sentBy = null,
 }) => {
+  const actor = toActor(sentBy);
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { company: true } });
   if (!lead) return { ok: false, error: "Lead not found." };
 
@@ -207,11 +215,13 @@ export const sendInitialEmail = async ({
       status: "AWAITING_REPLY",
       lastOutboundAt: new Date(),
       nextFollowUpAt,
+      startedById: actor?.id ?? null, startedByName: actor?.name ?? null,
       messages: {
         create: {
           direction: "OUTBOUND", kind: "INITIAL",
           subject: subject.slice(0, 255), body: (sent.text || body).slice(0, 8000),
           messageId: sent.messageId, draftId, sentAt: new Date(),
+          sentById: actor?.id ?? null, sentByName: actor?.name ?? null,
         },
       },
     },
@@ -223,12 +233,19 @@ export const sendInitialEmail = async ({
     recipient: to, via: account.email,
   });
 
-  logger.info({ leadId, to, threadId: thread.id, nextFollowUpAt }, "outreach email sent");
+  logger.info({ leadId, to, threadId: thread.id, sentBy: actor?.id || "system", nextFollowUpAt }, "outreach email sent");
   return { ok: true, thread };
 };
 
-/** Send one follow-up on a thread (manual click or the scheduler). */
-export const sendFollowUp = async ({ account, threadId }) => {
+/**
+ * Send one follow-up on a thread (manual click or the scheduler).
+ *
+ * `sentBy` is null when the scheduler fires it, and that null is meaningful:
+ * the thread then reads "sent automatically" rather than crediting the chase to
+ * whoever happened to open the first email.
+ */
+export const sendFollowUp = async ({ account, threadId, sentBy = null }) => {
+  const actor = toActor(sentBy);
   const thread = await prisma.outreachThread.findUnique({
     where: { id: threadId },
     include: { lead: { include: { company: true } }, messages: { orderBy: { createdAt: "asc" } } },
@@ -273,6 +290,7 @@ export const sendFollowUp = async ({ account, threadId }) => {
       threadId, direction: "OUTBOUND", kind: "FOLLOW_UP",
       subject: subject.slice(0, 255), body: (sent.text || body).slice(0, 8000),
       messageId: sent.messageId, generatedBy: "RULE", sentAt: new Date(),
+      sentById: actor?.id ?? null, sentByName: actor?.name ?? null,
     },
   });
   const updated = await prisma.outreachThread.update({
@@ -297,7 +315,8 @@ export const sendFollowUp = async ({ account, threadId }) => {
  * reply-chain headers WhatsApp has no equivalent of — continuity there comes
  * from the chat itself, so the message just has to be short and human.
  */
-export const sendWhatsAppFollowUp = async ({ device, threadId }) => {
+export const sendWhatsAppFollowUp = async ({ device, threadId, sentBy = null }) => {
+  const actor = toActor(sentBy);
   const thread = await prisma.outreachThread.findUnique({
     where: { id: threadId },
     include: { lead: { include: { company: true } } },
@@ -335,6 +354,7 @@ export const sendWhatsAppFollowUp = async ({ device, threadId }) => {
       threadId, direction: "OUTBOUND", kind: "FOLLOW_UP",
       subject: "WhatsApp follow-up", body: text.slice(0, 8000),
       messageId: sent.messageId, generatedBy: "RULE", sentAt: new Date(),
+      sentById: actor?.id ?? null, sentByName: actor?.name ?? null,
     },
   });
   const updated = await prisma.outreachThread.update({
@@ -614,6 +634,11 @@ const INBOX_SELECT = {
   followUpsSent: true,
   nextFollowUpAt: true,
   updatedAt: true,
+  // Who opened the conversation. The snapshot is the fallback for a thread
+  // whose owner has since been deleted, and for one sent before attribution.
+  startedById: true,
+  startedByName: true,
+  startedBy: { select: { id: true, name: true, email: true } },
   account: { select: { email: true } },
   waAccount: { select: { label: true } },
   lead: {
@@ -628,7 +653,10 @@ const INBOX_SELECT = {
   messages: {
     orderBy: { createdAt: "desc" },
     take: 1,
-    select: { direction: true, kind: true, body: true, subject: true, createdAt: true },
+    select: {
+      direction: true, kind: true, body: true, subject: true, createdAt: true,
+      sentByName: true, sentBy: { select: { id: true, name: true, email: true } },
+    },
   },
 };
 
