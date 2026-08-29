@@ -61,9 +61,57 @@ const REPEATABLE = [
   { name: "enrich-domain-age", pattern: "15 2 * * *" },    // nightly, best-effort
   { name: "prune-payloads", pattern: "0 5 * * 0" },        // weekly
   { name: "resolve-missing-domains", pattern: "45 1 * * *" }, // nightly repair
+  { name: "close-orphaned-runs", pattern: "*/20 * * * *" },  // every 20 minutes
 ];
 
 const handlers = {
+  /**
+   * Close discovery runs whose process is gone.
+   *
+   * A run executes in the API process rather than through this queue, because a
+   * user is watching it. That is the right trade, but it means the run dies with
+   * the process: every deploy restarts the API container, and anything in flight
+   * is left saying RUNNING for ever. Twelve had accumulated in production before
+   * this existed, which makes the runs list unreadable and leaves a promoted
+   * product apparently still searching weeks later.
+   *
+   * Staleness is measured from the last sign of life — the newest step timestamp
+   * rather than the run's start — so a genuinely slow map search is never
+   * mistaken for a dead one. The ceiling sits well past the longest legitimate
+   * run, since RESEARCH_TIMEOUT_MS already bounds collection at fifteen minutes.
+   */
+  "close-orphaned-runs": async () => {
+    const STALE_MS = 45 * 60 * 1000;
+    const cutoff = new Date(Date.now() - STALE_MS);
+
+    const running = await prisma.discoveryRun.findMany({
+      where: { status: "RUNNING" },
+      include: { steps: { orderBy: { startedAt: "desc" }, take: 1 } },
+    });
+
+    let closed = 0;
+    for (const run of running) {
+      const lastSign = run.steps[0]?.finishedAt || run.steps[0]?.startedAt || run.startedAt || run.createdAt;
+      if (lastSign && lastSign > cutoff) continue;
+
+      await prisma.discoveryRunStep.updateMany({
+        where: { runId: run.id, status: { in: ["RUNNING", "PENDING"] } },
+        data: {
+          status: "CANCELLED",
+          finishedAt: new Date(),
+          errorText: "The process running this step exited before it finished.",
+        },
+      });
+      await prisma.discoveryRun.update({
+        where: { id: run.id },
+        data: { status: "FAILED", finishedAt: new Date() },
+      });
+      closed += 1;
+      logger.warn({ runId: run.id, lastSign }, "closed a run whose process had gone away");
+    }
+    return { running: running.length, closed };
+  },
+
   /**
    * Pull replies for open outreach threads, then send any follow-up that has
    * come due. No-op until a mailbox is connected in Settings.

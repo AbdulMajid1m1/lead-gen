@@ -16,6 +16,9 @@ export const listSchema = z.object({
   type: z.string().optional(),
   minScore: z.coerce.number().int().min(0).max(100).optional(),
   city: z.string().max(120).optional(),
+  /// Free-text over the company name and its domain, so the grid has a way to
+  /// find one known company without knowing which filter it falls under.
+  search: z.string().trim().max(120).optional(),
   /// Comma-separated ISO-3166 alpha-2 codes; "UNKNOWN" selects leads whose
   /// country was never established. Values come from GET /api/leads/countries.
   country: z.string().max(400).optional(),
@@ -52,6 +55,18 @@ const buildListWhere = (q, { ignoreStatus = false } = {}) => {
   if (q.type) where.AND.push({ type: { in: q.type.split(",") } });
   if (q.minScore !== undefined) where.AND.push({ score: { gte: q.minScore } });
   if (q.city) where.AND.push({ company: { city: { contains: q.city, mode: "insensitive" } } });
+  // Name or domain: the two things someone actually remembers a company by.
+  if (q.search) {
+    where.AND.push({
+      company: {
+        OR: [
+          { name: { contains: q.search, mode: "insensitive" } },
+          { normalizedName: { contains: q.search, mode: "insensitive" } },
+          { domains: { some: { domain: { contains: q.search.toLowerCase() } } } },
+        ],
+      },
+    });
+  }
 
   // Country is a multi-select: every selected country is OR-ed together, so
   // picking "United Kingdom" and "Portugal" shows the leads of both. Companies
