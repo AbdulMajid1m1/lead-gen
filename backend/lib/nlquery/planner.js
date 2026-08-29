@@ -1,12 +1,13 @@
 import prisma from "../../prismaClient.js";
 import { OSM_CATEGORIES } from "../adapters/overpass.js";
-import { SIGNAL_CATALOG } from "../signals/signalCatalog.js";
+import { SIGNAL_CATALOG, WEBSITE_PITCH_SIGNALS, personIsCorroborated } from "../signals/signalCatalog.js";
 import { decayFactor, relativeAge, freshnessBucket } from "../scoring/decay.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
 import { MIN_RESULTS_BEFORE_DISCOVER, AI_MAX_SEARCH_CALLS } from "../../configs/envConfig.js";
 import { expandLocation } from "../research/brief.js";
 import { pickDisplayPhone, pickWhatsAppNumber } from "../outreach/phoneRank.js";
 import { sendPolicyFor, isRoleAddress } from "../outreach/sendPolicy.js";
+import { emailMatchesName } from "../extract/people.js";
 import { icpToSearchStrategies, icpToParsedQuery } from "../promoter/icp.js";
 
 /**
@@ -179,7 +180,7 @@ export const searchLeads = async (parsed, { page = 1, pageSize = 25 } = {}) => {
   return { leads: ranked, total, page, pageSize };
 };
 
-export const toLeadCard = (lead, rankScore = null) => {
+export const toLeadCard = (lead, rankScore = null, { forProduct = false } = {}) => {
   const contacts = lead.company?.contacts || [];
   // Prefer the domain the identity check confirmed; a rejected one must never
   // be the address shown on the card.
@@ -187,7 +188,11 @@ export const toLeadCard = (lead, rankScore = null) => {
   const primaryDomain = domains.find((d) => d.identityStatus === "CONFIRMED")
     || domains.find((d) => d.identityStatus !== "REJECTED")
     || null;
-  const person = lead.company?.people?.[0] || null;
+  // A name is only shown when something corroborates that it is a person, the
+  // same standard the composer applies before greeting one — otherwise the
+  // grid offers a contact the email would refuse to use.
+  const rawPerson = lead.company?.people?.[0] || null;
+  const person = personIsCorroborated(rawPerson, emailMatchesName) ? rawPerson : null;
   const email = contacts.find((c) => c.kind === "EMAIL" && c.roleHint !== "NON_OUTREACH");
   // Ranked, not "first row": a company's switchboard and its owner's mobile are
   // both PHONE contacts, and only one of them is worth a WhatsApp message.
@@ -221,7 +226,11 @@ export const toLeadCard = (lead, rankScore = null) => {
       // anyone clicks through and emails an address taken from the wrong site.
       domainIdentityStatus: primaryDomain?.identityStatus || "UNCHECKED",
     },
-    topReasons: (lead.reasons || []).map((r) => ({ text: r.text, confidenceLevel: r.confidenceLevel })),
+    // On a product-scoped list the website diagnostics are not why this lead
+    // matters, and shown as "why it matched" they describe a different sale.
+    topReasons: (lead.reasons || [])
+      .filter((r) => !(forProduct && WEBSITE_PITCH_SIGNALS.has(r.signal?.type)))
+      .map((r) => ({ text: r.text, confidenceLevel: r.confidenceLevel })),
     contact: {
       hasEmail: Boolean(email),
       hasPhone: Boolean(phone),

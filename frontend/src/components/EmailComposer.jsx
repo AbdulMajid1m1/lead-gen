@@ -92,7 +92,7 @@ const SignaturePicker = ({ signatures, signature, value, onChange, channel }) =>
   );
 };
 
-export default function EmailComposer({ leadId, name, contacts = null, address = null, onClose }) {
+export default function EmailComposer({ leadId, name, contacts = null, address = null, onClose, initialChannel = "EMAIL" }) {
   const [showFacts, setShowFacts] = useState(false);
   const [to, setTo] = useState("");
   const [subject, setSubject] = useState("");
@@ -142,7 +142,9 @@ export default function EmailComposer({ leadId, name, contacts = null, address =
 
   // Email and WhatsApp are two channels over the same lead; each keeps its
   // own conversation thread and the toggle switches the composer between them.
-  const [channel, setChannel] = useState("EMAIL");
+  // Opened from a WhatsApp action, the composer should already be on that
+  // tab; landing on the email tab makes the button look like it did nothing.
+  const [channel, setChannel] = useState(initialChannel === "WHATSAPP" ? "WHATSAPP" : "EMAIL");
   const emailThread = threads.find((t) => t.channel !== "WHATSAPP") || null;
   const waThread = threads.find((t) => t.channel === "WHATSAPP") || null;
   const activeThread = channel === "WHATSAPP" ? waThread : emailThread;

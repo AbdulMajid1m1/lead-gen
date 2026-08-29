@@ -1,25 +1,55 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Rocket, Globe, CornerDownLeft, X, Plus, ExternalLink, ArrowLeft, Search,
-  AlertTriangle, RefreshCw, Archive, Mail, PenLine, ChevronDown, ChevronRight,
-  ShieldCheck, Sparkles, Users, MapPin, Target, Ban, Swords, Wallet, Coins,
-  Quote, ListChecks, Compass, Radar, Clock, Layers, FileSearch,
+  AlertTriangle, RefreshCw, Archive, Mail, MessageCircle, PenLine,
+  ShieldCheck, ShieldAlert, Sparkles, Users, MapPin, Target, Ban, Swords, Wallet, Coins,
+  Quote, ListChecks, Compass, Radar, Clock, Layers, FileSearch, Phone, User,
+  SlidersHorizontal, CheckSquare, Table2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageBody } from "../App.jsx";
 import { api, subscribeToRun } from "../lib/api.js";
+import { useServerGrid } from "../hooks/useServerGrid.js";
+import { DataGrid } from "../components/DataGrid.jsx";
 import {
-  Badge, Button, EmptyState, ErrorState, Field, FormField, Input, Select,
+  Badge, Button, EmptyState, ErrorState, Field, FormField, Input, MultiSelect, Select,
   SectionHeading, Skeleton, Spinner, Surface, Textarea,
 } from "../components/ui.jsx";
-import { ConfidenceCell, ConfidenceLegend } from "../components/ConfidenceCell.jsx";
 import { DiscoveryProgress } from "../components/DiscoveryProgress.jsx";
-import EmailComposer, { ThreadStatusChip } from "../components/EmailComposer.jsx";
+import EmailComposer from "../components/EmailComposer.jsx";
+import { BulkSendSheet } from "../components/BulkSendSheet.jsx";
 import { ProvenanceDrawer } from "../components/ProvenanceDrawer.jsx";
 import { COUNTRY_OPTIONS, countryLabel } from "../lib/countries.js";
-import { cn, formatDateTime, prettyUrl, relativeTime, scoreTone } from "../lib/format.js";
+import {
+  FRESHNESS_LABELS, SERVICE_LABELS, STATUS_LABELS, STATUS_TONE,
+  cn, formatDateTime, freshnessTone, prettyUrl, relativeTime, scoreTone,
+} from "../lib/format.js";
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * SaaS Promoter — leads first, profile second.
+ *
+ * The previous version of this page opened on a 700-line ICP form and rendered
+ * the leads — the entire point of the feature — only when the URL happened to
+ * carry `?run=`, below the fold of that form. A product now opens on its leads,
+ * in the same grid, with the same filters and the same sending path as the All
+ * leads page; the profile and the run history are tabs beside them.
+ *
+ * Map of this file
+ * ────────────────
+ *   PromoterPage       route switch — `?product=` opens a workspace, else landing
+ *   ProductLanding     the URL/search bar, the product cards, the explainer
+ *     ProductCard      one product, with its own live status / lead / run counts
+ *   ProductWorkspace   header, tabs, and the ICP form state the tabs share
+ *     LeadsTab         DataGrid + filters + selection + sending   (the default)
+ *       leadColumns · LeadFilterBar · FilterSelect · BulkBar
+ *     RunsTab          "Find leads" plus every past run
+ *     ProfileTab       read-only research beside the editable ICP
+ *       ProductProfile · IcpEditor
+ *       TagListField · RepeatableRows · IcpSection   (shared by nine sections)
+ *       toForm · toIcpPayload · starterForm          (the form model)
+ * ────────────────────────────────────────────────────────────────────────── */
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Vocabulary
@@ -32,6 +62,19 @@ const STATUS_META = {
   FAILED: { label: "Research failed", tone: "var(--color-critical)" },
   ARCHIVED: { label: "Archived", tone: "var(--text-subtle)" },
 };
+
+const IN_FLIGHT = ["PENDING", "RUNNING"];
+
+const runTone = (status) =>
+  IN_FLIGHT.includes(status) ? "var(--color-info)"
+  : status === "FAILED" ? "var(--color-critical)"
+  : "var(--color-positive)";
+
+const TABS = [
+  { key: "leads", label: "Leads", icon: Table2 },
+  { key: "profile", label: "Profile & ICP", icon: Users },
+  { key: "runs", label: "Runs", icon: Radar },
+];
 
 /**
  * How a buying signal can actually be spotted. The label answers "and how would
@@ -148,251 +191,6 @@ const SourceLink = ({ href }) => {
 };
 
 /* ────────────────────────────────────────────────────────────────────────────
- * Reusable editors — built once here, used by nine different ICP sections
- * ────────────────────────────────────────────────────────────────────────── */
-
-/**
- * A list of short strings entered one at a time.
- *
- * Industries, job titles, disqualifiers and competitors are all the same
- * interaction, so they are all this component. Enter adds; Backspace on an
- * empty box removes the last chip, which is what anyone who has used a
- * to/cc field expects.
- */
-const TagListField = ({ label, help, values, onChange, placeholder, max, maxLength }) => {
-  const [draft, setDraft] = useState("");
-
-  const full = values.length >= max;
-  const over = values.length > max;
-
-  const add = () => {
-    const value = draft.trim();
-    if (!value || full) return;
-    if (values.some((v) => v.toLowerCase() === value.toLowerCase())) {
-      setDraft("");
-      return;
-    }
-    onChange([...values, value]);
-    setDraft("");
-  };
-
-  const remove = (index) => onChange(values.filter((_, i) => i !== index));
-
-  return (
-    <FormField
-      label={label}
-      hint={`${values.length}/${max}`}
-      help={full && !over ? `That is the maximum of ${max}. Remove one to add another.` : help}
-      error={over ? `Only ${max} are kept — remove ${values.length - max} before approving.` : undefined}
-    >
-      {(controlProps) => (
-        <div className="flex flex-col gap-2">
-          {values.length > 0 && (
-            <ul className="flex flex-wrap gap-1.5">
-              {values.map((value, index) => (
-                <li key={`${value}-${index}`}>
-                  <span className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-sunken)] py-1 pl-2 pr-1 text-xs text-[var(--text)]">
-                    <span className="max-w-[16rem] truncate">{value}</span>
-                    <button
-                      type="button"
-                      onClick={() => remove(index)}
-                      aria-label={`Remove ${value}`}
-                      className="rounded p-0.5 text-[var(--text-subtle)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--color-critical)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_oklch,var(--accent)_25%,transparent)]"
-                    >
-                      <X size={11} />
-                    </button>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <div className="flex gap-2">
-            <Input
-              {...controlProps}
-              value={draft}
-              maxLength={maxLength}
-              disabled={full}
-              placeholder={full ? "" : placeholder}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") { e.preventDefault(); add(); }
-                if (e.key === "Backspace" && !draft && values.length) remove(values.length - 1);
-              }}
-            />
-            <Button type="button" variant="secondary" size="sm" onClick={add} disabled={full || !draft.trim()}>
-              <Plus size={12} />Add
-            </Button>
-          </div>
-        </div>
-      )}
-    </FormField>
-  );
-};
-
-/**
- * A repeatable group of fields.
- *
- * `children` is a render prop given the row and a patch function, so each
- * section only writes its own inputs — the add/remove/empty plumbing lives
- * here once.
- */
-const RepeatableRows = ({ rows, onChange, blank, addLabel, emptyHint, describe, max, children }) => {
-  const patch = (id, changes) => onChange(rows.map((r) => (r._id === id ? { ...r, ...changes } : r)));
-  const remove = (id) => onChange(rows.filter((r) => r._id !== id));
-  const add = () => onChange([...rows, { ...blank, _id: uid() }]);
-
-  const full = rows.length >= max;
-  const over = rows.length > max;
-
-  return (
-    <div className="flex flex-col gap-2">
-      {rows.length === 0 && (
-        <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-2.5 text-[11px] leading-snug text-[var(--text-subtle)]">
-          {emptyHint}
-        </p>
-      )}
-
-      {rows.map((row, index) => (
-        <div key={row._id} className="rounded-lg border border-[var(--border)] bg-[var(--surface-sunken)] p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">
-              {describe ? describe(index) : `#${index + 1}`}
-            </span>
-            <button
-              type="button"
-              onClick={() => remove(row._id)}
-              aria-label={`Remove ${describe ? describe(index) : `row ${index + 1}`}`}
-              className="rounded p-1 text-[var(--text-subtle)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--color-critical)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_oklch,var(--accent)_25%,transparent)]"
-            >
-              <X size={12} />
-            </button>
-          </div>
-          <div className="flex flex-col gap-2.5">{children(row, (changes) => patch(row._id, changes), index)}</div>
-        </div>
-      ))}
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="secondary" size="sm" onClick={add} disabled={full}>
-          <Plus size={12} />{addLabel}
-        </Button>
-        <span className={cn("tnum text-[11px]", over ? "text-[var(--color-critical)]" : "text-[var(--text-subtle)]")}>
-          {over
-            ? `${rows.length}/${max} — remove ${rows.length - max} before approving.`
-            : full ? `${rows.length}/${max} — that is the maximum.` : `${rows.length}/${max}`}
-        </span>
-      </div>
-    </div>
-  );
-};
-
-/** A titled block inside the ICP form, so the form reads as sections not a wall. */
-const IcpSection = ({ icon: Icon, title, description, children }) => (
-  <section className="border-t border-[var(--border)] px-4 py-4 first:border-t-0 sm:px-5">
-    <SectionHeading icon={Icon} title={title} description={description} />
-    <div className="flex flex-col gap-4">{children}</div>
-  </section>
-);
-
-/* ────────────────────────────────────────────────────────────────────────────
- * Form model — the server's ICP shape, plus row ids and string-typed numbers
- * ────────────────────────────────────────────────────────────────────────── */
-
-const toForm = (product) => {
-  const icp = product?.icp || {};
-  const size = icp.companySize || {};
-  return {
-    name: product?.name || "",
-    pitchAngle: product?.pitchAngle || "",
-    proofLink: product?.proofLink || "",
-    senderContext: product?.senderContext || "",
-    icp: {
-      summary: icp.summary || "",
-      industries: asStrings(icp.industries),
-      companySize: {
-        min: size.min === null || size.min === undefined ? "" : String(size.min),
-        max: size.max === null || size.max === undefined ? "" : String(size.max),
-        note: size.note || "",
-      },
-      geographies: withIds(icp.geographies).map((g) => ({
-        region: g.region || "",
-        countryCode: (g.countryCode || "").toUpperCase(),
-        reason: g.reason || "",
-        priority: Number(g.priority) > 0 ? Number(g.priority) : 1,
-        _id: g._id,
-      })),
-      buyerTitles: {
-        decisionMakers: asStrings(icp.buyerTitles?.decisionMakers),
-        champions: asStrings(icp.buyerTitles?.champions),
-      },
-      painPoints: withIds(icp.painPoints).map((p) => ({
-        pain: p.pain || "", productAnswer: p.productAnswer || "", _id: p._id,
-      })),
-      buyingSignals: withIds(icp.buyingSignals).map((s) => ({
-        signal: s.signal || "",
-        detectableVia: DETECTABLE_VIA.some(([v]) => v === s.detectableVia) ? s.detectableVia : "OTHER",
-        // Not user-editable — it is how the backend joins a signal to the
-        // catalogue. Carried through so an edit never silently drops it.
-        signalKey: s.signalKey ?? null,
-        _id: s._id,
-      })),
-      disqualifiers: asStrings(icp.disqualifiers),
-      competitorsToDisplace: asStrings(icp.competitorsToDisplace),
-      suggestedSearchQueries: withIds(icp.suggestedSearchQueries).map((q) => ({
-        label: q.label || "",
-        searchInstruction: q.searchInstruction || "",
-        expectedSourceTypes: asStrings(q.expectedSourceTypes),
-        _id: q._id,
-      })),
-    },
-  };
-};
-
-const numberOrNull = (value) => {
-  const trimmed = String(value ?? "").trim();
-  if (!trimmed) return null;
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null;
-};
-
-const toIcpPayload = (form) => ({
-  summary: form.icp.summary.trim(),
-  industries: form.icp.industries,
-  companySize: {
-    min: numberOrNull(form.icp.companySize.min),
-    max: numberOrNull(form.icp.companySize.max),
-    note: form.icp.companySize.note.trim(),
-  },
-  geographies: stripIds(form.icp.geographies.filter((g) => g.region.trim() || g.countryCode)),
-  buyerTitles: form.icp.buyerTitles,
-  painPoints: stripIds(form.icp.painPoints.filter((p) => p.pain.trim())),
-  buyingSignals: stripIds(form.icp.buyingSignals.filter((s) => s.signal.trim())),
-  disqualifiers: form.icp.disqualifiers,
-  competitorsToDisplace: form.icp.competitorsToDisplace,
-  suggestedSearchQueries: stripIds(
-    form.icp.suggestedSearchQueries.filter((q) => q.label.trim() && q.searchInstruction.trim()),
-  ).map((q) => ({ ...q, expectedSourceTypes: q.expectedSourceTypes.slice(0, CAPS.sourceTypes) })),
-});
-
-/**
- * A blank row in each empty section, for "the AI could not draft this, I will
- * write it". Only ever fills gaps — a half-drafted profile keeps everything it
- * already has, because a recovery action that deletes work is not a recovery.
- */
-const seedIfEmpty = (rows, blank) => (rows.length ? rows : [{ ...blank, _id: uid() }]);
-
-const starterForm = (form) => ({
-  ...form,
-  icp: {
-    ...form.icp,
-    geographies: seedIfEmpty(form.icp.geographies, { region: "", countryCode: "", reason: "", priority: 1 }),
-    painPoints: seedIfEmpty(form.icp.painPoints, { pain: "", productAnswer: "" }),
-    buyingSignals: seedIfEmpty(form.icp.buyingSignals, { signal: "", detectableVia: "WEBSITE_CONTENT", signalKey: null }),
-    suggestedSearchQueries: seedIfEmpty(form.icp.suggestedSearchQueries, { label: "", searchInstruction: "", expectedSourceTypes: [] }),
-  },
-});
-
-/* ────────────────────────────────────────────────────────────────────────────
  * Page
  * ────────────────────────────────────────────────────────────────────────── */
 
@@ -402,7 +200,7 @@ export default function PromoterPage() {
 
   return productId
     ? <ProductWorkspace key={productId} productId={productId} params={params} setParams={setParams} />
-    : <ProductLanding onOpen={(id) => setParams({ product: id })} />;
+    : <ProductLanding onOpen={(id) => setParams({ product: id, tab: "leads" })} />;
 }
 
 /* ── 1. Landing ──────────────────────────────────────────────────────────── */
@@ -421,7 +219,7 @@ function ProductLanding({ onOpen }) {
   });
 
   const create = useMutation({
-    mutationFn: (normalized) => api.createPromotedProduct({ url: normalized }).then((data) => data.product),
+    mutationFn: (normalized) => api.createPromotedProduct({ url: normalized }).then((payload) => payload.product),
     onSuccess: (product) => {
       toast.success(`Reading ${prettyUrl(product.url)} — this usually takes a minute or two.`);
       queryClient.invalidateQueries({ queryKey: ["promoted-products"] });
@@ -447,10 +245,21 @@ function ProductLanding({ onOpen }) {
     return [...rows].sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
   }, [data]);
 
+  // The one box both searches and adds. Typing "tracefyhr.com" for a product
+  // that is already here should surface its card rather than quietly offer to
+  // research it a second time — that is the first thing anyone tries.
+  const needle = url.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  const matches = useMemo(() => {
+    if (!needle) return products;
+    return products.filter((p) => `${p.name || ""} ${prettyUrl(p.url)} ${p.url}`.toLowerCase().includes(needle));
+  }, [products, needle]);
+
+  const alreadyHere = needle.length > 0 && matches.length > 0;
+
   return (
     <div>
       <div className="border-b border-[var(--border)] bg-[var(--surface-raised)]">
-        <div className="mx-auto max-w-5xl px-5 py-8 md:px-8">
+        <div className="mx-auto max-w-6xl px-5 py-8 md:px-8">
           <div className="mb-4 flex items-center gap-2">
             <Rocket size={16} className="text-[var(--accent)]" />
             <h1 className="text-lg font-semibold tracking-tight">SaaS Promoter</h1>
@@ -458,8 +267,12 @@ function ProductLanding({ onOpen }) {
 
           <form onSubmit={submit} noValidate>
             <FormField
-              label="Your product's website"
-              help="We read the public pages — what it does, what it costs, who already uses it — and work out who would buy it. Nothing is contacted at this stage."
+              label="Paste your product's website"
+              help={
+                alreadyHere
+                  ? "Already here — open its card below to see the leads it has found."
+                  : "We read the public pages — what it does, what it costs, who already uses it — and work out who would buy it. Nothing is contacted at this stage."
+              }
               error={urlError}
             >
               {(controlProps) => (
@@ -481,7 +294,10 @@ function ProductLanding({ onOpen }) {
                   />
                   <div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1">
                     {url && (
-                      <Button type="button" variant="ghost" size="sm" onClick={() => { setUrl(""); setTouched(false); inputRef.current?.focus(); }} aria-label="Clear">
+                      <Button
+                        type="button" variant="ghost" size="sm" aria-label="Clear"
+                        onClick={() => { setUrl(""); setTouched(false); inputRef.current?.focus(); }}
+                      >
                         <X size={14} />
                       </Button>
                     )}
@@ -498,8 +314,8 @@ function ProductLanding({ onOpen }) {
 
       <PageBody className="space-y-4">
         {isPending && (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-xl" />)}
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {["a", "b", "c", "d"].map((k) => <Skeleton key={`product-skeleton-${k}`} className="h-40 rounded-xl" />)}
           </div>
         )}
 
@@ -518,39 +334,106 @@ function ProductLanding({ onOpen }) {
 
         {products.length > 0 && (
           <>
-            <h2 className="text-sm font-semibold tracking-tight">Your products</h2>
-            <ul className="grid gap-3 sm:grid-cols-2">
-              {products.map((product) => (
-                <li key={product.id}>
-                  <button
-                    type="button"
-                    onClick={() => onOpen(product.id)}
-                    className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-raised)] p-4 text-left shadow-[var(--shadow-sm)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--surface-sunken)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_oklch,var(--accent)_25%,transparent)]"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold">{product.name || prettyUrl(product.url)}</p>
-                        <p className="truncate font-mono text-[11px] text-[var(--text-subtle)]">{prettyUrl(product.url)}</p>
-                      </div>
-                      <StatusBadge status={product.status} />
-                    </div>
-                    <p className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--text-muted)]">
-                      <span className="tnum">{(product.runs || []).length} runs</span>
-                      <span className="tnum">
-                        {(product.runs || []).reduce((sum, r) => sum + (r.leadCount || 0), 0)} leads
-                      </span>
-                      <span>Updated {relativeTime(product.updatedAt)}</span>
-                    </p>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-sm font-semibold tracking-tight">Your products</h2>
+              <p className="tnum text-[11px] text-[var(--text-subtle)]">
+                {needle ? `${matches.length} of ${products.length} shown` : `${products.length} total`}
+              </p>
+            </div>
+
+            {matches.length === 0 ? (
+              <Surface className="border-dashed">
+                <EmptyState
+                  icon={Search}
+                  title={`Nothing here matches “${url.trim()}”`}
+                  description={
+                    normalized
+                      ? "It has not been added yet — press “Research it” above and we will read the site."
+                      : "Clear the box to see every product, or type a full address to add a new one."
+                  }
+                />
+              </Surface>
+            ) : (
+              <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {matches.map((product) => (
+                  <li key={product.id}>
+                    <ProductCard product={product} onOpen={onOpen} />
+                  </li>
+                ))}
+              </ul>
+            )}
           </>
         )}
 
         {products.length > 0 && <HowItWorks />}
       </PageBody>
     </div>
+  );
+}
+
+/**
+ * One product tile.
+ *
+ * The list endpoint answers without runs or lead counts, so the two numbers
+ * that make a card worth clicking are fetched per card. Both go under the keys
+ * the workspace already uses, so opening a product renders from cache instead
+ * of showing a second loading state for data the card had in hand.
+ */
+function ProductCard({ product, onOpen }) {
+  const { data: detail } = useQuery({
+    queryKey: ["promoted-product", product.id],
+    queryFn: () => api.getPromotedProduct(product.id).then((d) => d.product),
+    refetchInterval: (query) => (query.state.data?.status === "RESEARCHING" ? 4000 : false),
+    staleTime: 15_000,
+  });
+
+  const { data: counts } = useQuery({
+    queryKey: ["lead-status-counts", { productId: product.id }],
+    queryFn: () => api.leadStatusCounts({ productId: product.id }),
+    staleTime: 30_000,
+  });
+
+  const runs = detail?.runs || [];
+  const lastRun = runs[0] || null;
+  const running = runs.some((r) => IN_FLIGHT.includes(r.status));
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(product.id)}
+      className="flex h-full w-full flex-col rounded-xl border border-[var(--border)] bg-[var(--surface-raised)] p-4 text-left shadow-[var(--shadow-sm)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--surface-sunken)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_oklch,var(--accent)_25%,transparent)]"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">{product.name || prettyUrl(product.url)}</p>
+          <p className="truncate font-mono text-[11px] text-[var(--text-subtle)]">{prettyUrl(product.url)}</p>
+        </div>
+        <StatusBadge status={detail?.status || product.status} />
+      </div>
+
+      <dl className="mt-4 grid grid-cols-2 gap-3">
+        <div>
+          <dt className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">Leads</dt>
+          <dd className="tnum text-lg font-semibold leading-tight">
+            {counts?.all === undefined ? <span className="text-[var(--text-subtle)]">—</span> : counts.all}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">Runs</dt>
+          <dd className="tnum text-lg font-semibold leading-tight">
+            {detail ? runs.length : <span className="text-[var(--text-subtle)]">—</span>}
+          </dd>
+        </div>
+      </dl>
+
+      <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--border)] pt-2.5 text-[11px] text-[var(--text-muted)]">
+        {running && <span className="inline-flex items-center gap-1 text-[var(--color-info)]"><Spinner size={10} />searching now</span>}
+        {!running && lastRun && <span>Last run {relativeTime(lastRun.createdAt)}</span>}
+        {!running && !lastRun && detail && <span className="text-[var(--text-subtle)]">No search run yet</span>}
+        <span className="text-[var(--text-subtle)]">·</span>
+        <span>Updated {relativeTime(product.updatedAt)}</span>
+      </p>
+    </button>
   );
 }
 
@@ -575,19 +458,17 @@ const HowItWorks = () => (
   </ol>
 );
 
-/* ── 2–4. One product ────────────────────────────────────────────────────── */
+/* ── 2. One product: header, tabs, and the state the tabs share ──────────── */
 
 function ProductWorkspace({ productId, params, setParams }) {
-  const explicitRunId = params.get("run");
   const queryClient = useQueryClient();
+  // The ICP form lives up here rather than in the Profile tab so a half-written
+  // profile survives a trip to the Leads tab and back.
   const [form, setForm] = useState(null);
   const [baseline, setBaseline] = useState(null);
-  const [emailFor, setEmailFor] = useState(null);
-  // Evidence is reachable from the row itself. Judging whether a lead really
-  // fits the approved profile used to mean leaving the grid for its own page
-  // and losing your place in the results.
-  const [evidenceFor, setEvidenceFor] = useState(null);
-  const [showUnverified, setShowUnverified] = useState(false);
+
+  const requestedTab = params.get("tab");
+  const tab = TABS.some((t) => t.key === requestedTab) ? requestedTab : "leads";
 
   const { data: product, isPending, isError, error, refetch } = useQuery({
     queryKey: ["promoted-product", productId],
@@ -597,13 +478,6 @@ function ProductWorkspace({ productId, params, setParams }) {
     queryFn: () => api.getPromotedProduct(productId).then((data) => data.product),
     refetchInterval: (query) => (query.state.data?.status === "RESEARCHING" ? 4000 : false),
   });
-
-  // Which run the results below show. The URL wins when it names one, so a
-  // link to a particular run still opens it; otherwise fall back to the newest.
-  // Without that fallback, finishing a run and returning to the product showed
-  // only the profile again — the leads were there, listed one click away under
-  // "Find leads", and the page looked like it had found nothing.
-  const runId = explicitRunId || product?.runs?.[0]?.runId || null;
 
   const dirty = Boolean(form && baseline) && JSON.stringify(form) !== JSON.stringify(baseline);
   // Read inside the sync effect below, which must not re-run when dirty flips.
@@ -635,9 +509,37 @@ function ProductWorkspace({ productId, params, setParams }) {
 
   const goBack = () => { if (confirmLeave()) setParams({}); };
 
+  // Tabs replace rather than push: flipping between Leads and Profile four
+  // times should not cost four presses of Back to escape the page.
+  const setTab = useCallback(
+    (next) => setParams({ product: productId, tab: next }, { replace: true }),
+    [productId, setParams],
+  );
+
+  const runs = useMemo(
+    () => [...(product?.runs || [])].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)),
+    [product?.runs],
+  );
+  const activeRun = runs.find((r) => IN_FLIGHT.includes(r.status)) || null;
+
+  // A finishing run is the only thing that puts new rows in the Leads tab, and
+  // the product query only polls while the *site* is being read — so the run's
+  // own event stream is what refreshes the grid underneath it.
+  useEffect(() => {
+    if (!activeRun?.runId) return undefined;
+    return subscribeToRun(activeRun.runId, (event) => {
+      if (["step.finished", "run.finished"].includes(event.type)) {
+        queryClient.invalidateQueries({ queryKey: ["promoted-product", productId] });
+        queryClient.invalidateQueries({ queryKey: ["promoter-leads", productId] });
+        queryClient.invalidateQueries({ queryKey: ["lead-status-counts"] });
+      }
+    }, () => {});
+  }, [activeRun?.runId, productId, queryClient]);
+
   const save = useMutation({
-    // The name lives on the product, the rest travel with the approval so the
-    // profile and the copy it drives are committed in the same act.
+    // The name lives on the product; the rest travels with the approval so the
+    // profile and the copy it drives are committed in one act. `icp` is never
+    // sent to the PATCH — doing so retracts the approval.
     mutationFn: async () => {
       await api.updatePromotedProduct(productId, { name: form.name.trim() });
       return api.savePromotedProductIcp(productId, {
@@ -684,8 +586,10 @@ function ProductWorkspace({ productId, params, setParams }) {
         return;
       }
       toast.success("Searching for companies that match your approved profile.");
-      setParams({ product: productId, run: newRunId });
       queryClient.invalidateQueries({ queryKey: ["promoted-product", productId] });
+      // Leads arrive one at a time while the run works, so the run sends you to
+      // where they will appear rather than leaving you on a list of runs.
+      setTab("leads");
     },
     onError: (err) => toast.error(err.message),
   });
@@ -699,11 +603,9 @@ function ProductWorkspace({ productId, params, setParams }) {
           <div className="mx-auto max-w-6xl px-5 py-6 md:px-8"><Skeleton className="h-8 w-56" /></div>
         </div>
         <PageBody className="space-y-3">
+          <Skeleton className="h-9 w-72 rounded-lg" />
           <Skeleton className="h-24 rounded-xl" />
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Skeleton className="h-96 rounded-xl" />
-            <Skeleton className="h-96 rounded-xl" />
-          </div>
+          <Skeleton className="h-96 rounded-xl" />
         </PageBody>
       </div>
     );
@@ -718,10 +620,6 @@ function ProductWorkspace({ productId, params, setParams }) {
     );
   }
 
-  const status = product.status;
-  const icpEmpty = !product.icp || Object.keys(product.icp).length === 0;
-  const approved = Boolean(product.icpApprovedAt);
-
   return (
     <div>
       <WorkspaceHeader
@@ -730,140 +628,931 @@ function ProductWorkspace({ productId, params, setParams }) {
         dirty={dirty}
         onArchive={() => archive.mutate()}
         archiving={archive.isPending}
+        tab={tab}
+        onTab={setTab}
       />
 
-      <PageBody className="space-y-4">
-        {status === "RESEARCHING" && <ResearchingPanel url={product.url} />}
+      {tab === "leads" && (
+        <LeadsTab productId={productId} product={product} activeRun={activeRun} onOpenTab={setTab} />
+      )}
 
-        {status === "FAILED" && (
-          <RecoveryPanel
-            title="We could not read that site"
-            body="The crawler was blocked, the pages had nothing to extract, or the AI step was unavailable. None of that is a dead end — try again, or write the customer profile yourself and carry on."
-            onRetry={() => research.mutate()}
-            retrying={research.isPending}
-            onManual={() => setForm((f) => starterForm(f || toForm(product)))}
-          />
-        )}
-
-        {(status === "ICP_REVIEW" || status === "READY" || status === "FAILED") && form && (
-          <>
-            {icpEmpty && status !== "FAILED" && (
-              <RecoveryPanel
-                title="No customer profile was drafted"
-                body="The research finished but the AI could not produce an ideal customer profile — usually because the AI step is switched off or out of budget. Run the research again, or fill the profile in yourself below. Either way nothing is searched until you approve it."
-                onRetry={() => research.mutate()}
-                retrying={research.isPending}
-                onManual={() => setForm((f) => starterForm(f))}
-              />
-            )}
-
-            <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-              <ProductProfile product={product} />
-              <IcpEditor
-                form={form}
-                setForm={setForm}
-                dirty={dirty}
-                approved={approved}
-                approvedAt={product.icpApprovedAt}
-                onDiscard={() => setForm(baseline)}
-                onApprove={() => save.mutate()}
-                saving={save.isPending}
-              />
-            </div>
-          </>
-        )}
-
-        {status === "ARCHIVED" && (
-          <Surface className="border-dashed">
-            <EmptyState
-              icon={Archive}
-              title="This product is archived"
-              description="It is kept for the record and no longer runs searches. Its leads and past runs are still in the app."
-            />
-          </Surface>
-        )}
-
-        {status === "READY" && (
-          <LaunchPanel
-            product={product}
-            dirty={dirty}
-            onLaunch={() => launch.mutate()}
-            launching={launch.isPending}
-            activeRunId={runId}
-            onOpenRun={(id) => setParams({ product: productId, run: id })}
-          />
-        )}
-
-        {runId && (
-          <RunResults
-            runId={runId}
-            setEmailFor={setEmailFor}
-            setEvidenceFor={setEvidenceFor}
-            showUnverified={showUnverified}
-            setShowUnverified={setShowUnverified}
-          />
-        )}
-      </PageBody>
-
-      {emailFor && (
-        <EmailComposer
-          leadId={emailFor.leadId}
-          name={emailFor.name}
-          contacts={emailFor.contacts}
-          address={emailFor.address}
-          onClose={() => setEmailFor(null)}
+      {tab === "runs" && (
+        <RunsTab
+          product={product}
+          runs={runs}
+          activeRun={activeRun}
+          dirty={dirty}
+          onLaunch={() => launch.mutate()}
+          launching={launch.isPending}
+          onOpenTab={setTab}
         />
       )}
 
-      <ProvenanceDrawer
-        leadId={evidenceFor?.leadId}
-        companyName={evidenceFor?.name}
-        open={Boolean(evidenceFor)}
-        onClose={() => setEvidenceFor(null)}
-      />
+      {tab === "profile" && (
+        <ProfileTab
+          product={product}
+          form={form}
+          setForm={setForm}
+          dirty={dirty}
+          onDiscard={() => setForm(baseline)}
+          onApprove={() => save.mutate()}
+          saving={save.isPending}
+          onResearch={() => research.mutate()}
+          researching={research.isPending}
+        />
+      )}
     </div>
   );
 }
 
-const WorkspaceHeader = ({ onBack, product, dirty, onArchive, archiving }) => (
+const WorkspaceHeader = ({ onBack, product, dirty, onArchive, archiving, tab, onTab }) => (
   <div className="border-b border-[var(--border)] bg-[var(--surface-raised)]">
-    <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-6 md:px-8">
-      <div className="flex min-w-0 items-center gap-3">
-        <Button variant="ghost" size="sm" onClick={onBack} aria-label="Back to your products">
-          <ArrowLeft size={14} />
-          <span className="hidden sm:inline">Products</span>
-        </Button>
-        <div className="min-w-0">
-          <h1 className="truncate text-lg font-semibold tracking-tight">
-            {product?.name || (product ? prettyUrl(product.url) : "Product")}
-          </h1>
-          {product && (
-            <a
-              href={product.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 truncate font-mono text-[11px] text-[var(--text-subtle)] hover:text-[var(--accent)] hover:underline"
-            >
-              {prettyUrl(product.url)}<ExternalLink size={9} />
-            </a>
+    <div className="mx-auto max-w-6xl px-5 pt-6 md:px-8">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <Button variant="ghost" size="sm" onClick={onBack} aria-label="Back to your products">
+            <ArrowLeft size={14} />
+            <span className="hidden sm:inline">Products</span>
+          </Button>
+          <div className="min-w-0">
+            <h1 className="truncate text-lg font-semibold tracking-tight">
+              {product?.name || (product ? prettyUrl(product.url) : "Product")}
+            </h1>
+            {product && (
+              <a
+                href={product.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 truncate font-mono text-[11px] text-[var(--text-subtle)] hover:text-[var(--accent)] hover:underline"
+              >
+                {prettyUrl(product.url)}<ExternalLink size={9} />
+              </a>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {dirty && <Badge tone="var(--color-caution)">Unsaved changes</Badge>}
+          {product && <StatusBadge status={product.status} />}
+          {product && product.status !== "ARCHIVED" && (
+            <Button variant="ghost" size="sm" onClick={onArchive} disabled={archiving} title="Archive this product">
+              <Archive size={13} /><span className="hidden sm:inline">Archive</span>
+            </Button>
           )}
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
-        {dirty && <Badge tone="var(--color-caution)">Unsaved changes</Badge>}
-        {product && <StatusBadge status={product.status} />}
-        {product && product.status !== "ARCHIVED" && (
-          <Button variant="ghost" size="sm" onClick={onArchive} disabled={archiving} title="Archive this product">
-            <Archive size={13} /><span className="hidden sm:inline">Archive</span>
-          </Button>
-        )}
-      </div>
+      {product && (
+        <div className="mt-4 flex gap-1 overflow-x-auto" role="tablist" aria-label="Product sections">
+          {TABS.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={tab === key}
+              onClick={() => onTab(key)}
+              className={cn(
+                "-mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-3.5 py-2.5 text-[13px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[color-mix(in_oklch,var(--accent)_25%,transparent)]",
+                tab === key
+                  ? "border-[var(--accent)] text-[var(--accent)]"
+                  : "border-transparent text-[var(--text-muted)] hover:text-[var(--text)]",
+              )}
+            >
+              <Icon size={13} />{label}
+              {key === "profile" && dirty && (
+                <span className="size-1.5 rounded-full bg-[var(--color-caution)]" title="Unsaved changes" />
+              )}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   </div>
 );
 
-/* ── 2. Researching ──────────────────────────────────────────────────────── */
+const ArchivedNotice = () => (
+  <Surface className="border-dashed p-4">
+    <div className="flex items-start gap-3">
+      <Archive size={16} className="mt-0.5 shrink-0 text-[var(--text-subtle)]" />
+      <div>
+        <h2 className="text-sm font-semibold">This product is archived</h2>
+        <p className="mt-1 text-sm leading-relaxed text-[var(--text-muted)]">
+          It is kept for the record and no longer runs searches. Its leads and past runs are still here and can
+          still be worked — nothing new will be found for it.
+        </p>
+      </div>
+    </div>
+  </Surface>
+);
+
+/* ── 3. Leads tab ────────────────────────────────────────────────────────── */
+
+/**
+ * The pipeline, as tabs. Each is a saved status filter, and the counts come
+ * from the same where-clause as the rows — so a badge and its grid can never
+ * disagree about how many leads there are.
+ */
+const PIPELINE = [
+  { key: "pending", label: "Pending", status: "NEW,QUALIFIED", hint: "Not yet contacted" },
+  { key: "contacted", label: "Contacted", status: "CONTACTED,FOLLOW_UP", hint: "Sent, awaiting a reply" },
+  { key: "replied", label: "Replied", status: "REPLIED", hint: "They answered — your move" },
+  { key: "all", label: "All", status: "", hint: "Everything active" },
+];
+
+function LeadsTab({ productId, product, activeRun, onOpenTab }) {
+  const navigate = useNavigate();
+  const grid = useServerGrid({
+    initialSort: "created",
+    initialPageSize: 25,
+    initialFilters: { status: "NEW,QUALIFIED" },
+    scope: productId,
+  });
+
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  // Set only by "select all matching", which knows the reachability of leads no
+  // page has rendered. Any manual tick drops it and the derived count takes over.
+  const [serverMeta, setServerMeta] = useState(null);
+  const [selectingAll, setSelectingAll] = useState(false);
+  const [sheet, setSheet] = useState(null);
+  const [composeFor, setComposeFor] = useState(null);
+  const [evidenceFor, setEvidenceFor] = useState(null);
+
+  // Every lead this tab has rendered, so the bulk bar can describe a selection
+  // spanning pages without refetching the ones already scrolled past.
+  const seen = useRef(new Map());
+
+  const requestParams = useMemo(() => ({ productId, ...grid.params }), [productId, grid.params]);
+  // The same filters minus the paging: what "matching leads" means to the tab
+  // counts and to select-all, neither of which is limited to the page on screen.
+  const matchParams = useMemo(() => {
+    const { page: _page, pageSize: _pageSize, ...rest } = requestParams;
+    return rest;
+  }, [requestParams]);
+
+  const { data, isPending, isError, error, refetch } = useQuery({
+    queryKey: ["promoter-leads", productId, grid.queryKey],
+    queryFn: () => api.listLeads(requestParams),
+    // Keep the previous page rendered during a page flip so ticked selections
+    // visibly carry across pages instead of the grid blinking away.
+    placeholderData: keepPreviousData,
+  });
+
+  const { data: counts } = useQuery({
+    queryKey: ["lead-status-counts", { ...matchParams, status: undefined }],
+    queryFn: () => api.leadStatusCounts({ ...matchParams, status: undefined }),
+    staleTime: 15_000,
+  });
+
+  // Built from the countries leads actually have. The list spans every lead in
+  // the app rather than this product's, which is fine as an option source —
+  // picking one this product has nothing in returns no rows, and the filtered
+  // empty state says exactly that.
+  const { data: countryData } = useQuery({
+    queryKey: ["lead-countries"],
+    queryFn: api.listLeadCountries,
+    staleTime: 60_000,
+  });
+
+  const rows = useMemo(() => data?.leads || [], [data]);
+  useEffect(() => { rows.forEach((lead) => seen.current.set(lead.id, lead)); }, [rows]);
+
+  const clearSelection = useCallback(() => { setSelectedIds(new Set()); setServerMeta(null); }, []);
+  // A different filter is a different result set; carrying ticks across it
+  // would send messages to leads the user can no longer see.
+  useEffect(() => { clearSelection(); }, [grid.queryKey, clearSelection]);
+
+  const derivedMeta = useMemo(() => {
+    const meta = { withEmail: 0, withPhone: 0, withWhatsApp: 0, emailBlocked: 0, blockedCountries: [] };
+    const countries = new Set();
+    for (const id of selectedIds) {
+      const lead = seen.current.get(id);
+      if (!lead) continue;
+      if (lead.contact?.hasEmail) meta.withEmail += 1;
+      if (lead.contact?.hasPhone) meta.withPhone += 1;
+      // Distinct from hasPhone: a switchboard is a phone number but not a
+      // WhatsApp account, and the bulk bar must not promise otherwise.
+      if (lead.contact?.hasWhatsApp) meta.withWhatsApp += 1;
+      // Leads a campaign will refuse on legal grounds, counted as they are
+      // ticked so the warning appears before the sheet opens, not after.
+      if (lead.compliance?.email?.policy === "BLOCKED") {
+        meta.emailBlocked += 1;
+        if (lead.compliance.email.country) countries.add(lead.compliance.email.country);
+      }
+    }
+    meta.blockedCountries = [...countries];
+    return meta;
+  }, [selectedIds]);
+
+  const selectionMeta = serverMeta || derivedMeta;
+
+  // The grid speaks in arrays; the selection is held as a Set because it is
+  // membership-tested per row and can hold 500 ids after "select all matching".
+  const selectedIdList = useMemo(() => [...selectedIds], [selectedIds]);
+
+  const handleSelectionChange = (next) => {
+    setSelectedIds(new Set(next || []));
+    setServerMeta(null);
+  };
+
+  // "Select all N matching" pulls the full id list (capped at 500 — the same
+  // cap a campaign has) so bulk send is one click, not thirteen pages of ticks.
+  const selectAllMatching = async () => {
+    setSelectingAll(true);
+    try {
+      const res = await api.listLeadIds(matchParams);
+      setSelectedIds(new Set(res.ids));
+      setServerMeta({
+        withEmail: res.withEmail ?? 0,
+        withPhone: res.withPhone ?? 0,
+        withWhatsApp: res.withWhatsApp ?? 0,
+        emailBlocked: res.emailBlocked ?? 0,
+        blockedCountries: res.blockedCountries ?? [],
+      });
+      if (res.capped) toast.info("Selection capped at 500 leads — the campaign limit.");
+      else toast.success(`${res.ids.length} ${res.ids.length === 1 ? "lead" : "leads"} selected.`);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSelectingAll(false);
+    }
+  };
+
+  /**
+   * One lead, in the composer that owns both channels. The composer reads
+   * `{ value }` cells while a lead card carries plain strings, so they are
+   * translated here — otherwise the To: line and the WhatsApp number open blank
+   * and have to be retyped from the row the user just clicked.
+   */
+  const openComposer = useCallback((lead, channel = "EMAIL") => setComposeFor({
+    leadId: lead.id,
+    channel,
+    name: lead.company.name,
+    contacts: {
+      email: lead.contact?.email ? { value: lead.contact.email } : null,
+      phone: lead.contact?.phone ? { value: lead.contact.phone } : null,
+      whatsapp: lead.contact?.whatsapp?.number ? { value: lead.contact.whatsapp.number } : null,
+    },
+  }), []);
+
+  const columns = useMemo(
+    () => leadColumns({ onCompose: openComposer, onEvidence: setEvidenceFor }),
+    [openComposer],
+  );
+
+  const total = data?.total ?? 0;
+  const activeStage = PIPELINE.find((p) => (p.status || "") === (grid.filters.status || ""))?.key ?? null;
+
+  // Which empty state an empty grid deserves. The pipeline tab is itself a
+  // status filter, so `grid.hasActiveFilters` is true from the first render —
+  // and a product that has simply never run a search would be told its filters
+  // are too tight. It only counts as narrowed once the user has touched
+  // something beyond the tab, or once we know leads exist in another stage.
+  const narrowed = grid.debouncedSearch !== ""
+    || Object.keys(grid.filters).some((key) => key !== "status")
+    || (counts?.all ?? 0) > 0;
+
+  return (
+    <PageBody className={cn("space-y-4", selectedIds.size > 0 && "pb-32 md:pb-24")}>
+      {product.status === "ARCHIVED" && <ArchivedNotice />}
+
+      {/* A running search is worth a line here, not the whole step list. The
+          full panel is twenty rows tall and pushed the leads — the reason this
+          tab exists — below the fold; it lives on the Runs tab instead. */}
+      {activeRun && (
+        <Surface className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <span className="flex items-center gap-2 text-[13px]">
+            <Spinner size={13} className="text-[var(--accent)]" />
+            <span className="font-medium">Searching for new leads…</span>
+            <span className="text-[var(--text-muted)]">Results appear here as they are confirmed.</span>
+          </span>
+          <Button variant="secondary" size="sm" onClick={() => onOpenTab("runs")}>
+            See progress
+          </Button>
+        </Surface>
+      )}
+
+      <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Pipeline stage">
+        {PIPELINE.map((stage) => (
+          <button
+            key={stage.key}
+            type="button"
+            role="tab"
+            aria-selected={activeStage === stage.key}
+            title={stage.hint}
+            onClick={() => grid.setFilter("status", stage.status)}
+            className={cn(
+              "inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-[13px] font-medium transition-colors",
+              activeStage === stage.key
+                ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                : "border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text)]",
+            )}
+          >
+            {stage.label}
+            {counts?.[stage.key] !== undefined && (
+              <span className={cn(
+                "tnum rounded-md px-1.5 py-px text-[11px]",
+                activeStage === stage.key ? "bg-[color-mix(in_oklch,var(--accent)_18%,transparent)]" : "bg-[var(--surface-sunken)]",
+              )}>
+                {counts[stage.key]}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      <LeadFilterBar grid={grid} countryData={countryData} />
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-[var(--text-muted)]">
+          <span className="tnum font-semibold text-[var(--text)]">{total}</span> {total === 1 ? "lead" : "leads"}
+          {grid.hasActiveFilters && " matching"}
+        </p>
+        {total > 0 && (
+          <button
+            type="button"
+            onClick={selectAllMatching}
+            disabled={selectingAll}
+            className="inline-flex items-center gap-1.5 text-[13px] text-[var(--accent)] hover:underline disabled:opacity-50"
+          >
+            <CheckSquare size={13} />
+            {selectingAll ? "Selecting…" : `Select all ${Math.min(total, 500)} matching`}
+          </button>
+        )}
+      </div>
+
+      <DataGrid
+        {...grid.bind(total)}
+        columns={columns}
+        rows={rows}
+        getRowId={(row) => row.id}
+        loading={isPending}
+        error={isError ? error : null}
+        onRetry={refetch}
+        hasActiveFilters={narrowed}
+        emptyFiltered={
+          <EmptyState
+            icon={Search}
+            title="No leads match these filters"
+            description="Loosen one, or switch pipeline stage — this product may simply have nothing in that country or above that score yet."
+            action={<Button variant="secondary" size="sm" onClick={grid.clearFilters}>Clear filters</Button>}
+          />
+        }
+        empty={
+          <EmptyState
+            icon={Users}
+            title="No leads for this product yet"
+            description={
+              product.icpApprovedAt
+                ? "The profile is approved. Run a search and matching companies land here."
+                : "Approve the customer profile first — nothing is searched until you do."
+            }
+            action={
+              <Button size="sm" onClick={() => onOpenTab(product.icpApprovedAt ? "runs" : "profile")}>
+                {product.icpApprovedAt
+                  ? <><Radar size={13} />Go to runs</>
+                  : <><ShieldCheck size={13} />Review the profile</>}
+              </Button>
+            }
+          />
+        }
+        selectable
+        selectedIds={selectedIdList}
+        onSelectionChange={handleSelectionChange}
+        onRowClick={(row) => navigate(`/leads/${row.id}`)}
+        minWidth={1120}
+        stickyHeader
+      />
+
+      {selectedIds.size > 0 && (
+        <BulkBar
+          count={selectedIds.size}
+          meta={selectionMeta}
+          onSend={(channels) => setSheet({ channels })}
+          onClear={clearSelection}
+        />
+      )}
+
+      <BulkSendSheet
+        open={Boolean(sheet)}
+        onClose={() => setSheet(null)}
+        initialChannels={sheet?.channels || ["EMAIL"]}
+        selection={{ ids: selectedIdList, ...selectionMeta }}
+      />
+
+      {composeFor && (
+        <EmailComposer
+          leadId={composeFor.leadId}
+          name={composeFor.name}
+          contacts={composeFor.contacts}
+          initialChannel={composeFor.channel}
+          onClose={() => setComposeFor(null)}
+        />
+      )}
+
+      <ProvenanceDrawer
+        leadId={evidenceFor?.id}
+        companyName={evidenceFor?.company?.name}
+        open={Boolean(evidenceFor)}
+        onClose={() => setEvidenceFor(null)}
+      />
+    </PageBody>
+  );
+}
+
+/**
+ * The grid's columns.
+ *
+ * Only score and freshness are sortable, because those are the only orderings
+ * the API has. A sortable header the server cannot honour returns the same rows
+ * in the same order and reads as a broken control.
+ */
+const leadColumns = ({ onCompose, onEvidence }) => [
+  {
+    key: "score",
+    label: "Score",
+    width: "80px",
+    align: "center",
+    sortable: true,
+    sortValue: "score",
+    render: (row) => (
+      <span className="tnum text-[15px] font-semibold" style={{ color: scoreTone(row.score) }}>{row.score}</span>
+    ),
+  },
+  {
+    key: "company",
+    label: "Company",
+    width: "290px",
+    render: (row) => (
+      <div className="min-w-0">
+        {/* No opportunity badge here. It carries the agency service the scoring
+            engine inferred — "Website development" on every row — which is a
+            different sale from the product this page is promoting, and saying
+            it beside the company name reads as what we intend to sell them. */}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate font-medium text-[var(--text)]">{row.company.name}</span>
+        </div>
+        <p className="truncate text-[11px] text-[var(--text-subtle)]">
+          {[row.company.industry, row.company.city, row.company.countryCode].filter(Boolean).join(" · ") || "—"}
+        </p>
+        {row.company.domain && (
+          <span className="mt-0.5 flex min-w-0 items-center gap-1">
+            <span className="truncate font-mono text-[11px] text-[var(--text-muted)]">{row.company.domain}</span>
+            {/* A website we could not tie to this business is the one thing
+                worth interrupting the scan for — every contact detail taken
+                from it may belong to somebody else. */}
+            {row.company.domainIdentityStatus === "WEAK" && (
+              <span
+                className="inline-flex shrink-0 items-center text-[var(--color-caution)]"
+                title="This site never identifies itself as this business. Verify before contacting."
+              >
+                <ShieldAlert size={11} aria-hidden="true" />
+                <span className="sr-only">Website ownership unverified</span>
+              </span>
+            )}
+          </span>
+        )}
+      </div>
+    ),
+  },
+  {
+    key: "why",
+    label: "Why it matched",
+    width: "260px",
+    render: (row) => (
+      row.topReasons?.length
+        ? (
+          <ul className="space-y-0.5">
+            {row.topReasons.slice(0, 2).map((reason, i) => (
+              <li key={`${row.id}-reason-${i}`} className="line-clamp-2 text-[12px] leading-snug text-[var(--text-muted)]">
+                {reason.text}
+              </li>
+            ))}
+          </ul>
+        )
+        : (
+          // With the website diagnostics stripped out, most leads have no
+          // recorded reason left — they were found because the approved profile
+          // asked for this kind of business in this market, which is true and
+          // worth saying rather than showing a dash.
+          <span className="text-[12px] leading-snug text-[var(--text-subtle)]">
+            Matches your profile{row.company?.industry ? ` — ${row.company.industry.split("/")[0].trim().toLowerCase()}` : ""}
+            {row.company?.city ? ` in ${row.company.city}` : ""}
+          </span>
+        )
+    ),
+  },
+  {
+    key: "contact",
+    label: "Contact",
+    width: "230px",
+    render: (row) => (
+      <div className="min-w-0 space-y-0.5">
+        {row.contact?.personName && (
+          <p
+            className="flex min-w-0 items-center gap-1.5 text-[12px]"
+            title={[row.contact.personName, row.contact.personTitle].filter(Boolean).join(" — ")}
+          >
+            <User size={11} className="shrink-0 text-[var(--accent)]" />
+            <span className="truncate">{row.contact.personName}</span>
+          </p>
+        )}
+        {row.contact?.email && (
+          <p className="flex min-w-0 items-center gap-1.5" title={row.contact.email}>
+            <Mail size={11} className="shrink-0 text-[var(--color-positive)]" />
+            <span className="truncate font-mono text-[11px] text-[var(--text-muted)]">{row.contact.email}</span>
+          </p>
+        )}
+        {(row.contact?.phone || row.contact?.hasWhatsApp) && (
+          <p className="flex flex-wrap items-center gap-x-3 text-[11px] text-[var(--text-muted)]">
+            {row.contact.phone && (
+              <span className="inline-flex items-center gap-1">
+                <Phone size={11} className="text-[var(--color-positive)]" />{row.contact.phone}
+              </span>
+            )}
+            {row.contact.hasWhatsApp && (
+              <span
+                className="inline-flex items-center gap-1 text-[var(--color-positive)]"
+                title={row.contact.whatsapp?.display || "Reachable on WhatsApp"}
+              >
+                <MessageCircle size={11} />WhatsApp
+              </span>
+            )}
+          </p>
+        )}
+        {!row.contact?.hasEmail && !row.contact?.hasPhone && (
+          <p className="text-[11px] text-[var(--text-subtle)]">No contact route found</p>
+        )}
+        {/* The legal position, stated beside the address rather than behind a
+            click: in the opt-in markets a single cold email is actionable by
+            the recipient with no regulator involved. */}
+        {row.compliance?.email?.policy === "BLOCKED" && (
+          <p
+            className="inline-flex items-center gap-1 text-[10px] font-medium text-[var(--color-critical)]"
+            title={row.compliance.email.note}
+          >
+            <ShieldAlert size={10} />
+            Email not lawful{row.compliance.email.law ? ` (${row.compliance.email.law})` : ""}
+          </p>
+        )}
+      </div>
+    ),
+  },
+  {
+    key: "status",
+    label: "Status",
+    width: "130px",
+    render: (row) => <Badge tone={STATUS_TONE[row.status]}>{STATUS_LABELS[row.status] || row.status}</Badge>,
+  },
+  {
+    key: "freshness",
+    label: "Evidence",
+    width: "130px",
+    sortable: true,
+    sortValue: "freshness",
+    render: (row) => (
+      <span className="inline-flex items-center gap-1.5 text-[12px]" style={{ color: freshnessTone(row.freshness?.bucket) }}>
+        <span className="size-1.5 rounded-full" style={{ background: freshnessTone(row.freshness?.bucket) }} />
+        {row.freshness?.relative || "—"}
+      </span>
+    ),
+  },
+  {
+    key: "actions",
+    label: "Actions",
+    width: "132px",
+    align: "right",
+    headerClass: "sr-only",
+    // Clicking an action must not also open the lead's page behind the panel
+    // that action just opened.
+    render: (row) => (
+      <div className="flex items-center justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onCompose(row)}
+          title={`Write to ${row.company.name}`}
+          aria-label={`Write to ${row.company.name}`}
+        >
+          <Mail size={13} />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onCompose(row, "WHATSAPP")}
+          disabled={!row.contact?.hasWhatsApp}
+          title={row.contact?.hasWhatsApp
+            ? `Message ${row.company.name} on WhatsApp`
+            : "No WhatsApp number for this lead"}
+          aria-label={`Message ${row.company.name} on WhatsApp`}
+        >
+          <MessageCircle size={13} />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onEvidence(row)}
+          title={`Every source behind ${row.company.name}, in the order it was collected`}
+          aria-label={`Evidence for ${row.company.name}`}
+        >
+          <FileSearch size={13} />
+        </Button>
+      </div>
+    ),
+  },
+];
+
+/**
+ * The filter bar.
+ *
+ * Search grows and the selects stay fixed, so the row does not reflow as values
+ * change; every select says what "no choice" means rather than showing a blank
+ * first option; and Clear exists only when there is something to clear.
+ */
+function LeadFilterBar({ grid, countryData }) {
+  // `useServerGrid` stores filters as strings, so the multi-select's array is
+  // kept as the comma list the API already expects and split back for display.
+  const countries = (grid.filters.country || "").split(",").filter(Boolean);
+
+  const countryOptions = [
+    ...(countryData?.countries || []).map((c) => ({ value: c.code, label: c.name, hint: c.leadCount })),
+    ...(countryData?.unknown
+      ? [{ value: "UNKNOWN", label: countryData.unknown.name, hint: countryData.unknown.leadCount }]
+      : []),
+  ];
+
+  return (
+    <Surface className="p-4">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-2 text-sm font-medium">
+          <SlidersHorizontal size={14} className="text-[var(--text-subtle)]" />Filters
+        </span>
+        {grid.hasActiveFilters && (
+          <Button variant="ghost" size="sm" onClick={grid.clearFilters}>
+            <X size={12} />Clear
+          </Button>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex min-w-[200px] max-w-md flex-1 flex-col gap-1">
+          <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">Search</span>
+          <span className="relative block">
+            <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-subtle)]" />
+            {/* Bound to the immediate value so typing feels instant; the hook
+                debounces what actually reaches the API. */}
+            <Input
+              value={grid.search}
+              onChange={(e) => grid.setSearch(e.target.value)}
+              placeholder="Search company or domain"
+              className="py-1.5 pl-8 text-[13px]"
+            />
+          </span>
+        </label>
+
+        <FilterSelect
+          label="Status"
+          value={grid.filters.status || ""}
+          onChange={(v) => grid.setFilter("status", v)}
+          options={[
+            { value: "", label: "All active" },
+            ...Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label })),
+          ]}
+        />
+        <FilterSelect
+          label="Opportunity"
+          value={grid.filters.service || ""}
+          onChange={(v) => grid.setFilter("service", v)}
+          options={[
+            { value: "", label: "Any" },
+            ...Object.entries(SERVICE_LABELS).map(([value, label]) => ({ value, label })),
+          ]}
+        />
+        <FilterSelect
+          label="Min score"
+          value={grid.filters.minScore || ""}
+          onChange={(v) => grid.setFilter("minScore", v)}
+          options={[
+            { value: "", label: "Any" },
+            { value: "40", label: "40+" }, { value: "55", label: "55+" },
+            { value: "70", label: "70+" }, { value: "85", label: "85+" },
+          ]}
+        />
+        <FilterSelect
+          label="Freshness"
+          value={grid.filters.freshness || ""}
+          onChange={(v) => grid.setFilter("freshness", v)}
+          options={[
+            { value: "", label: "Any time" },
+            ...Object.entries(FRESHNESS_LABELS).map(([value, label]) => ({ value, label })),
+          ]}
+        />
+        <FilterSelect
+          label="Sort by"
+          value={grid.sort || "created"}
+          onChange={grid.setSort}
+          options={[
+            { value: "created", label: "Newest first" },
+            { value: "score", label: "Score" },
+            { value: "freshness", label: "Freshest evidence" },
+          ]}
+        />
+
+        <div className="flex w-[170px] shrink-0 flex-col gap-1">
+          <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">Country</span>
+          <MultiSelect
+            value={countries}
+            onChange={(next) => grid.setFilter("country", next.join(","))}
+            options={countryOptions}
+            placeholder="All countries"
+            summaryNoun="countries"
+            className="px-2.5 py-1.5 text-[13px]"
+          />
+        </div>
+
+        <label className="flex w-[150px] shrink-0 flex-col gap-1">
+          <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">City</span>
+          <Input
+            value={grid.filters.city || ""}
+            onChange={(e) => grid.setFilter("city", e.target.value)}
+            placeholder="Any city"
+            className="py-1.5 text-[13px]"
+          />
+        </label>
+      </div>
+    </Surface>
+  );
+}
+
+const FilterSelect = ({ label, value, onChange, options }) => (
+  <label className="flex w-[150px] shrink-0 flex-col gap-1">
+    <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">{label}</span>
+    <Select value={value} onChange={(e) => onChange(e.target.value)} className="py-1.5 text-[13px]">
+      {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </Select>
+  </label>
+);
+
+/**
+ * Bulk actions, floating above the mobile tab bar.
+ *
+ * The full-width wrapper must not eat clicks meant for the pagination behind
+ * it, so only the pill itself accepts pointer events.
+ */
+const BulkBar = ({ count, meta, onSend, onClear }) => (
+  <div className="pointer-events-none fixed inset-x-0 bottom-16 z-40 flex justify-center px-4 md:bottom-5 md:pl-60">
+    <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-strong)] bg-[var(--surface-raised)] px-4 py-2.5 shadow-[var(--shadow-lg)]">
+      <Badge tone="var(--accent)">{count} selected</Badge>
+      <span className="hidden text-[11px] text-[var(--text-subtle)] sm:inline">
+        {meta.withEmail} with email · {meta.withWhatsApp} reachable on WhatsApp · kept across pages
+      </span>
+      {meta.emailBlocked > 0 && (
+        <span
+          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium"
+          style={{
+            backgroundColor: "color-mix(in oklch, var(--color-critical) 12%, transparent)",
+            color: "var(--color-critical)",
+          }}
+          title={`Cold email is not lawful in ${meta.blockedCountries.join(", ") || "these markets"}. These leads will be skipped; phone and WhatsApp may still be open.`}
+        >
+          <ShieldAlert size={11} />
+          {meta.emailBlocked} cannot be emailed
+        </span>
+      )}
+      <span className="mx-1 hidden h-4 w-px bg-[var(--border)] sm:inline" />
+      <Button size="sm" onClick={() => onSend(["EMAIL"])}><Mail size={13} />Email</Button>
+      <Button size="sm" variant="secondary" onClick={() => onSend(["WHATSAPP"])}><MessageCircle size={13} />WhatsApp</Button>
+      <Button size="sm" variant="secondary" onClick={() => onSend(["EMAIL", "WHATSAPP"])}>Both</Button>
+      <Button size="sm" variant="ghost" onClick={onClear} aria-label="Clear selection"><X size={13} /></Button>
+    </div>
+  </div>
+);
+
+/* ── 4. Runs tab ─────────────────────────────────────────────────────────── */
+
+function RunsTab({ product, runs, activeRun, dirty, onLaunch, launching, onOpenTab }) {
+  const approved = Boolean(product.icpApprovedAt);
+  const archived = product.status === "ARCHIVED";
+
+  return (
+    <PageBody className="space-y-4">
+      {archived && <ArchivedNotice />}
+      {activeRun && <DiscoveryProgress runId={activeRun.runId} onFinished={() => onOpenTab("leads")} />}
+
+      <Surface className="overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--surface-sunken)] px-4 py-3 sm:px-5">
+          <div className="min-w-0">
+            <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+              <Radar size={14} className="text-[var(--accent)]" />Find leads
+            </h2>
+            <p className="mt-0.5 max-w-xl text-xs text-[var(--text-muted)]">
+              {!approved
+                ? "The customer profile has not been approved yet, so there is nothing to search on."
+                : dirty
+                  ? "You have unsaved profile changes. Approve them first, or this run will use the last approved version."
+                  : "Searches public sources for companies matching your approved profile. Nothing is emailed automatically."}
+            </p>
+          </div>
+
+          {archived ? null : approved ? (
+            <Button onClick={onLaunch} disabled={launching || Boolean(activeRun)}>
+              {launching ? <Spinner size={13} /> : <Rocket size={13} />}
+              {launching ? "Starting…" : activeRun ? "A run is in progress" : "Find leads"}
+            </Button>
+          ) : (
+            <Button variant="secondary" onClick={() => onOpenTab("profile")}>
+              <ShieldCheck size={13} />Approve the profile
+            </Button>
+          )}
+        </div>
+
+        {runs.length === 0 ? (
+          <p className="px-4 py-4 text-xs text-[var(--text-subtle)] sm:px-5">
+            No runs yet. The first one will appear here, and you can come back to any past run later.
+          </p>
+        ) : (
+          <ul className="divide-y divide-[var(--border)]">
+            {runs.map((run) => (
+              <li key={run.runId} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 sm:px-5">
+                <span className="flex min-w-0 items-center gap-2">
+                  <Clock size={12} className="shrink-0 text-[var(--text-subtle)]" />
+                  <span className="text-[13px]">{formatDateTime(run.createdAt)}</span>
+                  <Badge tone={runTone(run.status)}>{String(run.status || "unknown").toLowerCase()}</Badge>
+                </span>
+                <span className="tnum text-[11px] text-[var(--text-muted)]">
+                  {run.leadCount ?? 0} leads
+                  {run.stats?.companiesFound !== undefined && ` · ${run.stats.companiesFound} companies seen`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Surface>
+
+      {runs.length > 0 && (
+        <p className="text-[11px] text-[var(--text-subtle)]">
+          Every lead these runs found is in the{" "}
+          <button type="button" onClick={() => onOpenTab("leads")} className="text-[var(--accent)] hover:underline">
+            Leads
+          </button>{" "}
+          tab, filterable and ready to write to.
+        </p>
+      )}
+    </PageBody>
+  );
+}
+
+/* ── 5. Profile & ICP tab ────────────────────────────────────────────────── */
+
+function ProfileTab({ product, form, setForm, dirty, onDiscard, onApprove, saving, onResearch, researching }) {
+  const status = product.status;
+  const icpEmpty = !product.icp || Object.keys(product.icp).length === 0;
+  const approved = Boolean(product.icpApprovedAt);
+
+  return (
+    <PageBody className="space-y-4">
+      {status === "ARCHIVED" && <ArchivedNotice />}
+      {status === "RESEARCHING" && <ResearchingPanel url={product.url} />}
+
+      {status === "FAILED" && (
+        <RecoveryPanel
+          title="We could not read that site"
+          body="The crawler was blocked, the pages had nothing to extract, or the AI step was unavailable. None of that is a dead end — try again, or write the customer profile yourself and carry on."
+          onRetry={onResearch}
+          retrying={researching}
+          onManual={() => setForm((f) => starterForm(f || toForm(product)))}
+        />
+      )}
+
+      {status !== "RESEARCHING" && form && (
+        <>
+          {icpEmpty && status !== "FAILED" && (
+            <RecoveryPanel
+              title="No customer profile was drafted"
+              body="The research finished but the AI could not produce an ideal customer profile — usually because the AI step is switched off or out of budget. Run the research again, or fill the profile in yourself below. Either way nothing is searched until you approve it."
+              onRetry={onResearch}
+              retrying={researching}
+              onManual={() => setForm((f) => starterForm(f))}
+            />
+          )}
+
+          <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+            <ProductProfile product={product} />
+            <IcpEditor
+              form={form}
+              setForm={setForm}
+              dirty={dirty}
+              approved={approved}
+              approvedAt={product.icpApprovedAt}
+              onDiscard={onDiscard}
+              onApprove={onApprove}
+              saving={saving}
+            />
+          </div>
+        </>
+      )}
+    </PageBody>
+  );
+}
 
 const RESEARCH_STEPS = [
   ["Reading the public pages", "Homepage, pricing, features, customers — whatever the site actually publishes."],
@@ -922,7 +1611,7 @@ const RecoveryPanel = ({ title, body, onRetry, retrying, onManual }) => (
   </Surface>
 );
 
-/* ── 3a. Left column: what we found ──────────────────────────────────────── */
+/* ── 5a. Left column: what we found ──────────────────────────────────────── */
 
 const ProvenanceList = ({ items, empty }) => {
   if (!items?.length) return <p className="text-xs text-[var(--text-subtle)]">{empty}</p>;
@@ -1067,7 +1756,248 @@ function ProductProfile({ product }) {
   );
 }
 
-/* ── 3b. Right column: who we think buys it ──────────────────────────────── */
+/* ── 5b. Reusable editors — built once, used by nine ICP sections ────────── */
+
+/**
+ * A list of short strings entered one at a time.
+ *
+ * Industries, job titles, disqualifiers and competitors are all the same
+ * interaction, so they are all this component. Enter adds; Backspace on an
+ * empty box removes the last chip, which is what anyone who has used a
+ * to/cc field expects.
+ */
+const TagListField = ({ label, help, values, onChange, placeholder, max, maxLength }) => {
+  const [draft, setDraft] = useState("");
+
+  const full = values.length >= max;
+  const over = values.length > max;
+
+  const add = () => {
+    const value = draft.trim();
+    if (!value || full) return;
+    if (values.some((v) => v.toLowerCase() === value.toLowerCase())) {
+      setDraft("");
+      return;
+    }
+    onChange([...values, value]);
+    setDraft("");
+  };
+
+  const remove = (index) => onChange(values.filter((_, i) => i !== index));
+
+  return (
+    <FormField
+      label={label}
+      hint={`${values.length}/${max}`}
+      help={full && !over ? `That is the maximum of ${max}. Remove one to add another.` : help}
+      error={over ? `Only ${max} are kept — remove ${values.length - max} before approving.` : undefined}
+    >
+      {(controlProps) => (
+        <div className="flex flex-col gap-2">
+          {values.length > 0 && (
+            <ul className="flex flex-wrap gap-1.5">
+              {values.map((value, index) => (
+                <li key={`${value}-${index}`}>
+                  <span className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-sunken)] py-1 pl-2 pr-1 text-xs text-[var(--text)]">
+                    <span className="max-w-[16rem] truncate">{value}</span>
+                    <button
+                      type="button"
+                      onClick={() => remove(index)}
+                      aria-label={`Remove ${value}`}
+                      className="rounded p-0.5 text-[var(--text-subtle)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--color-critical)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_oklch,var(--accent)_25%,transparent)]"
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="flex gap-2">
+            <Input
+              {...controlProps}
+              value={draft}
+              maxLength={maxLength}
+              disabled={full}
+              placeholder={full ? "" : placeholder}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); add(); }
+                if (e.key === "Backspace" && !draft && values.length) remove(values.length - 1);
+              }}
+            />
+            <Button type="button" variant="secondary" size="sm" onClick={add} disabled={full || !draft.trim()}>
+              <Plus size={12} />Add
+            </Button>
+          </div>
+        </div>
+      )}
+    </FormField>
+  );
+};
+
+/**
+ * A repeatable group of fields.
+ *
+ * `children` is a render prop given the row and a patch function, so each
+ * section only writes its own inputs — the add/remove/empty plumbing lives
+ * here once.
+ */
+const RepeatableRows = ({ rows, onChange, blank, addLabel, emptyHint, describe, max, children }) => {
+  const patch = (id, changes) => onChange(rows.map((r) => (r._id === id ? { ...r, ...changes } : r)));
+  const remove = (id) => onChange(rows.filter((r) => r._id !== id));
+  const add = () => onChange([...rows, { ...blank, _id: uid() }]);
+
+  const full = rows.length >= max;
+  const over = rows.length > max;
+
+  return (
+    <div className="flex flex-col gap-2">
+      {rows.length === 0 && (
+        <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-2.5 text-[11px] leading-snug text-[var(--text-subtle)]">
+          {emptyHint}
+        </p>
+      )}
+
+      {rows.map((row, index) => (
+        <div key={row._id} className="rounded-lg border border-[var(--border)] bg-[var(--surface-sunken)] p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">
+              {describe ? describe(index) : `#${index + 1}`}
+            </span>
+            <button
+              type="button"
+              onClick={() => remove(row._id)}
+              aria-label={`Remove ${describe ? describe(index) : `row ${index + 1}`}`}
+              className="rounded p-1 text-[var(--text-subtle)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--color-critical)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_oklch,var(--accent)_25%,transparent)]"
+            >
+              <X size={12} />
+            </button>
+          </div>
+          <div className="flex flex-col gap-2.5">{children(row, (changes) => patch(row._id, changes), index)}</div>
+        </div>
+      ))}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="secondary" size="sm" onClick={add} disabled={full}>
+          <Plus size={12} />{addLabel}
+        </Button>
+        <span className={cn("tnum text-[11px]", over ? "text-[var(--color-critical)]" : "text-[var(--text-subtle)]")}>
+          {over
+            ? `${rows.length}/${max} — remove ${rows.length - max} before approving.`
+            : full ? `${rows.length}/${max} — that is the maximum.` : `${rows.length}/${max}`}
+        </span>
+      </div>
+    </div>
+  );
+};
+
+/** A titled block inside the ICP form, so the form reads as sections not a wall. */
+const IcpSection = ({ icon: Icon, title, description, children }) => (
+  <section className="border-t border-[var(--border)] px-4 py-4 first:border-t-0 sm:px-5">
+    <SectionHeading icon={Icon} title={title} description={description} />
+    <div className="flex flex-col gap-4">{children}</div>
+  </section>
+);
+
+/* ── 5c. Form model — the server's ICP shape, plus row ids ───────────────── */
+
+const toForm = (product) => {
+  const icp = product?.icp || {};
+  const size = icp.companySize || {};
+  return {
+    name: product?.name || "",
+    pitchAngle: product?.pitchAngle || "",
+    proofLink: product?.proofLink || "",
+    senderContext: product?.senderContext || "",
+    icp: {
+      summary: icp.summary || "",
+      industries: asStrings(icp.industries),
+      companySize: {
+        min: size.min === null || size.min === undefined ? "" : String(size.min),
+        max: size.max === null || size.max === undefined ? "" : String(size.max),
+        note: size.note || "",
+      },
+      geographies: withIds(icp.geographies).map((g) => ({
+        region: g.region || "",
+        countryCode: (g.countryCode || "").toUpperCase(),
+        reason: g.reason || "",
+        priority: Number(g.priority) > 0 ? Number(g.priority) : 1,
+        _id: g._id,
+      })),
+      buyerTitles: {
+        decisionMakers: asStrings(icp.buyerTitles?.decisionMakers),
+        champions: asStrings(icp.buyerTitles?.champions),
+      },
+      painPoints: withIds(icp.painPoints).map((p) => ({
+        pain: p.pain || "", productAnswer: p.productAnswer || "", _id: p._id,
+      })),
+      buyingSignals: withIds(icp.buyingSignals).map((s) => ({
+        signal: s.signal || "",
+        detectableVia: DETECTABLE_VIA.some(([v]) => v === s.detectableVia) ? s.detectableVia : "OTHER",
+        // Not user-editable — it is how the backend joins a signal to the
+        // catalogue. Carried through so an edit never silently drops it.
+        signalKey: s.signalKey ?? null,
+        _id: s._id,
+      })),
+      disqualifiers: asStrings(icp.disqualifiers),
+      competitorsToDisplace: asStrings(icp.competitorsToDisplace),
+      suggestedSearchQueries: withIds(icp.suggestedSearchQueries).map((q) => ({
+        label: q.label || "",
+        searchInstruction: q.searchInstruction || "",
+        expectedSourceTypes: asStrings(q.expectedSourceTypes),
+        _id: q._id,
+      })),
+    },
+  };
+};
+
+const numberOrNull = (value) => {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null;
+};
+
+const toIcpPayload = (form) => ({
+  summary: form.icp.summary.trim(),
+  industries: form.icp.industries,
+  companySize: {
+    min: numberOrNull(form.icp.companySize.min),
+    max: numberOrNull(form.icp.companySize.max),
+    note: form.icp.companySize.note.trim(),
+  },
+  geographies: stripIds(form.icp.geographies.filter((g) => g.region.trim() || g.countryCode)),
+  buyerTitles: form.icp.buyerTitles,
+  painPoints: stripIds(form.icp.painPoints.filter((p) => p.pain.trim())),
+  buyingSignals: stripIds(form.icp.buyingSignals.filter((s) => s.signal.trim())),
+  disqualifiers: form.icp.disqualifiers,
+  competitorsToDisplace: form.icp.competitorsToDisplace,
+  suggestedSearchQueries: stripIds(
+    form.icp.suggestedSearchQueries.filter((q) => q.label.trim() && q.searchInstruction.trim()),
+  ).map((q) => ({ ...q, expectedSourceTypes: q.expectedSourceTypes.slice(0, CAPS.sourceTypes) })),
+});
+
+/**
+ * A blank row in each empty section, for "the AI could not draft this, I will
+ * write it". Only ever fills gaps — a half-drafted profile keeps everything it
+ * already has, because a recovery action that deletes work is not a recovery.
+ */
+const seedIfEmpty = (rows, blank) => (rows.length ? rows : [{ ...blank, _id: uid() }]);
+
+const starterForm = (form) => ({
+  ...form,
+  icp: {
+    ...form.icp,
+    geographies: seedIfEmpty(form.icp.geographies, { region: "", countryCode: "", reason: "", priority: 1 }),
+    painPoints: seedIfEmpty(form.icp.painPoints, { pain: "", productAnswer: "" }),
+    buyingSignals: seedIfEmpty(form.icp.buyingSignals, { signal: "", detectableVia: "WEBSITE_CONTENT", signalKey: null }),
+    suggestedSearchQueries: seedIfEmpty(form.icp.suggestedSearchQueries, { label: "", searchInstruction: "", expectedSourceTypes: [] }),
+  },
+});
+
+/* ── 5d. Right column: who we think buys it ─────────────────────────────── */
 
 function IcpEditor({ form, setForm, dirty, approved, approvedAt, onDiscard, onApprove, saving }) {
   const icp = form.icp;
@@ -1464,260 +2394,6 @@ function IcpEditor({ form, setForm, dirty, approved, approvedAt, onDiscard, onAp
           </div>
         </Surface>
       </div>
-    </div>
-  );
-}
-
-/* ── 4. Find leads ───────────────────────────────────────────────────────── */
-
-function LaunchPanel({ product, dirty, onLaunch, launching, activeRunId, onOpenRun }) {
-  const runs = useMemo(
-    () => [...(product.runs || [])].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)),
-    [product.runs],
-  );
-
-  return (
-    <Surface className="overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--surface-sunken)] px-4 py-3 sm:px-5">
-        <div className="min-w-0">
-          <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
-            <Radar size={14} className="text-[var(--accent)]" />Find leads
-          </h2>
-          <p className="mt-0.5 text-xs text-[var(--text-muted)]">
-            {dirty
-              ? "You have unsaved profile changes. Approve them first, or the run will use the last approved version."
-              : "Searches public sources for companies matching your approved profile. Nothing is emailed automatically."}
-          </p>
-        </div>
-        <Button onClick={onLaunch} disabled={launching}>
-          {launching ? <Spinner size={13} /> : <Rocket size={13} />}
-          {launching ? "Starting…" : "Find leads"}
-        </Button>
-      </div>
-
-      {runs.length === 0 ? (
-        <p className="px-4 py-4 text-xs text-[var(--text-subtle)] sm:px-5">
-          No runs yet. The first one will appear here, and you can come back to any past run later.
-        </p>
-      ) : (
-        <ul className="divide-y divide-[var(--border)]">
-          {runs.map((run) => (
-            <li key={run.runId}>
-              <button
-                type="button"
-                onClick={() => onOpenRun(run.runId)}
-                aria-current={run.runId === activeRunId ? "true" : undefined}
-                className={cn(
-                  "flex w-full flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-left transition-colors hover:bg-[var(--surface-sunken)] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-[color-mix(in_oklch,var(--accent)_25%,transparent)] sm:px-5",
-                  run.runId === activeRunId && "bg-[var(--accent-soft)]",
-                )}
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <Clock size={12} className="shrink-0 text-[var(--text-subtle)]" />
-                  <span className="text-[13px]">{formatDateTime(run.createdAt)}</span>
-                  <Badge tone={["PENDING", "RUNNING"].includes(run.status) ? "var(--color-info)" : run.status === "FAILED" ? "var(--color-critical)" : "var(--color-positive)"}>
-                    {run.status?.toLowerCase()}
-                  </Badge>
-                </span>
-                <span className="tnum text-[11px] text-[var(--text-muted)]">
-                  {run.leadCount ?? 0} leads
-                  {run.stats?.companiesFound !== undefined && ` · ${run.stats.companiesFound} companies seen`}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Surface>
-  );
-}
-
-function RunResults({ runId, setEmailFor, setEvidenceFor, showUnverified, setShowUnverified }) {
-  const queryClient = useQueryClient();
-
-  const { data: grid, isPending, isError, error, refetch } = useQuery({
-    queryKey: ["research-grid", runId],
-    queryFn: () => api.getResearchGrid(runId),
-    enabled: Boolean(runId),
-    refetchInterval: (q) => (["PENDING", "RUNNING"].includes(q.state.data?.status) ? 10_000 : false),
-  });
-
-  const { data: threadsData } = useQuery({ queryKey: ["outreach-threads"], queryFn: () => api.listThreads() });
-  const threadByLead = useMemo(
-    () => new Map((threadsData?.threads || []).map((t) => [t.leadId, t])),
-    [threadsData],
-  );
-
-  const draftAll = useMutation({
-    mutationFn: () => api.composeBatch({ leadIds: grid.rows.map((r) => r.leadId).slice(0, 50), runId }),
-    onSuccess: (data) => {
-      toast.success(`${data.written} emails drafted — ${data.aiWritten} by AI, ${data.templated} from templates.`);
-      queryClient.invalidateQueries({ queryKey: ["research-grid", runId] });
-      queryClient.invalidateQueries({ queryKey: ["email-drafts"] });
-    },
-    onError: (err) => toast.error(err.message),
-  });
-
-  useEffect(() => {
-    if (!runId) return undefined;
-    return subscribeToRun(runId, (event) => {
-      if (["step.finished", "run.finished"].includes(event.type)) {
-        queryClient.invalidateQueries({ queryKey: ["research-grid", runId] });
-      }
-    }, () => {});
-  }, [runId, queryClient]);
-
-  const isRunning = ["PENDING", "RUNNING"].includes(grid?.status);
-
-  return (
-    <div className="space-y-4">
-      {isRunning && <DiscoveryProgress runId={runId} onFinished={() => refetch()} />}
-      {isPending && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div>}
-      {isError && <Surface><ErrorState error={error} onRetry={refetch} /></Surface>}
-
-      {grid?.rows?.length > 0 && (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-sm text-[var(--text-muted)]">
-              <span className="font-semibold text-[var(--text)]">{grid.rows.length}</span> matches
-            </p>
-            <div className="flex items-center gap-3">
-              <Button variant="secondary" size="sm" onClick={() => draftAll.mutate()} disabled={draftAll.isPending || isRunning}>
-                {draftAll.isPending ? <Spinner size={12} /> : <PenLine size={12} />}
-                {draftAll.isPending ? "Drafting…" : "Draft all emails"}
-              </Button>
-              <ConfidenceLegend />
-            </div>
-          </div>
-
-          <Surface className="overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1460px] text-left text-[13px]">
-                <thead>
-                  <tr className="border-b border-[var(--border)] bg-[var(--surface-sunken)] text-[11px] uppercase tracking-wide text-[var(--text-subtle)]">
-                    <th className="px-3 py-2.5 font-medium">#</th>
-                    <th className="px-3 py-2.5 font-medium">Score</th>
-                    <th className="px-3 py-2.5 font-medium">Company</th>
-                    <th className="px-3 py-2.5 font-medium">Website</th>
-                    <th className="w-[300px] px-3 py-2.5 font-medium">About</th>
-                    <th className="px-3 py-2.5 font-medium">Email</th>
-                    <th className="px-3 py-2.5 font-medium">Phone</th>
-                    <th className="px-3 py-2.5 font-medium">WhatsApp</th>
-                    <th className="px-3 py-2.5 font-medium">Address</th>
-                    <th className="w-[280px] px-3 py-2.5 font-medium">Why</th>
-                    <th className="px-3 py-2.5 font-medium">Outreach</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--border)]">
-                  {grid.rows.map((row) => (
-                    <tr key={row.leadId} className="align-top transition-colors hover:bg-[var(--surface-sunken)]">
-                      <td className="tnum px-3 py-3 text-[var(--text-subtle)]">{row.rank}</td>
-                      <td className="px-3 py-3">
-                        <span className="tnum font-semibold" style={{ color: scoreTone(row.score) }}>{row.score}</span>
-                      </td>
-                      <td className="max-w-[190px] px-3 py-3">
-                        <Link to={`/leads/${row.leadId}`} className="block truncate font-medium hover:text-[var(--accent)] hover:underline">
-                          {row.name}
-                        </Link>
-                        <p className="truncate text-[11px] text-[var(--text-subtle)]">
-                          {[row.industry, row.city].filter(Boolean).join(" · ")}
-                        </p>
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {row.foundBy.map((f) => (
-                            <span key={f} className="rounded bg-[var(--surface-sunken)] px-1 py-px text-[9px] text-[var(--text-subtle)]">
-                              {f === "AI_WEB_SEARCH" ? "AI" : f === "OVERPASS" ? "map" : "crawl"}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="max-w-[150px] px-3 py-3">
-                        {row.website?.url ? (
-                          <a href={row.website.url} target="_blank" rel="noopener noreferrer"
-                             className="inline-flex min-w-0 items-center gap-1 truncate font-mono text-[12px] text-[var(--accent)] hover:underline">
-                            <span className="truncate">{row.website.domain}</span><ExternalLink size={9} className="shrink-0" />
-                          </a>
-                        ) : row.website?.absent ? (
-                          <span className="text-[var(--color-caution)]" title="A source established this business has no website — that is the opportunity.">no website</span>
-                        ) : (
-                          <span className="text-[var(--text-subtle)]" title="No website found yet — it has not been verified as absent.">not checked</span>
-                        )}
-                      </td>
-                      <td className="w-[300px] min-w-[300px] px-3 py-3">
-                        {row.about ? (
-                          <span className="line-clamp-3 text-[12px] text-[var(--text-muted)]" title={row.about.text}>{row.about.text}</span>
-                        ) : <span className="text-[var(--text-subtle)]">—</span>}
-                      </td>
-                      <td className="max-w-[180px] px-3 py-3">
-                        <ConfidenceCell cell={row.contacts.email} mono href={row.contacts.email ? `mailto:${row.contacts.email.value}` : null} />
-                      </td>
-                      <td className="max-w-[140px] px-3 py-3">
-                        <ConfidenceCell cell={row.contacts.phone} mono href={row.contacts.phone ? `tel:${row.contacts.phone.value}` : null} />
-                      </td>
-                      <td className="max-w-[140px] px-3 py-3">
-                        <ConfidenceCell cell={row.contacts.whatsapp} mono
-                          href={row.contacts.whatsapp ? `https://wa.me/${String(row.contacts.whatsapp.value).replace(/\D/g, "")}` : null} />
-                      </td>
-                      <td className="max-w-[180px] px-3 py-3"><ConfidenceCell cell={row.address} /></td>
-                      <td className="w-[280px] min-w-[280px] px-3 py-3">
-                        <ul className="space-y-0.5">
-                          {row.why.slice(0, 2).map((w, i) => (
-                            <li key={i} className="line-clamp-2 text-[12px] text-[var(--text-muted)]">{w.text}</li>
-                          ))}
-                        </ul>
-                      </td>
-                      <td className="px-3 py-3">
-                        <div className="flex flex-col items-start gap-1">
-                          <Button variant="secondary" size="sm" onClick={() => setEmailFor(row)}>
-                            <Mail size={12} />Email
-                          </Button>
-                          <Button variant="ghost" size="sm" onClick={() => setEvidenceFor(row)}
-                            title={`Every source behind ${row.name}, in the order it was collected`}>
-                            <FileSearch size={12} />Evidence
-                          </Button>
-                          <ThreadStatusChip thread={threadByLead.get(row.leadId)} />
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Surface>
-        </>
-      )}
-
-      {grid?.unverified?.length > 0 && (
-        <Surface className="border-[color-mix(in_oklch,var(--color-caution)_40%,transparent)]">
-          <button onClick={() => setShowUnverified(!showUnverified)}
-            aria-expanded={showUnverified}
-            className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm">
-            {showUnverified ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            <AlertTriangle size={14} className="text-[var(--color-caution)]" />
-            <span className="font-medium">{grid.unverified.length} unconfirmed candidates</span>
-            <span className="text-[var(--text-muted)]">— the AI mentioned these but we could not verify they exist</span>
-          </button>
-          {showUnverified && (
-            <ul className="divide-y divide-[var(--border)] border-t border-[var(--border)]">
-              {grid.unverified.map((c, i) => (
-                <li key={i} className="px-4 py-2.5">
-                  <p className="text-[13px] font-medium">{c.name}</p>
-                  <p className="text-[11px] text-[var(--text-muted)]">{c.reason}</p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Surface>
-      )}
-
-      {grid && !isRunning && grid.rows.length === 0 && (
-        <Surface className="border-dashed">
-          <EmptyState
-            icon={Search}
-            title="No confirmed matches"
-            description="The run finished but nothing passed verification. Narrowing the search strategies in your profile — or adding a different one — usually helps more than running the same search again."
-          />
-        </Surface>
-      )}
     </div>
   );
 }

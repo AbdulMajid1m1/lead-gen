@@ -27,6 +27,7 @@ const NOT_PEOPLE = [
   "DRIVING COURSE PACKAGES", "Choose Your License Type", "High School", "Middle School",
   "Human Resource", "Primary School Secretary", "School Principal", "Registrar Email",
   "Director Email", "General Enquiries", "Stay Connected", "Useful Links", "School Tours",
+  "Pastoral Care", "Student Support", "Reception Desk",
 ];
 
 // Real people from the same crawls, plus surnames that collide with the
@@ -107,6 +108,14 @@ describe("cleanTitle", () => {
 
   it("rejects a stray personal name where a title belongs", () => {
     expect(cleanTitle("Sarah Mitchell")).toBeNull();
+  });
+
+  it("rejects navigation text", () => {
+    // "Learn More" sat under a heading and was accepted as a job title, which
+    // corroborated "Pastoral Care" as a person.
+    for (const cta of ["Learn More", "Read More", "Contact Us", "View Profile"]) {
+      expect(cleanTitle(cta), cta).toBeNull();
+    }
   });
 });
 

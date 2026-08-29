@@ -120,14 +120,23 @@ export const listLeads = asyncHandler(async (req, res) => {
       take: q.pageSize,
       include: {
         company: { include: { domains: true, contacts: { where: { isSuppressed: false } }, locations: { take: 1 }, people: { orderBy: [{ seniority: "asc" }, { email: "desc" }], take: 1 } } },
-        reasons: { orderBy: { rank: "asc" }, take: 3 },
+        // The signal type is what distinguishes a reason about the company
+        // from one about its website, which a product-scoped list drops.
+        reasons: { orderBy: { rank: "asc" }, take: 6, include: { signal: { select: { type: true } } } },
         opportunities: { orderBy: { rank: "asc" } },
         actions: { orderBy: { priority: "desc" }, take: 1 },
       },
     }),
   ]);
 
-  res.json({ success: true, data: { leads: leads.map((l) => toLeadCard(l)), total, page: q.page, pageSize: q.pageSize } });
+  const forProduct = Boolean(q.productId);
+  res.json({
+    success: true,
+    data: {
+      leads: leads.map((l) => toLeadCard(l, null, { forProduct })),
+      total, page: q.page, pageSize: q.pageSize,
+    },
+  });
 });
 
 /** Split the `country` query parameter into valid ISO codes plus the UNKNOWN flag. */

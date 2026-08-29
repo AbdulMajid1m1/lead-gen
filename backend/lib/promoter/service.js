@@ -79,12 +79,35 @@ const RUNS_INCLUDE = {
   },
 };
 
+/**
+ * The list rows, with enough on each to fill a card.
+ *
+ * This used to omit the runs entirely, so every card on the landing page said
+ * "0 runs · 0 leads" however much a product had actually found — and the page
+ * worked around it by fetching each product again individually, one request per
+ * card. The runs are cheap to include and `leadCount` is a grouped count over
+ * the whole set rather than a query per product.
+ */
 export const listPromotedProducts = async () => {
   const products = await prisma.promotedProduct.findMany({
     where: { status: { not: "ARCHIVED" } },
     orderBy: { updatedAt: "desc" },
+    include: RUNS_INCLUDE,
   });
-  return products.map((p) => toProductDto(p));
+  if (!products.length) return [];
+
+  // One grouped query for every product's lead total, keyed by the run that
+  // found each lead. Counting per product would be a query per card again.
+  const runs = await prisma.discoveryRun.findMany({
+    where: { promotedProductId: { in: products.map((p) => p.id) } },
+    select: { id: true, promotedProductId: true, _count: { select: { leads: true } } },
+  });
+  const leadsByProduct = new Map();
+  for (const run of runs) {
+    leadsByProduct.set(run.promotedProductId, (leadsByProduct.get(run.promotedProductId) || 0) + run._count.leads);
+  }
+
+  return products.map((p) => toProductDto(p, { leadCount: leadsByProduct.get(p.id) || 0 }));
 };
 
 export const getPromotedProduct = async (id) => {

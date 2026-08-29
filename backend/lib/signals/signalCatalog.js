@@ -238,3 +238,39 @@ export const catalogForApi = () =>
     isReachability: REACHABILITY_SIGNALS.has(type),
     isDisqualifying: DISQUALIFYING_SIGNALS.has(type),
   }));
+
+/**
+ * Signals that only mean something when the thing being sold is the website.
+ *
+ * These are the agency's own diagnostics — the site is slow, it is on
+ * WooCommerce, it takes no bookings. Sound reasons to pitch web work, and
+ * actively misleading when the offering is a product with nothing to do with
+ * the site: a promote run once told a Dubai school that "the store runs on
+ * WooCommerce and commonly needs checkout work" and then offered it payroll
+ * software. Everything not listed here describes the company's own situation —
+ * it is hiring, it is expanding, it published a named manager — and so travels
+ * with any offering.
+ */
+export const WEBSITE_PITCH_SIGNALS = new Set([
+  "NO_WEBSITE", "OUTDATED_WEBSITE", "NO_HTTPS", "NO_MOBILE_VIEWPORT", "SLOW_SITE",
+  "OLD_COPYRIGHT", "LEGACY_JS_LIB", "WORDPRESS_DETECTED", "WOOCOMMERCE_DETECTED",
+  "SHOPIFY_DETECTED", "WIX_SQUARESPACE", "MAGENTO_LEGACY", "NO_ONLINE_ORDERING",
+  "NO_BOOKING_SYSTEM", "NO_SCHEMA_ORG", "NO_ANALYTICS",
+]);
+
+/**
+ * Is this name corroborated enough to show, or greet, as a person?
+ *
+ * The extractor is a heuristic over other people's markup. When it was looser a
+ * school's fee table produced a "person" called Affordable Fee, which the
+ * composer then greeted by name. A title, a seniority the classifier actually
+ * recognised, or an address built from the name are the three things that say a
+ * heading was a person rather than page furniture. Used by both the lead card
+ * and the composer so the grid never shows a name the email would refuse to use.
+ */
+export const personIsCorroborated = (person, emailMatchesName) =>
+  Boolean(person) && (
+    Boolean(person.title)
+    || !["OTHER", "UNKNOWN"].includes(person.seniority)
+    || Boolean(person.email && emailMatchesName?.(person.email, person.fullName))
+  );

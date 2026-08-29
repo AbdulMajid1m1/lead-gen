@@ -54,7 +54,7 @@ const NOT_A_NAME = /^(?:our|the|meet|about|contact|read|view|learn|book|call|ema
  * contacts, and the composer duly opened an email with "Hi Affordable,".
  */
 const NEVER_IN_A_NAME =
-  /\b(?:school|college|academy|university|campus|institute|programme|program|admission|admissions|enrol|enrolment|enrollment|registration|register|tuition|curriculum|grade|grades|student|students|pupil|pupils|parent|parents|alumni|faculty|department|syllabus|arts|sciences|library|laboratory|classroom|rooms|scholarship|multimedia|fee|fees|pricing|price|prices|payment|payments|discount|package|packages|course|courses|lesson|lessons|licence|license|enquiry|enquiries|inquiry|inquiries|links|tours|resource|resources|innovation|technology|admissions|vacancy|vacancies|testimonial|testimonials|gallery|brochure|prospectus|curriculum|timetable|calendar|policy|policies|email|phone|address|location|hours|opening)\b/i;
+  /\b(?:school|college|academy|university|campus|institute|programme|program|admission|admissions|enrol|enrolment|enrollment|registration|register|tuition|curriculum|grade|grades|student|students|pupil|pupils|parent|parents|alumni|faculty|department|syllabus|arts|sciences|library|laboratory|classroom|rooms|scholarship|multimedia|fee|fees|pricing|price|prices|payment|payments|discount|package|packages|course|courses|lesson|lessons|licence|license|enquiry|enquiries|inquiry|inquiries|links|tours|resource|resources|innovation|technology|admissions|vacancy|vacancies|testimonial|testimonials|gallery|brochure|prospectus|curriculum|timetable|calendar|policy|policies|email|phone|address|location|hours|opening|pastoral|care|wellbeing|welfare|safeguarding|counselling|reception|helpdesk|enquiries|support|updates|highlights|announcements|notices)\b/i;
 
 /**
  * The filler a role label is padded with — "General Enquiries", "Primary
@@ -114,6 +114,11 @@ const cleanTitle = (raw) => {
   // creativity meets…" is body copy that happened to sit under a heading, and
   // accepting it lets the heading itself pass as a person, because a title is
   // one of the things that corroborates a name.
+  // Navigation and call-to-action text sits under headings all over a site —
+  // "Learn More", "Read More", "Contact Us". Accepting one as a job title is
+  // what let "Pastoral Care" pass as a person, since a title is one of the
+  // things that corroborates a name.
+  if (NOT_A_NAME.test(t)) return null;
   if (t.split(" ").length > 10) return null;
   if (/\b(?:is|are|was|were|we|our|you|your|they|their|this|that|which|where|when)\b/i.test(t) && !TITLE_VOCABULARY.test(t)) return null;
   // Reject a second personal name appearing where a title should be — but only
