@@ -10,7 +10,7 @@ import { initialTemplate, productInitialTemplate } from "./templates.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
 import { AI_FAST_MODEL, AI_COMPOSE_MAX_LEADS, PROMOTER_MAX_LEADS_PER_RUN } from "../../configs/envConfig.js";
 import { relativeAge } from "../scoring/decay.js";
-import { emailMatchesName } from "../extract/people.js";
+import { emailMatchesName, isGreetableName, looksLikeJobTitle } from "../extract/people.js";
 import { log } from "../../utils/logger.js";
 
 /** Leads per AI call. The system prompt is paid once per chunk, not per lead. */
@@ -165,8 +165,12 @@ export const gatherFacts = async (leadId, { forProduct = false } = {}) => {
   // called Affordable Fee — which the composer then greeted by name. A second
   // check here costs a first name on some real leads and is worth it, because
   // the failure it prevents goes out in writing to a stranger.
-  const corroborated = person && (
-    Boolean(person.title)
+  // `Boolean(person.title)` was the whole check, and a menu item's price is a
+  // title too: production held "PROSCIUTTO FUNGHI, £15.5" and "Zen Sesshin,
+  // 29. August" as people, and the composer greeted them by first name. The
+  // name must have the shape of a name, and the title must name a role.
+  const corroborated = person && isGreetableName(person.fullName) && (
+    looksLikeJobTitle(person.title)
     || !["OTHER", "UNKNOWN"].includes(person.seniority)
     || (person.email && emailMatchesName(person.email, person.fullName))
   );

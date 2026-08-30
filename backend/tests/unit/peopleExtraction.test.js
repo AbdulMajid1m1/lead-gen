@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { __testables, emailMatchesName, classifySeniority } from "../../lib/extract/people.js";
+import { __testables, emailMatchesName, classifySeniority, isGreetableName, looksLikeJobTitle } from "../../lib/extract/people.js";
 import { firstNameOf } from "../../lib/research/compose.js";
 
 const { looksLikePersonName, cleanTitle } = __testables;
@@ -157,5 +157,52 @@ describe("classifySeniority", () => {
   it("ranks an owner above an operations title", () => {
     expect(classifySeniority("Principal/CEO")).toBe("OWNER");
     expect(classifySeniority("Office Manager")).toBe("OPERATIONS");
+  });
+});
+
+/**
+ * The composer's last line of defence before "Hi PROSCIUTTO,".
+ *
+ * Every rejected example below was a real CompanyPerson row in production,
+ * exported with its title exactly as stored.
+ */
+describe("isGreetableName / looksLikeJobTitle — what may be greeted by name", () => {
+  it("accepts names shaped like names", () => {
+    for (const n of ["Karen Grant", "Mr Robert Jennings", "Guven Ates", "Bradley Wright", "Sara Klein"]) {
+      expect(isGreetableName(n), n).toBe(true);
+    }
+  });
+
+  it("never greets a menu item, an event, a nav link or a heading", () => {
+    // The composer's decision is name-shape AND role-title. Each pair below
+    // is a real CompanyPerson row from production, title exactly as stored;
+    // every one of them was being greeted by "first name".
+    const greetable = (name, title) => isGreetableName(name) && looksLikeJobTitle(title);
+    for (const [name, title] of [
+      ["PROSCIUTTO FUNGHI", "£15.5"], ["Zen Sesshin", "29. August | 10:00 - 17:00"], ["DAY OUT", "Shop now"],
+      ["LAMBERTS DOWNTOWN BARBECUE", "(512) 555 0100"], ["Areas Covered", "EC1, N1, WC1, N21 and more"],
+      ["Charter Inclusions", "Captain, Crew, Fuel"], ["Texas-Style Catering", "catering"],
+      ["ARC Glass Wrap", "Emergency epoxy putty"], ["Curating Excellence", "Elite destinations, curated"],
+    ]) {
+      expect(greetable(name, title), `${name} / ${title}`).toBe(false);
+    }
+    for (const [name, title] of [
+      ["Karen Grant", "Bursar and ECA Coordinator"], ["Mr Robert Jennings", "Secondary Principal"], ["Guven Ates", "Director/Solicitor"],
+    ]) {
+      expect(greetable(name, title), `${name} / ${title}`).toBe(true);
+    }
+  });
+
+  it("only counts a title that names a role", () => {
+    expect(looksLikeJobTitle("Bursar and ECA Coordinator")).toBe(true);
+    expect(looksLikeJobTitle("Secondary Principal")).toBe(true);
+    expect(looksLikeJobTitle("Director/Solicitor")).toBe(true);
+    expect(looksLikeJobTitle("£15.5")).toBe(false);
+    expect(looksLikeJobTitle("29. August | 10:00 - 17:00")).toBe(false);
+    expect(looksLikeJobTitle("Shop now")).toBe(false);
+    expect(looksLikeJobTitle("Elite destinations, curated")).toBe(false);
+    expect(looksLikeJobTitle("Captain, Crew, Fuel")).toBe(false);
+    expect(looksLikeJobTitle("(512) 555 0100")).toBe(false);
+    expect(looksLikeJobTitle("Emergency epoxy putty")).toBe(false);
   });
 });

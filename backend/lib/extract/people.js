@@ -303,3 +303,33 @@ export const pickPrimaryPerson = (people = []) => {
 };
 
 export const __testables = { looksLikePersonName, cleanTitle, SENIORITY_RANK, TITLE_VOCABULARY };
+
+/**
+ * Whether a stored name may be *greeted* — a stricter question than whether
+ * it could be extracted. The extractor's own check (`looksLikePersonName`
+ * above) ran when the row was written, and in production it still let
+ * "PROSCIUTTO FUNGHI" (with the price as its title), "LAMBERTS DOWNTOWN
+ * BARBECUE" and "DAY OUT" through as people, and the composer greeted them by
+ * first name. A heading is a run of capitals; a name is not.
+ */
+export const isGreetableName = (name) => {
+  const text = String(name || "").trim();
+  if (!looksLikePersonName(text)) return false;
+  if (/[£$€|/]/.test(text)) return false;
+  return text.split(/\s+/).filter((w) => /^[A-Z]{2,}$/.test(w)).length < 2;
+};
+
+/**
+ * Whether a stored title is a job title rather than a price, a date, a phone
+ * number or a line of menu copy. A title only counts as corroboration when it
+ * names a role — that is the whole reason a title corroborates anything.
+ */
+const ROLE_WORD_RE =
+  /\b(?:director|manager|founder|co-?founder|owner|partner|proprietor|head|chief|officer|principal|bursar|coordinator|solicitor|lawyer|barrister|attorney|doctor|dr|dentist|surgeon|consultant|lead|engineer|designer|developer|ceo|cto|cfo|coo|cmo|md|gm|vp|president|chair(?:man|woman|person)?|chef|agent|advisor|adviser|specialist|executive|secretary|administrator|teacher|tutor|coach|therapist|physio(?:therapist)?|pharmacist|architect|accountant|analyst|controller|supervisor|technician|nurse|receptionist|stylist|trainer|instructor|broker|realtor|planner|editor|producer|strategist|recruiter|associate|assistant|clerk|treasurer|trustee|governor|dean|professor|lecturer|registrar)\b/i;
+
+export const looksLikeJobTitle = (title) => {
+  const text = String(title || "").trim();
+  if (!text || text.length > 90) return false;
+  if (/[£$€]|\d{2,}|\b(?:shop now|book now|order now|menu|emergency|open(?:ing)? hours)\b/i.test(text)) return false;
+  return ROLE_WORD_RE.test(text);
+};
