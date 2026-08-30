@@ -5,8 +5,8 @@ import { parseWithLlm } from "../../lib/nlquery/llmParser.js";
 import { buildResearchPlan } from "../../lib/nlquery/planner.js";
 import { buildBrief, saveBrief } from "../../lib/research/brief.js";
 import { getGrid } from "../../lib/research/grid.js";
-import { composeEmailForLead, gatherFacts } from "../../lib/research/compose.js";
-import { initialTemplate } from "../../lib/research/templates.js";
+import { composeEmailForLead, gatherFacts, promotedProductForLead } from "../../lib/research/compose.js";
+import { initialTemplate, productInitialTemplate } from "../../lib/research/templates.js";
 import { SERVICE_LABELS } from "../../lib/scoring/scoreEngine.js";
 import { createDiscoveryRun, startDiscoveryRun } from "../../lib/discovery/runner.js";
 import { isResearchAvailable, CostTracker } from "../../lib/llm/responses.js";
@@ -154,14 +154,20 @@ export const getHistory = asyncHandler(async (req, res) => {
  * that was written. Hitting Regenerate is what commits a real draft.
  */
 const buildSuggestion = async (leadId) => {
-  const gathered = await gatherFacts(leadId);
+  // A promoter lead's suggestion pitches the product it was found for; the
+  // facts are narrowed to the company rather than its website for the same
+  // reason the batch composer narrows them.
+  const product = await promotedProductForLead(leadId);
+  const gathered = await gatherFacts(leadId, { forProduct: Boolean(product) });
   if (!gathered) return null;
-  const { lead, company, facts } = gathered;
+  const { lead, company, facts, recipient } = gathered;
   const serviceKey = lead.primaryOpportunity;
-  const draft = initialTemplate({
-    company, facts, serviceKey,
-    serviceLabel: SERVICE_LABELS[serviceKey] || "software development",
-  });
+  const draft = product
+    ? productInitialTemplate({ company, facts, product, recipient })
+    : initialTemplate({
+      company, facts, serviceKey,
+      serviceLabel: SERVICE_LABELS[serviceKey] || "software development",
+    });
   return {
     // No id: this row does not exist, and `draftId` must stay null on send or
     // the outbound message would point at a foreign key that was never written.

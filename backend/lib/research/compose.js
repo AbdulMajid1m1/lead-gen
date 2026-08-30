@@ -212,7 +212,20 @@ export const bodyIsGrounded = (body, facts) => {
   return { ok: true, offending: null };
 };
 
-export const composeEmailForLead = async ({ leadId, runId = null, tracker = null, serviceOverride = null }) => {
+export const composeEmailForLead = async ({ leadId, runId = null, tracker = null, serviceOverride = null, product = undefined }) => {
+  // A promoter lead goes down the product path — same prompt trio, same
+  // fallback template, same product stamp as the batch that wrote its first
+  // draft — rather than the website-services one below. `product` may be
+  // passed explicitly (or as null to force the services pitch); undefined
+  // means "look it up".
+  const resolvedProduct = product === undefined ? await promotedProductForLead(leadId) : product;
+  if (resolvedProduct) {
+    const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { discoveryRunId: true } });
+    if (!lead) return null;
+    await composeForRun({ runId: runId ?? lead.discoveryRunId, leadIds: [leadId], tracker, product: resolvedProduct });
+    return prisma.leadEmailDraft.findFirst({ where: { leadId }, orderBy: { createdAt: "desc" } });
+  }
+
   const gathered = await gatherFacts(leadId);
   if (!gathered) return null;
   // `recipient` is used by the template fallback below; leaving it out of this
@@ -264,6 +277,31 @@ export const composeEmailForLead = async ({ leadId, runId = null, tracker = null
 const templateDraft = ({ company, lead, facts, serviceLabel, serviceKey, recipient = null }) =>
   initialTemplate({ company, facts, serviceKey: serviceKey || lead.primaryOpportunity, serviceLabel, recipient });
 
+/**
+ * The SaaS product a lead was found to be sold, if any.
+ *
+ * Which product a lead is for lives on the discovery run that produced it, not
+ * on the lead. Every path that writes an email for one lead at a time — the
+ * campaign drain composing on the fly, "write a new draft" on the lead page,
+ * the suggestion shown when there is no draft — used to assume the offering
+ * was website services, and a promoter lead got a pitch for a redesign of a
+ * site it was never scored on. Resolving the product here, once, is what lets
+ * all of them pitch the right thing.
+ */
+export const promotedProductForLead = async (leadId) => {
+  const lead = await prisma.lead.findUnique({
+    where: { id: leadId },
+    select: { discoveryRun: { select: { promotedProduct: true } } },
+  });
+  return lead?.discoveryRun?.promotedProduct || null;
+};
+
+/** The product a run promotes, or null for an ordinary research run. */
+const promotedProductForRun = async (runId) => {
+  const run = await prisma.discoveryRun.findUnique({ where: { id: runId }, select: { promotedProduct: true } });
+  return run?.promotedProduct || null;
+};
+
 const saveDraft = async ({ leadId, runId, draft, facts, generatedBy, model, promotedProductId = null }) =>
   prisma.leadEmailDraft.create({
     data: {
@@ -304,6 +342,9 @@ const draftIsAcceptable = (draft, facts) => {
  * same inventions, whichever thing is being sold.
  */
 export const composeForRun = async ({ runId, leadIds, tracker, serviceOverride = null, product = null }) => {
+  // A caller that knows the run but not what it sells (the compose-batch
+  // endpoint) still gets the product pitch for a promote run.
+  if (!product && runId) product = await promotedProductForRun(runId);
   // A promote run gets its own ceiling. Its leads were all sourced against one
   // approved ICP, so the whole set is worth writing to, where a research run's
   // tail is speculative and deliberately cut short.

@@ -9,6 +9,7 @@ import { createError } from "../../utils/createError.js";
 import { asyncHandler } from "../../middlewares/validate.js";
 import { pickWhatsAppNumber } from "../../lib/outreach/phoneRank.js";
 import { sendPolicyFor, isRoleAddress, isSendBlocked } from "../../lib/outreach/sendPolicy.js";
+import { CAMPAIGN_MAX_RECIPIENTS } from "../../lib/outreach/campaigns.js";
 
 export const listSchema = z.object({
   status: z.string().optional(),
@@ -593,7 +594,7 @@ export const listLeadIds = asyncHandler(async (req, res) => {
   const rows = await prisma.lead.findMany({
     where,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: 500,
+    take: CAMPAIGN_MAX_RECIPIENTS,
     select: {
       id: true,
       company: {
@@ -644,7 +645,10 @@ export const listLeadIds = asyncHandler(async (req, res) => {
       // How many of this selection cannot lawfully be cold-emailed, and where.
       emailBlocked,
       blockedCountries,
-      capped: rows.length === 500,
+      capped: rows.length === CAMPAIGN_MAX_RECIPIENTS,
+      // The cap itself, so the client can say the real number rather than
+      // hard-coding one that drifts from the server's.
+      cap: CAMPAIGN_MAX_RECIPIENTS,
     },
   });
 });

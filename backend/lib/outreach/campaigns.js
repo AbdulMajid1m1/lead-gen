@@ -32,7 +32,16 @@ const DAY_MS = 86_400_000;
 export const DAILY_EMAIL_CAP = Number(process.env.OUTREACH_DAILY_EMAIL_CAP || 150);
 // Unofficial WhatsApp transport — stay conservative or the number gets banned.
 export const DAILY_WA_CAP = Number(process.env.OUTREACH_DAILY_WA_CAP || 60);
-const MAX_RECIPIENTS = 500;
+/**
+ * The most leads one campaign may hold. Generous on purpose: the daily cap,
+ * not the list size, is what protects the sender — a 2,000-lead campaign at
+ * 40 a day is seven weeks of unremarkable volume, not a blast.
+ */
+export const CAMPAIGN_MAX_RECIPIENTS = Math.max(1, Number(process.env.OUTREACH_MAX_RECIPIENTS || 2000));
+/** A start time further out than this is almost certainly a typo in the year. */
+export const MAX_SCHEDULE_AHEAD_DAYS = 90;
+/** Every local weekday, the meaning of a null `sendDays`. */
+export const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 
 const startOfToday = () => {
   const d = new Date();
@@ -51,12 +60,51 @@ export const localHour = (tzOffsetMinutes, now = new Date()) => {
   return mins / 60;
 };
 
-/** DIRECT campaigns send around the clock; AUTO only inside its local window. */
+/** Day of week (0 = Sunday … 6 = Saturday) at the campaign's timezone offset. */
+export const localWeekday = (tzOffsetMinutes, now = new Date()) =>
+  new Date(now.getTime() + tzOffsetMinutes * 60_000).getUTCDay();
+
+/**
+ * The local weekdays a campaign may send on. Null or an empty list means every
+ * day — the behaviour of every campaign created before the field existed.
+ */
+export const sendDaysOf = (campaign) => {
+  const days = Array.isArray(campaign.sendDays) ? campaign.sendDays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6) : [];
+  return days.length ? [...new Set(days)].sort((a, b) => a - b) : ALL_DAYS;
+};
+
+/**
+ * Whether today (locally) is a day this campaign sends on. DIRECT campaigns
+ * ignore the calendar; the day rule is part of the AUTO schedule.
+ *
+ * A B2B email that lands on a Saturday is read on Monday under forty others,
+ * and a burst of cold mail on a weekend is itself a spam signal — so the UI
+ * defaults AUTO campaigns to working days and offers the Sun–Thu week for the
+ * Gulf markets.
+ */
+export const isSendDay = (campaign, now = new Date()) => {
+  if (campaign.mode !== "AUTO") return true;
+  return sendDaysOf(campaign).includes(localWeekday(campaign.tzOffsetMinutes, now));
+};
+
+/**
+ * DIRECT campaigns send around the clock; AUTO only inside its local window,
+ * on its send days.
+ */
 export const isWithinSendWindow = (campaign, now = new Date()) => {
   if (campaign.mode !== "AUTO") return true;
+  if (!isSendDay(campaign, now)) return false;
   const h = localHour(campaign.tzOffsetMinutes, now);
   return h >= campaign.windowStart && h < campaign.windowEnd;
 };
+
+/**
+ * Whether a start time means "later" rather than "now". A minute of slack
+ * absorbs the gap between a browser filling in "now" and the request landing,
+ * so a campaign asked to start immediately never sits SCHEDULED for a tick.
+ */
+export const isFutureStart = (startAt, now = new Date()) =>
+  startAt instanceof Date && !Number.isNaN(startAt.getTime()) && startAt.getTime() > now.getTime() + 60_000;
 
 /**
  * AUTO gap between sends: the day's quota spread evenly across the window,
@@ -118,6 +166,7 @@ export { pickWhatsAppNumber };
 export const createCampaign = async ({
   name, leadIds, channels, accountId = null, waAccountId = null, paceSeconds = 45,
   mode = "DIRECT", dailyLimit = null, windowStart = 9, windowEnd = 18, tzOffsetMinutes = 0,
+  sendDays = null, startAt = null,
   createdBy = null,
 }) => {
   // The launcher owns every message the queue will send on their behalf, so the
@@ -139,7 +188,7 @@ export const createCampaign = async ({
     waAccountId = device.id;
   }
 
-  const uniqueIds = [...new Set(leadIds)].slice(0, MAX_RECIPIENTS);
+  const uniqueIds = [...new Set(leadIds)].slice(0, CAMPAIGN_MAX_RECIPIENTS);
   const leads = await prisma.lead.findMany({
     where: { id: { in: uniqueIds } },
     include: {
@@ -194,6 +243,15 @@ export const createCampaign = async ({
 
   const sendable = recipients.filter((r) => r.emailState === "PENDING" || r.waState === "PENDING");
 
+  // A start in the future parks the campaign as SCHEDULED; the worker promotes
+  // it on the first tick at or after `startAt`. A start in the past (or within
+  // the next minute) is simply "now", so the row records when it began.
+  const scheduled = isFutureStart(startAt);
+  const status = !sendable.length ? "COMPLETED" : scheduled ? "SCHEDULED" : "RUNNING";
+  // The day rule only means something on an AUTO schedule; a DIRECT campaign
+  // drains at its pace regardless, so nothing misleading is stored for it.
+  const days = mode === "AUTO" ? sendDaysOf({ sendDays }) : null;
+
   const campaign = await prisma.outreachCampaign.create({
     data: {
       name: (name || `Bulk send · ${new Date().toLocaleDateString("en-GB")}`).slice(0, 160),
@@ -202,15 +260,39 @@ export const createCampaign = async ({
       mode,
       dailyLimit: mode === "AUTO" ? (dailyLimit || AUTO_DEFAULT_DAILY_LIMIT) : null,
       windowStart, windowEnd, tzOffsetMinutes,
+      // "Every day" is left NULL (the column default) so an old row and a new
+      // every-day row read the same way. Omitted rather than set to null:
+      // Prisma refuses a bare null on a Json column.
+      ...(days && days.length < 7 ? { sendDays: days } : {}),
+      startAt: scheduled ? startAt : new Date(),
       createdById: actor?.id ?? null, createdByName: actor?.name ?? null,
-      status: sendable.length ? "RUNNING" : "COMPLETED",
+      status,
       completedAt: sendable.length ? null : new Date(),
-      recipients: { create: recipients },
+      // One INSERT for the whole list rather than one per lead: at the
+      // recipient cap the difference is a request that returns in well under a
+      // second versus one that holds a transaction open for several.
+      recipients: { createMany: { data: recipients } },
     },
   });
 
-  logger.info({ campaignId: campaign.id, leads: leads.length, sendable: sendable.length, channels, createdBy: actor?.id || "system" }, "campaign created");
+  logger.info({ campaignId: campaign.id, leads: leads.length, sendable: sendable.length, channels, status, startAt: campaign.startAt, createdBy: actor?.id || "system" }, "campaign created");
   return { ok: true, campaign: await campaignWithProgress(campaign.id), skippedUpfront: recipients.length - sendable.length };
+};
+
+/**
+ * Promote every SCHEDULED campaign whose start time has arrived. Runs at the
+ * top of each tick so a campaign scheduled for 09:00 sends its first message
+ * on the 09:00 tick, not the one after.
+ *
+ * @returns {Promise<number>} how many campaigns started
+ */
+export const startDueCampaigns = async (now = new Date()) => {
+  const { count } = await prisma.outreachCampaign.updateMany({
+    where: { status: "SCHEDULED", startAt: { lte: now } },
+    data: { status: "RUNNING" },
+  });
+  if (count) logger.info({ count }, "scheduled campaigns started");
+  return count;
 };
 
 /**
@@ -339,8 +421,9 @@ const pauseIfBouncing = async (campaign) => {
  * should not stall the queue for an hour).
  */
 export const runCampaignTick = async () => {
+  const started = await startDueCampaigns();
   const campaigns = await prisma.outreachCampaign.findMany({ where: { status: "RUNNING" }, orderBy: { createdAt: "asc" } });
-  const summary = { campaigns: campaigns.length, sent: 0, skipped: 0, failed: 0, completed: 0, paused: 0 };
+  const summary = { campaigns: campaigns.length, started, sent: 0, skipped: 0, failed: 0, completed: 0, paused: 0 };
 
   for (const campaign of campaigns) {
     // The bounce guard, once per tick rather than per recipient: a list that is
@@ -432,6 +515,11 @@ export const campaignWithProgress = async (campaignId) => {
     mode: campaign.mode, dailyLimit: campaign.dailyLimit,
     windowStart: campaign.windowStart, windowEnd: campaign.windowEnd,
     tzOffsetMinutes: campaign.tzOffsetMinutes,
+    // The calendar side of the schedule: which local days it sends on, and
+    // when it starts (or started). Both are what the card needs to say
+    // "starts Monday 09:00, weekdays only" instead of just "scheduled".
+    sendDays: campaign.mode === "AUTO" ? sendDaysOf(campaign) : null,
+    startAt: campaign.startAt,
     accountId: campaign.accountId, waAccountId: campaign.waAccountId,
     // Who launched it. Every send it makes is recorded against this person, so
     // the list view names them rather than leaving a bulk run anonymous.
@@ -452,6 +540,13 @@ export const setCampaignStatus = async (campaignId, status) => {
   const campaign = await prisma.outreachCampaign.findUnique({ where: { id: campaignId } });
   if (!campaign) return { ok: false, error: "Campaign not found." };
   if (["COMPLETED", "CANCELLED"].includes(campaign.status)) return { ok: false, error: `Campaign is already ${campaign.status.toLowerCase()}.` };
+  // A campaign that has not begun has nothing to pause. It can be started
+  // early (RUNNING) or dropped (CANCELLED); PAUSED would only make "resume"
+  // ambiguous about whether the original start time still applies.
+  if (campaign.status === "SCHEDULED" && status === "PAUSED") {
+    return { ok: false, error: "This campaign has not started yet — start it now or cancel it instead." };
+  }
+  const startingEarly = campaign.status === "SCHEDULED" && status === "RUNNING";
 
   if (status === "CANCELLED") {
     // Pending rows are closed out so the numbers still add up afterwards.
@@ -473,7 +568,10 @@ export const setCampaignStatus = async (campaignId, status) => {
       // as the current state. If the addresses were not actually cleaned, the
       // guard writes a fresh reason on the next tick.
       ...(status === "RUNNING" ? { pausedReason: null } : {}),
+      // "Start now" on a scheduled campaign: the record says when it really
+      // began, not when it was once meant to.
+      ...(startingEarly ? { startAt: new Date() } : {}),
     },
   });
-  return { ok: true, campaign: await campaignWithProgress(campaignId) };
+  return { ok: true, campaign: await campaignWithProgress(campaignId), started: startingEarly };
 };

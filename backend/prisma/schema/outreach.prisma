@@ -205,6 +205,9 @@ model OutreachMessage {
 // ─── Bulk campaigns ───────────────────────────────────────────────────────────
 
 enum CampaignStatus {
+  /// Created with a start time in the future; the worker flips it to RUNNING
+  /// on the first tick at or after `startAt`.
+  SCHEDULED
   RUNNING
   PAUSED
   COMPLETED
@@ -256,6 +259,12 @@ model OutreachCampaign {
   windowEnd       Int          @default(18)
   /// Minutes east of UTC where the campaign was created (JS -getTimezoneOffset()).
   tzOffsetMinutes Int          @default(0)
+  /// Local weekdays (0 = Sunday … 6 = Saturday) the campaign may send on,
+  /// read with tzOffsetMinutes. Null = every day, which is what campaigns
+  /// created before this field existed did.
+  sendDays        Json?
+  /// When a SCHEDULED campaign should begin. Null = it began at creation.
+  startAt         DateTime?
 
   /// Why a campaign stopped itself. Set when the bounce guard pauses one, so
   /// the UI can say what happened rather than showing a campaign that simply
@@ -274,6 +283,7 @@ model OutreachCampaign {
   recipients CampaignRecipient[]
 
   @@index([status, createdAt])
+  @@index([status, startAt])
   @@index([createdById])
 }
 

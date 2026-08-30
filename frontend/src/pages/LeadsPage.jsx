@@ -49,6 +49,17 @@ export default function LeadsPage() {
   // refuse. The selection itself stays useful — it survives paging either way.
   const canSend = can("outreach");
 
+  // How many leads one campaign may hold, from the server rather than a number
+  // typed here that drifts from the real cap. Only senders need it, and only
+  // they may call the endpoint.
+  const { data: planner } = useQuery({
+    queryKey: ["campaign-planner", null, null],
+    queryFn: () => api.campaignPlanner({}),
+    enabled: canSend,
+    staleTime: 5 * 60_000,
+  });
+  const maxRecipients = planner?.maxRecipients ?? 500;
+
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [selectionMeta, setSelectionMeta] = useState({ withEmail: 0, withPhone: 0, withWhatsApp: 0, emailBlocked: 0, blockedCountries: [] });
   const [sheet, setSheet] = useState(null); // null | { channels: [...] }
@@ -130,8 +141,8 @@ export default function LeadsPage() {
     affected.forEach((l) => bump(l, adding ? +1 : -1));
   };
 
-  // "Select all N matching" pulls the full id list (capped at 500 — the same
-  // cap a campaign has) so bulk send is one click, not thirteen pages of ticks.
+  // "Select all N matching" pulls the full id list (capped at the campaign
+  // recipient limit) so bulk send is one click, not thirteen pages of ticks.
   const selectAllMatching = async () => {
     setSelectingAll(true);
     try {
@@ -141,7 +152,7 @@ export default function LeadsPage() {
         withEmail: res.withEmail, withPhone: res.withPhone, withWhatsApp: res.withWhatsApp ?? 0,
         emailBlocked: res.emailBlocked ?? 0, blockedCountries: res.blockedCountries ?? [],
       });
-      if (res.capped) toast.info("Selection capped at 500 leads — the campaign limit.");
+      if (res.capped) toast.info(`Selection capped at ${res.cap ?? maxRecipients} leads — the most one campaign can hold.`);
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -256,7 +267,7 @@ export default function LeadsPage() {
                     disabled={selectingAll}
                     className="inline-flex items-center gap-1.5 text-[var(--accent)] hover:underline disabled:opacity-50"
                   >
-                    <CheckSquare size={13} />{selectingAll ? "Selecting…" : `Select all ${Math.min(data.total, 500)} matching`}
+                    <CheckSquare size={13} />{selectingAll ? "Selecting…" : `Select all ${Math.min(data.total, maxRecipients)} matching`}
                   </button>
                 </div>
               )}

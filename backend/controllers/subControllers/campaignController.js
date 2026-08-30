@@ -2,8 +2,9 @@ import { z } from "zod";
 import prisma from "../../prismaClient.js";
 import {
   createCampaign, listCampaigns, campaignWithProgress, setCampaignStatus,
-  DAILY_EMAIL_CAP, DAILY_WA_CAP, sentTodayCount,
+  DAILY_EMAIL_CAP, DAILY_WA_CAP, sentTodayCount, CAMPAIGN_MAX_RECIPIENTS, MAX_SCHEDULE_AHEAD_DAYS,
 } from "../../lib/outreach/campaigns.js";
+import { senderPlan, MIN_DAILY_LIMIT } from "../../lib/outreach/planner.js";
 import { listAccounts } from "../../lib/outreach/service.js";
 import { listWhatsAppAccounts } from "../../lib/outreach/whatsapp.js";
 import { regenerateDrafts, exportComposeContext, importDrafts } from "../../lib/research/compose.js";
@@ -11,9 +12,15 @@ import { runContactHygiene } from "../../lib/outreach/hygiene.js";
 import { createError } from "../../utils/createError.js";
 import { asyncHandler } from "../../middlewares/validate.js";
 
+const DAY_MS = 86_400_000;
+/** How stale a "start now" timestamp may be before it is treated as a mistake. */
+const START_GRACE_MS = 5 * 60_000;
+
 export const campaignCreateSchema = z.object({
   name: z.string().trim().max(160).optional(),
-  leadIds: z.array(z.string().min(1).max(64)).min(1, "Select at least one lead.").max(500, "A campaign is capped at 500 leads."),
+  leadIds: z.array(z.string().min(1).max(64))
+    .min(1, "Select at least one lead.")
+    .max(CAMPAIGN_MAX_RECIPIENTS, `A campaign is capped at ${CAMPAIGN_MAX_RECIPIENTS} leads.`),
   channels: z.array(z.enum(["EMAIL", "WHATSAPP"])).min(1, "Pick at least one channel."),
   accountId: z.string().max(64).optional(),
   waAccountId: z.string().max(64).optional(),
@@ -21,31 +28,57 @@ export const campaignCreateSchema = z.object({
   // AUTO = spread sends across a daily local-hours window under a per-day
   // limit (deliverability protection); DIRECT = start now at paceSeconds.
   mode: z.enum(["DIRECT", "AUTO"]).default("DIRECT"),
-  dailyLimit: z.coerce.number().int().min(5).max(150).optional(),
+  dailyLimit: z.coerce.number().int().min(MIN_DAILY_LIMIT).max(150).optional(),
   windowStart: z.coerce.number().int().min(0).max(22).default(9),
   windowEnd: z.coerce.number().int().min(1).max(23).default(18),
   tzOffsetMinutes: z.coerce.number().int().min(-720).max(840).default(0),
+  // AUTO only: local weekdays (0 = Sunday … 6 = Saturday) sends are allowed
+  // on. Omitted = every day, which is what older clients get.
+  sendDays: z.array(z.number().int().min(0).max(6)).min(1, "Pick at least one sending day.").max(7).optional(),
+  // ISO timestamp to begin at; omitted = now. Bounded both ways so a typo in
+  // the year cannot park a campaign for a decade or start one "yesterday".
+  startAt: z.coerce.date().optional(),
 }).refine((v) => v.windowEnd > v.windowStart, {
   message: "The sending window must end after it starts.", path: ["windowEnd"],
+}).refine((v) => !v.startAt || v.startAt.getTime() >= Date.now() - START_GRACE_MS, {
+  message: "That start time has already passed — pick a time in the future, or start now.", path: ["startAt"],
+}).refine((v) => !v.startAt || v.startAt.getTime() <= Date.now() + MAX_SCHEDULE_AHEAD_DAYS * DAY_MS, {
+  message: `A campaign can be scheduled at most ${MAX_SCHEDULE_AHEAD_DAYS} days ahead.`, path: ["startAt"],
 });
 
 /** POST /api/outreach/campaigns — start a paced bulk send. */
 export const create = asyncHandler(async (req, res) => {
   const { name, leadIds, channels, accountId, waAccountId, paceSeconds,
-    mode, dailyLimit, windowStart, windowEnd, tzOffsetMinutes } = req.body;
+    mode, dailyLimit, windowStart, windowEnd, tzOffsetMinutes, sendDays, startAt } = req.body;
   const result = await createCampaign({ name, leadIds, channels, accountId, waAccountId, paceSeconds,
-    mode, dailyLimit, windowStart, windowEnd, tzOffsetMinutes,
+    mode, dailyLimit, windowStart, windowEnd, tzOffsetMinutes, sendDays, startAt,
     // Every message this queue sends over the coming days is attributed to the
     // person who launched it, exactly as a hand-typed send would be.
     createdBy: req.auth.user });
   if (!result.ok) throw createError(400, result.error);
+  const verb = result.campaign.status === "SCHEDULED" ? "scheduled" : "started";
   res.status(201).json({
     success: true,
     message: result.skippedUpfront
-      ? `Campaign started — ${result.skippedUpfront} lead(s) had nothing sendable and were skipped upfront.`
-      : "Campaign started.",
+      ? `Campaign ${verb} — ${result.skippedUpfront} lead(s) had nothing sendable and were skipped upfront.`
+      : `Campaign ${verb}.`,
     data: { campaign: result.campaign },
   });
+});
+
+/**
+ * GET /api/outreach/campaigns/planner — the sender's daily budget, before a
+ * campaign is built: cap, what is already spent or claimed today, warm-up
+ * stage, and a recommended daily limit. Feeds the bulk-send sheet's summary.
+ */
+export const plannerSchema = z.object({
+  accountId: z.string().max(64).optional(),
+  waAccountId: z.string().max(64).optional(),
+});
+
+export const planner = asyncHandler(async (req, res) => {
+  const { accountId, waAccountId } = req.validatedQuery;
+  res.json({ success: true, data: await senderPlan({ accountId, waAccountId }) });
 });
 
 /** GET /api/outreach/campaigns */
@@ -85,7 +118,9 @@ export const detail = asyncHandler(async (req, res) => {
 const transition = (status) => asyncHandler(async (req, res) => {
   const result = await setCampaignStatus(req.params.id, status);
   if (!result.ok) throw createError(400, result.error);
-  res.json({ success: true, message: `Campaign ${status.toLowerCase()}.`, data: { campaign: result.campaign } });
+  // "Resume" on a campaign that had not begun is really "start now".
+  const message = result.started ? "Campaign started." : `Campaign ${status.toLowerCase()}.`;
+  res.json({ success: true, message, data: { campaign: result.campaign } });
 });
 export const pause = transition("PAUSED");
 export const resume = transition("RUNNING");

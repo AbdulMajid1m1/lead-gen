@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   pickEmailContact, pickWhatsAppNumber,
   localHour, isWithinSendWindow, autoGapSeconds, startOfLocalToday,
+  localWeekday, sendDaysOf, isSendDay, isFutureStart, ALL_DAYS,
 } from "../../lib/outreach/campaigns.js";
+import { recommendDailyLimit, warmupStage, MIN_DAILY_LIMIT } from "../../lib/outreach/planner.js";
 import { whatsappInitialTemplate } from "../../lib/research/templates.js";
 
 /**
@@ -130,5 +132,87 @@ describe("auto-mode scheduling", () => {
     expect(startOfLocalToday(300, at(1)).toISOString()).toBe("2026-08-24T19:00:00.000Z");
     // Same instant in UTC-7 is still the 24th locally.
     expect(startOfLocalToday(-420, at(1)).toISOString()).toBe("2026-08-24T07:00:00.000Z");
+  });
+});
+
+describe("send-day rules", () => {
+  // 2026-08-25 is a Tuesday. 22:00 UTC that day is already Wednesday in Karachi.
+  const at = (h, m = 0) => new Date(Date.UTC(2026, 7, 25, h, m));
+  const auto = (over) => ({ mode: "AUTO", windowStart: 9, windowEnd: 18, tzOffsetMinutes: 0, dailyLimit: 40, ...over });
+
+  it("localWeekday follows the campaign's clock across midnight", () => {
+    expect(localWeekday(0, at(10))).toBe(2);       // Tuesday
+    expect(localWeekday(300, at(22))).toBe(3);     // Wednesday in UTC+5
+    expect(localWeekday(-420, at(3))).toBe(1);     // still Monday evening in UTC-7
+  });
+
+  it("sendDaysOf treats null, empty and junk as every day, and de-duplicates", () => {
+    expect(sendDaysOf({ sendDays: null })).toEqual(ALL_DAYS);
+    expect(sendDaysOf({ sendDays: [] })).toEqual(ALL_DAYS);
+    expect(sendDaysOf({ sendDays: ["x", 9, -1] })).toEqual(ALL_DAYS);
+    expect(sendDaysOf({ sendDays: [5, 1, 1, 3] })).toEqual([1, 3, 5]);
+  });
+
+  it("isSendDay keeps weekends quiet for a Mon–Fri campaign, in local time", () => {
+    const weekdays = auto({ sendDays: [1, 2, 3, 4, 5] });
+    expect(isSendDay(weekdays, at(10))).toBe(true);                            // Tuesday
+    expect(isSendDay(weekdays, new Date(Date.UTC(2026, 7, 29, 10)))).toBe(false); // Saturday
+    // Friday 21:00 UTC is Saturday morning in Sydney (UTC+10).
+    expect(isSendDay(auto({ sendDays: [1, 2, 3, 4, 5], tzOffsetMinutes: 600 }), new Date(Date.UTC(2026, 7, 28, 21)))).toBe(false);
+    // A Gulf week sends on Sunday and rests on Friday.
+    const gulf = auto({ sendDays: [0, 1, 2, 3, 4] });
+    expect(isSendDay(gulf, new Date(Date.UTC(2026, 7, 30, 10)))).toBe(true);   // Sunday
+    expect(isSendDay(gulf, new Date(Date.UTC(2026, 7, 28, 10)))).toBe(false);  // Friday
+  });
+
+  it("DIRECT campaigns ignore the calendar, and old AUTO rows without sendDays send every day", () => {
+    expect(isSendDay({ mode: "DIRECT", sendDays: [1] }, new Date(Date.UTC(2026, 7, 29, 10)))).toBe(true);
+    expect(isSendDay(auto(), new Date(Date.UTC(2026, 7, 29, 10)))).toBe(true);
+  });
+
+  it("isWithinSendWindow now needs both the day and the hour", () => {
+    const weekdays = auto({ sendDays: [1, 2, 3, 4, 5] });
+    expect(isWithinSendWindow(weekdays, at(10))).toBe(true);
+    expect(isWithinSendWindow(weekdays, at(20))).toBe(false);                             // right day, wrong hour
+    expect(isWithinSendWindow(weekdays, new Date(Date.UTC(2026, 7, 29, 10)))).toBe(false); // right hour, Saturday
+  });
+
+  it("isFutureStart only counts a start clearly after now", () => {
+    const now = at(10);
+    expect(isFutureStart(null, now)).toBe(false);
+    expect(isFutureStart(new Date("nope"), now)).toBe(false);
+    expect(isFutureStart(at(9), now)).toBe(false);          // past
+    expect(isFutureStart(at(10, 0), now)).toBe(false);      // "now"
+    expect(isFutureStart(new Date(now.getTime() + 30_000), now)).toBe(false); // inside the grace minute
+    expect(isFutureStart(at(10, 2), now)).toBe(true);
+  });
+});
+
+describe("sender budget", () => {
+  it("recommends the standard volume on a healthy, idle mailbox", () => {
+    expect(recommendDailyLimit({ hardCap: 150, committed: 0 })).toEqual({ recommended: 40, headroom: 150, fullyBooked: false });
+  });
+
+  it("never recommends more than the warm-up cap", () => {
+    expect(recommendDailyLimit({ hardCap: 10, committed: 0 })).toMatchObject({ recommended: 10, headroom: 10 });
+  });
+
+  it("leaves room for the campaigns already running on the sender", () => {
+    expect(recommendDailyLimit({ hardCap: 150, committed: 120 })).toMatchObject({ recommended: 30, headroom: 30, fullyBooked: false });
+    // Over-committed: the floor is still a usable number, but the caller is told.
+    expect(recommendDailyLimit({ hardCap: 150, committed: 150 })).toEqual({ recommended: MIN_DAILY_LIMIT, headroom: 0, fullyBooked: true });
+  });
+
+  it("falls back to the standard when the cap is not a number", () => {
+    expect(recommendDailyLimit({ hardCap: Infinity })).toMatchObject({ recommended: 40 });
+  });
+
+  it("warmupStage reports the day and the cap while ramping, null afterwards", () => {
+    const now = new Date(Date.UTC(2026, 7, 25));
+    const started = (daysAgo) => ({ warmupStartedAt: new Date(now.getTime() - daysAgo * 86_400_000) });
+    expect(warmupStage(started(0), now)).toEqual({ day: 1, cap: 5, daysLeft: 20 });
+    expect(warmupStage(started(7), now)).toEqual({ day: 8, cap: 20, daysLeft: 13 });
+    expect(warmupStage(started(30), now)).toBeNull();
+    expect(warmupStage({ warmupStartedAt: null }, now)).toBeNull();
   });
 });

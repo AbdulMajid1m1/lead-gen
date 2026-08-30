@@ -118,10 +118,15 @@ export const api = {
   listLeadIds: (params) => request(`/leads/ids${qs(params)}`),
   leadStatusCounts: (params) => request(`/leads/status-counts${qs(params)}`),
   createCampaign: (body) => request("/outreach/campaigns", { method: "POST", body }),
+  // The sender's daily budget before a campaign exists: cap, spent, claimed by
+  // other campaigns, warm-up stage, recommended volume.
+  campaignPlanner: (params) => request(`/outreach/campaigns/planner${qs(params)}`),
   listCampaigns: () => request("/outreach/campaigns"),
   getCampaign: (id) => request(`/outreach/campaigns/${id}`),
   pauseCampaign: (id) => request(`/outreach/campaigns/${id}/pause`, { method: "POST" }),
   resumeCampaign: (id) => request(`/outreach/campaigns/${id}/resume`, { method: "POST" }),
+  // "Start now" on a scheduled campaign is the same transition as resume.
+  startCampaign: (id) => request(`/outreach/campaigns/${id}/resume`, { method: "POST" }),
   cancelCampaign: (id) => request(`/outreach/campaigns/${id}/cancel`, { method: "POST" }),
   outreachStats: (params) => request(`/outreach/stats${qs(params)}`),
 

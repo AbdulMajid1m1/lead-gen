@@ -144,6 +144,8 @@ router.delete("/outreach/account", canSettings, writeLimiter, outreach.deleteAcc
 // ─── Bulk campaigns & outreach stats ─────────────────────────────────────────
 router.post("/outreach/campaigns", canOutreach, writeLimiter, validate({ body: campaigns.campaignCreateSchema }), campaigns.create);
 router.get("/outreach/campaigns", canOutreach, campaigns.list);
+// Before `/:id`, or "planner" would be looked up as a campaign id.
+router.get("/outreach/campaigns/planner", canOutreach, validate({ query: campaigns.plannerSchema }), campaigns.planner);
 router.get("/outreach/campaigns/:id", canOutreach, validate({ params: idParam }), campaigns.detail);
 router.post("/outreach/campaigns/:id/pause", canOutreach, writeLimiter, validate({ params: idParam }), campaigns.pause);
 router.post("/outreach/campaigns/:id/resume", canOutreach, writeLimiter, validate({ params: idParam }), campaigns.resume);

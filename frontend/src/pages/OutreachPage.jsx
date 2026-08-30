@@ -5,15 +5,17 @@ import {
   ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend,
 } from "recharts";
 import {
-  Send, Mail, MessageCircle, Reply, Pause, Play, XCircle, ChevronDown, ChevronRight, ArrowRight, Gauge, AlertTriangle,
+  Send, Mail, MessageCircle, Reply, Pause, Play, XCircle, ChevronDown, ChevronRight, ArrowRight, Gauge, AlertTriangle, CalendarClock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageBody, PageHeader } from "../App.jsx";
 import { api } from "../lib/api.js";
 import { Badge, Button, EmptyState, ErrorState, Skeleton, Surface, SectionHeading } from "../components/ui.jsx";
 import { formatDateTime, titleize, cn } from "../lib/format.js";
+import { describeDays, hourLabel, formatMoment } from "../lib/schedule.js";
 
 const CAMPAIGN_TONE = {
+  SCHEDULED: "var(--color-info)",
   RUNNING: "var(--accent)",
   PAUSED: "var(--color-caution)",
   COMPLETED: "var(--color-positive)",
@@ -177,7 +179,7 @@ export default function OutreachPage() {
           {campaigns.length === 0 ? (
             <Surface className="border-dashed">
               <EmptyState icon={Send} title="No campaigns yet"
-                description="Select leads on the All leads page and choose Email, WhatsApp or Both — the batch appears here with live progress."
+                description="Select leads on the All leads page and choose Email, WhatsApp or Both. Start now or schedule a date — the batch appears here with live progress."
                 action={<Link to="/leads"><Button variant="secondary">Go to leads</Button></Link>} />
             </Surface>
           ) : (
@@ -250,7 +252,8 @@ const CampaignCard = ({ campaign, defaultOpen = false }) => {
   const act = useMutation({
     mutationFn: ({ action }) => api[`${action}Campaign`](campaign.id),
     onSuccess: (_, { action }) => {
-      toast.success(`Campaign ${action === "cancel" ? "cancelled" : `${action}d`}.`);
+      const past = { cancel: "cancelled", start: "started", pause: "paused", resume: "resumed" }[action] || `${action}d`;
+      toast.success(`Campaign ${past}.`);
       queryClient.invalidateQueries({ queryKey: ["campaigns"] });
     },
     onError: (err) => toast.error(err.message),
@@ -291,8 +294,14 @@ const CampaignCard = ({ campaign, defaultOpen = false }) => {
             <span className="block truncate text-[13px] font-medium">{campaign.name}</span>
             <span className="block text-[11px] text-[var(--text-subtle)]">
               {campaign.total} leads · {campaign.mode === "AUTO"
-                ? `auto · ≤${campaign.dailyLimit}/day, ${String(campaign.windowStart).padStart(2, "0")}:00–${String(campaign.windowEnd).padStart(2, "0")}:00`
-                : `every ${campaign.paceSeconds}s`} · started {formatDateTime(campaign.createdAt)}
+                ? `up to ${campaign.dailyLimit}/day, ${describeDays(campaign.sendDays)}, ${hourLabel(campaign.windowStart)}–${hourLabel(campaign.windowEnd)}`
+                : `every ${campaign.paceSeconds}s`}
+              {/* A campaign that has not begun says when it will; one that has
+                  says when it did. `startAt` is null only on rows older than
+                  scheduling, which began the moment they were created. */}
+              {campaign.status === "SCHEDULED"
+                ? ` · starts ${formatMoment(campaign.startAt)}`
+                : ` · started ${formatDateTime(campaign.startAt || campaign.createdAt)}`}
               {/* Every message this queue sends is recorded against whoever
                   launched it, so the run is as attributable as a typed email. */}
               {campaign.createdByName && ` by ${campaign.createdByName}`}
@@ -303,14 +312,25 @@ const CampaignCard = ({ campaign, defaultOpen = false }) => {
         <div className="flex items-center gap-1.5">
           {wantEmail && <Badge><Mail size={10} />Email</Badge>}
           {wantWa && <Badge><MessageCircle size={10} />WhatsApp</Badge>}
-          <Badge tone={CAMPAIGN_TONE[campaign.status]}>{titleize(campaign.status)}</Badge>
+          <Badge tone={CAMPAIGN_TONE[campaign.status]}>
+            {campaign.status === "SCHEDULED" && <CalendarClock size={10} />}
+            {titleize(campaign.status)}
+          </Badge>
+          {/* A scheduled campaign can be brought forward with one click; the
+              wording is "Start now" rather than a bare play icon because the
+              consequence — messages leaving today — deserves a verb. */}
+          {campaign.status === "SCHEDULED" && (
+            <Button size="sm" variant="secondary" onClick={() => act.mutate({ action: "start" })} disabled={act.isPending}>
+              <Play size={12} />Start now
+            </Button>
+          )}
           {campaign.status === "RUNNING" && (
             <Button size="sm" variant="ghost" onClick={() => act.mutate({ action: "pause" })} aria-label="Pause"><Pause size={13} /></Button>
           )}
           {campaign.status === "PAUSED" && (
             <Button size="sm" variant="ghost" onClick={() => act.mutate({ action: "resume" })} aria-label="Resume"><Play size={13} /></Button>
           )}
-          {["RUNNING", "PAUSED"].includes(campaign.status) && (
+          {["SCHEDULED", "RUNNING", "PAUSED"].includes(campaign.status) && (
             <Button size="sm" variant="ghost" onClick={() => act.mutate({ action: "cancel" })} aria-label="Cancel"><XCircle size={13} /></Button>
           )}
         </div>
