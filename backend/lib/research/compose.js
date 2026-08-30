@@ -493,12 +493,19 @@ export const importDrafts = async ({ drafts, author = "external", forProduct = f
  * deterministic template. Old drafts stay as history — campaigns always pick
  * the newest.
  */
-export const regenerateDrafts = async ({ budgetUsd = 2 } = {}) => {
-  const leads = await prisma.lead.findMany({
+export const regenerateDrafts = async ({ budgetUsd = 2, keepAuthored = true } = {}) => {
+  const all = await prisma.lead.findMany({
     where: { status: { notIn: ["ARCHIVED", "DO_NOT_CONTACT", "DISQUALIFIED"] } },
-    select: { id: true },
+    select: { id: true, emailDrafts: { orderBy: { createdAt: "desc" }, take: 1, select: { generatedBy: true } } },
     orderBy: { score: "desc" },
   });
+  // A draft written by a model or a person is worth more than the template
+  // that would replace it. With no provider up, a regeneration used to put a
+  // template on top of every AI-written draft in the table — the newest draft
+  // wins, so the better email silently stopped being the one sent.
+  const leads = keepAuthored && !isResearchAvailable()
+    ? all.filter((l) => l.emailDrafts[0]?.generatedBy !== "LLM")
+    : all;
   const tracker = new CostTracker(budgetUsd);
   let written = 0;
   let templated = 0;
@@ -510,7 +517,7 @@ export const regenerateDrafts = async ({ budgetUsd = 2 } = {}) => {
     templated += res.templated;
   }
 
-  const summary = { leads: leads.length, written, aiWritten: written - templated, templated, cost: tracker.toJSON() };
+  const summary = { leads: all.length, kept: all.length - leads.length, written, aiWritten: written - templated, templated, cost: tracker.toJSON() };
   logger.info(summary, "draft regeneration complete");
   return summary;
 };
