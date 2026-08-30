@@ -135,6 +135,24 @@ export const GOOGLE_PLACES_ENABLED = Boolean(GOOGLE_MAPS_API_KEY);
 export const GOOGLE_PLACES_MAX_CALLS_PER_RUN = int(process.env.GOOGLE_PLACES_MAX_CALLS_PER_RUN, 200);
 export const GOOGLE_PLACES_TIMEOUT_MS = int(process.env.GOOGLE_PLACES_TIMEOUT_MS, 10_000);
 
+// ─── SMTP mailbox probing ─────────────────────────────────────────────────────
+// RCPT TO verification of each email contact before a campaign sends to it —
+// the strongest bounce-rate protection available without a vendor. Off by
+// default: it needs outbound port 25, which most clouds block, and works best
+// from a host with reverse DNS. Strictly fail-open — only a definitive
+// "mailbox does not exist" ever suppresses a contact (see lib/verify/smtpProbe.js).
+export const SMTP_PROBE_ENABLED     = bool(process.env.SMTP_PROBE_ENABLED, false);
+// What the probe announces in EHLO — should be a real domain that resolves
+// back to the probing host, ideally the sending domain itself.
+export const SMTP_PROBE_HELO_DOMAIN = process.env.SMTP_PROBE_HELO_DOMAIN || "";
+// MAIL FROM used for the probe (never receives anything; bounces to it are
+// impossible because no DATA is ever sent). Defaults to probe@<helo domain>.
+export const SMTP_PROBE_FROM        = process.env.SMTP_PROBE_FROM || "";
+export const SMTP_PROBE_TIMEOUT_MS  = int(process.env.SMTP_PROBE_TIMEOUT_MS, 12_000);
+// Ceiling per hygiene run, so a huge contact table cannot turn one sweep into
+// an hours-long port-25 crawl that looks like abuse to receiving hosts.
+export const SMTP_PROBE_MAX_PER_RUN = int(process.env.SMTP_PROBE_MAX_PER_RUN, 150);
+
 // ─── Database backup ──────────────────────────────────────────────────────────
 // A second factor in front of the backup download, on top of the admin session.
 // That endpoint hands over every row in one file — including every contact the

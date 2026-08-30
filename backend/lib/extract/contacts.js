@@ -151,6 +151,83 @@ const SOCIAL_PATTERNS = [
 
 const SOCIAL_JUNK = /\/(?:sharer|share|intent|plugins|tr|login|signup|policies|privacy)\b/i;
 
+/** Match one absolute URL against the social patterns. Shared by the anchor
+ *  scan and the JSON-LD `sameAs` walk so both speak the same vocabulary. */
+const matchSocial = (abs) => {
+  if (SOCIAL_JUNK.test(abs)) return null;
+  for (const { network, re } of SOCIAL_PATTERNS) {
+    const m = re.exec(abs);
+    if (!m) continue;
+    const handle = decodeURIComponent(m[2] || m[1] || "").replace(/\/$/, "");
+    if (!handle || handle.length > 100) return null;
+    return { network, handle, url: abs.split("?")[0] };
+  }
+  return null;
+};
+
+// ─── Structured-data walkers ─────────────────────────────────────────────────
+// JSON-LD is where a large share of small-business sites state their phone —
+// SEO plugins emit a LocalBusiness block with `telephone` even when the number
+// is rendered only as an image or not at all. Same for `sameAs`: the schema
+// field whose entire purpose is "these profiles are officially us".
+
+const JSON_PHONE_KEY_RE = /^(?:telephone|phone|phone_?number|contact_?phone|tel)$/i;
+
+/** A string that could plausibly be a written phone number, nothing else. */
+const JSON_PHONE_SHAPE_RE = /^\+?[\d\s()./-]{7,25}$/;
+
+const phonesFromJson = (node, depth = 0, seen = new Set()) => {
+  const out = [];
+  if (node === null || node === undefined || depth > 12) return out;
+  if (Array.isArray(node)) {
+    for (const item of node) out.push(...phonesFromJson(item, depth + 1, seen));
+    return out;
+  }
+  if (typeof node !== "object") return out;
+  if (seen.has(node)) return out;
+  seen.add(node);
+
+  for (const [key, value] of Object.entries(node)) {
+    if (JSON_PHONE_KEY_RE.test(key)) {
+      const candidates = Array.isArray(value) ? value : [value];
+      for (const candidate of candidates) {
+        // Schema.org permits `tel:` prefixes and `{"@value": "..."}` wrappers.
+        const raw = typeof candidate === "string" ? candidate
+          : candidate && typeof candidate === "object" && typeof candidate["@value"] === "string" ? candidate["@value"]
+          : null;
+        const cleaned = raw ? raw.replace(/^tel:/i, "").trim() : "";
+        if (cleaned && JSON_PHONE_SHAPE_RE.test(cleaned)) out.push(cleaned);
+      }
+    } else {
+      out.push(...phonesFromJson(value, depth + 1, seen));
+    }
+  }
+  return out;
+};
+
+const sameAsFromJson = (node, depth = 0, seen = new Set()) => {
+  const out = [];
+  if (node === null || node === undefined || depth > 12) return out;
+  if (Array.isArray(node)) {
+    for (const item of node) out.push(...sameAsFromJson(item, depth + 1, seen));
+    return out;
+  }
+  if (typeof node !== "object") return out;
+  if (seen.has(node)) return out;
+  seen.add(node);
+
+  for (const [key, value] of Object.entries(node)) {
+    if (/^same_?as$/i.test(key)) {
+      for (const url of Array.isArray(value) ? value : [value]) {
+        if (typeof url === "string" && /^https?:\/\//i.test(url)) out.push(url.trim());
+      }
+    } else {
+      out.push(...sameAsFromJson(value, depth + 1, seen));
+    }
+  }
+  return out;
+};
+
 /**
  * @param {string} html
  * @param {{pageUrl:string}} ctx
@@ -245,13 +322,31 @@ export const extractContacts = (html, ctx = {}) => {
   // schema.org contactPoint/founder/employee, @graph, and the __NEXT_DATA__ /
   // __NUXT__ / Wix / Squarespace blobs alike — the shapes are open-ended and a
   // list of known paths would be out of date the week it was written.
+  //
+  // Phones and `sameAs` profiles ride the same walk: an SEO plugin's
+  // LocalBusiness block frequently carries the only machine-readable phone on
+  // the site, and `sameAs` is the schema field whose entire purpose is "these
+  // social profiles are officially us". Collected here, recorded below once
+  // the phone/social accumulators exist.
+  const jsonPhones = [];
+  const jsonSameAs = [];
+  const walkParsedJson = (parsed) => {
+    for (const address of emailsFromJson(parsed)) addEmail(address, "STRUCTURED_DATA");
+    jsonPhones.push(...phonesFromJson(parsed));
+    jsonSameAs.push(...sameAsFromJson(parsed));
+  };
   $scripts.each((_, el) => {
     const raw = $(el).text();
-    if (!raw || raw.length > 400_000 || !raw.includes("@")) return;
+    if (!raw || raw.length > 400_000) return;
+    // Only JSON-looking payloads are worth a parse when no "@" is present —
+    // a phone or sameAs never hides in plain executable code the way an
+    // address does, and parsing every vendor bundle would be pure waste.
+    const jsonish = /^\s*[[{]/.test(raw) || raw.includes('"telephone"') || raw.includes('"phone') || raw.includes('"sameAs"');
+    if (!raw.includes("@") && !jsonish) return;
     let parsed = null;
     try { parsed = JSON.parse(raw); } catch { parsed = null; }
     if (parsed) {
-      for (const address of emailsFromJson(parsed)) addEmail(address, "STRUCTURED_DATA");
+      walkParsedJson(parsed);
       return;
     }
     // Not pure JSON (an assignment like `window.__NUXT__ = {...}`): pull out the
@@ -260,10 +355,11 @@ export const extractContacts = (html, ctx = {}) => {
     if (start >= 0) {
       const slice = raw.slice(start, raw.lastIndexOf("}") + 1);
       try {
-        for (const address of emailsFromJson(JSON.parse(slice))) addEmail(address, "STRUCTURED_DATA");
+        walkParsedJson(JSON.parse(slice));
         return;
       } catch { /* fall through */ }
     }
+    if (!raw.includes("@")) return;
     for (const m of normaliseForMatching(raw).matchAll(EMAIL_RE)) addEmail(m[0], "STRUCTURED_DATA");
   });
 
@@ -282,9 +378,17 @@ export const extractContacts = (html, ctx = {}) => {
     if (m) addPhone(decodeURIComponent(m[1]), "TEL_LINK");
   });
   for (const m of text.matchAll(PHONE_TEXT_RE)) addPhone(m[0], "PAGE_TEXT");
+  // A telephone stated in JSON-LD/state is the site declaring its own number —
+  // often the only machine-readable copy when the visible one is an image.
+  for (const raw of jsonPhones) addPhone(raw, "STRUCTURED_DATA");
 
   // ── socials ──
   const socials = new Map();
+  const addSocial = (hit) => {
+    if (!hit) return;
+    const key = `${hit.network}:${hit.handle.toLowerCase()}`;
+    if (!socials.has(key)) socials.set(key, { ...hit, sourceUrl: pageUrl });
+  };
   $("a[href]").each((_, el) => {
     const href = $(el).attr("href") || "";
     let abs;
@@ -293,19 +397,11 @@ export const extractContacts = (html, ctx = {}) => {
     } catch {
       return;
     }
-    if (SOCIAL_JUNK.test(abs)) return;
-    for (const { network, re } of SOCIAL_PATTERNS) {
-      const m = re.exec(abs);
-      if (!m) continue;
-      const handle = decodeURIComponent(m[2] || m[1] || "").replace(/\/$/, "");
-      if (!handle || handle.length > 100) return;
-      const key = `${network}:${handle.toLowerCase()}`;
-      if (!socials.has(key)) {
-        socials.set(key, { network, handle, url: abs.split("?")[0], sourceUrl: pageUrl });
-      }
-      return;
-    }
+    addSocial(matchSocial(abs));
   });
+  // Profiles declared via schema.org `sameAs` — present on many sites that
+  // render no social icons at all, because the SEO plugin emits them anyway.
+  for (const url of jsonSameAs) addSocial(matchSocial(url));
 
   return {
     emails: [...emails.values()],

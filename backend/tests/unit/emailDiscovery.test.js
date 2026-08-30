@@ -213,3 +213,54 @@ describe("selectFollowUpUrls — choosing the page that carries the address", ()
     expect(picked.map((p) => p.url)).not.toContain("https://acme.de/blog/hello");
   });
 });
+
+describe("extractContacts — phones and socials declared in structured data", () => {
+  const page = `<html><body>
+    <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"LocalBusiness","name":"Acme Kebab",
+       "telephone":"+971 4 340 6401",
+       "contactPoint":[{"@type":"ContactPoint","telephone":"tel:+971501234567","contactType":"sales"}],
+       "sameAs":["https://www.instagram.com/acmekebab","https://www.facebook.com/acmekebab",
+                 "https://linkedin.com/company/acme-kebab"]}
+    </script>
+    <script>window.__NUXT__ = {"config":{"phone":"04 340 6402"},"build":"2.15.8"}</script>
+    <p>Best kebab since 2019. Rated 4.9 of 5 from 12345 reviews.</p>
+  </body></html>`;
+
+  const found = extractContacts(page, { pageUrl: "https://acme.ae/" });
+  const phones = found.phones.map((p) => p.value);
+  const networks = found.socials.map((s) => s.network);
+
+  it("reads a JSON-LD telephone even when no email appears anywhere", () => {
+    // The old walk skipped any script without an "@", so a LocalBusiness block
+    // carrying only a phone was invisible.
+    expect(phones).toContain("+97143406401");
+  });
+
+  it("reads contactPoint telephones and strips the tel: prefix", () => {
+    expect(phones).toContain("+971501234567");
+  });
+
+  it("marks structured-data phones as declared, not scraped", () => {
+    const declared = found.phones.find((p) => p.value === "+97143406401");
+    expect(declared.method).toBe("STRUCTURED_DATA");
+  });
+
+  it("reads a phone out of a framework state blob", () => {
+    expect(phones).toContain("043406402");
+  });
+
+  it("does not read review counts or version strings as phones", () => {
+    expect(phones).not.toContain("12345");
+    expect(phones.some((v) => v.replace(/\D/g, "") === "2158")).toBe(false);
+  });
+
+  it("collects sameAs profiles the page renders no icons for", () => {
+    expect(networks).toEqual(expect.arrayContaining(["INSTAGRAM", "FACEBOOK", "LINKEDIN"]));
+  });
+
+  it("keeps the sameAs handle, not just the URL", () => {
+    const ig = found.socials.find((s) => s.network === "INSTAGRAM");
+    expect(ig.handle).toBe("acmekebab");
+  });
+});

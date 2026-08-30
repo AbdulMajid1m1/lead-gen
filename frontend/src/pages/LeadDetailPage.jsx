@@ -471,7 +471,7 @@ export default function LeadDetailPage() {
                 <ContactRow key={i} icon={Mail} value={e.value} hint={e.roleHint} confidence={e.confidenceLevel} onCopy={() => copy(e.value, "Email")} href={`mailto:${e.value}`} />
               ))}
               {lead.contacts.phones.filter((p) => !p.isSuppressed).map((p, i) => (
-                <ContactRow key={i} icon={Phone} value={p.value} confidence={p.confidenceLevel} onCopy={() => copy(p.value, "Phone")} href={`tel:${p.value}`} />
+                <ContactRow key={i} icon={Phone} value={p.value} hint={PHONE_SOURCE_LABELS[p.roleHint] ?? p.roleHint} confidence={p.confidenceLevel} onCopy={() => copy(p.value, "Phone")} href={`tel:${p.value}`} />
               ))}
               {lead.contacts.forms.map((f, i) => (
                 <ContactRow key={i} icon={Globe} value="Contact form" confidence={f.confidenceLevel} href={f.value} external />
@@ -580,6 +580,21 @@ export default function LeadDetailPage() {
   );
 }
 
+/**
+ * Where a phone number was observed, in words a person recognises. Email rows
+ * already say ROLE / PERSONAL; a phone with no origin shown is a number the
+ * user cannot judge — a click-to-call link the business published is a very
+ * different claim from digits pattern-matched out of prose.
+ */
+const PHONE_SOURCE_LABELS = {
+  TEL_LINK: "Click-to-call link",
+  STRUCTURED_DATA: "Declared in site markup",
+  SCHEMA_ORG: "Declared in site markup",
+  GOOGLE_PLACES: "Google Places listing",
+  WHATSAPP_LINK: "WhatsApp link",
+  PAGE_TEXT: "PAGE_TEXT", // ContactRow hides this one — a prose scrape needs no label
+};
+
 const ContactRow = ({ icon: Icon, value, hint, confidence, onCopy, href, external }) => (
   <div className="flex items-center gap-2.5">
     <Icon size={14} className="shrink-0 text-[var(--text-subtle)]" />
@@ -594,7 +609,12 @@ const ContactRow = ({ icon: Icon, value, hint, confidence, onCopy, href, externa
         </a>
       ) : <span className="block truncate text-[13px]">{value}</span>}
       <div className="flex items-center gap-1.5">
-        {hint && hint !== "PAGE_TEXT" && <span className="text-[10px] text-[var(--text-subtle)]">{titleize(hint)}</span>}
+        {hint && hint !== "PAGE_TEXT" && (
+          <span className="text-[10px] text-[var(--text-subtle)]">
+            {/* Raw enum tokens (ROLE, PERSONAL) get titleized; pre-worded labels are shown as written. */}
+            {/^[A-Z_]+$/.test(hint) ? titleize(hint) : hint}
+          </span>
+        )}
         {confidence && (
           <span className={cn("rounded px-1 py-px text-[9px] font-medium", CONFIDENCE_STYLES[confidence]?.className)}>
             {CONFIDENCE_STYLES[confidence]?.label}

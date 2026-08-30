@@ -426,7 +426,9 @@ export const ingestWebsite = async ({ companyId, url, maxPages = CRAWLER_MAX_PAG
   for (const phone of allContacts.phones.slice(0, 5)) {
     await recordContact({
       companyId, kind: "PHONE", value: phone.value, roleHint: phone.method,
-      confidenceLevel: phone.method === "TEL_LINK" ? "VERIFIED" : "DETECTED",
+      // A tel: link or a JSON-LD `telephone` is the site *declaring* its
+      // number, same standing as a mailto: — prose scrapes stay DETECTED.
+      confidenceLevel: phone.method === "TEL_LINK" || phone.method === "STRUCTURED_DATA" ? "VERIFIED" : "DETECTED",
       sourceRecordId: pageSourceRecordId,
     });
   }

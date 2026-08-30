@@ -1,5 +1,7 @@
 import dns from "node:dns/promises";
 import prisma from "../../prismaClient.js";
+import { probeMailbox, isSmtpProbeAvailable } from "../verify/smtpProbe.js";
+import { SMTP_PROBE_MAX_PER_RUN } from "../../configs/envConfig.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("outreach:hygiene");
@@ -15,7 +17,9 @@ const logger = log("outreach:hygiene");
  *  - mangled extractions from the pre-fix deobfuscator, which turned prose
  *    like "platform.it" into "pl@form.it" (1-3 letter local parts that are
  *    not a real short mailbox like hr@ or gm@);
- *  - domains with no MX record, which cannot receive mail at all.
+ *  - domains with no MX record, which cannot receive mail at all;
+ *  - when SMTP probing is enabled: mailboxes whose own mail server states,
+ *    definitively, that they do not exist (lib/verify/smtpProbe.js).
  */
 
 /** Domain brokers and parking services — an address there is a trap, never a lead. */
@@ -117,7 +121,8 @@ export const runContactHygiene = async ({ checkMx = true } = {}) => {
     select: { id: true, value: true },
   });
 
-  const summary = { checked: contacts.length, suppressed: 0, broker: 0, mangled: 0, noMx: 0 };
+  const summary = { checked: contacts.length, suppressed: 0, broker: 0, mangled: 0, noMx: 0, smtpRejected: 0, smtpProbed: 0 };
+  let probesLeft = isSmtpProbeAvailable() ? SMTP_PROBE_MAX_PER_RUN : 0;
 
   for (const contact of contacts) {
     const domain = contact.value.split("@")[1]?.toLowerCase() || "";
@@ -126,6 +131,19 @@ export const runContactHygiene = async ({ checkMx = true } = {}) => {
     if (BROKER_DOMAIN_RE.test(domain)) { reason = "Domain broker / parking service — never a business contact."; summary.broker += 1; }
     else if (emailLooksMangled(contact.value)) { reason = "Malformed address from a prose-extraction bug — would bounce."; summary.mangled += 1; }
     else if (checkMx && !(await domainHasMx(domain))) { reason = "Domain has no MX record — cannot receive mail."; summary.noMx += 1; }
+    else if (probesLeft > 0) {
+      // The deepest check runs last and only on addresses that passed the
+      // cheap ones. Fail-open by design: only a definitive mailbox-level "no
+      // such user" from the receiving server may suppress — catch-all domains,
+      // greylisting and unreachable hosts all leave the contact sendable.
+      probesLeft -= 1;
+      summary.smtpProbed += 1;
+      const probe = await probeMailbox(contact.value);
+      if (probe.verdict === "UNDELIVERABLE") {
+        reason = `Mailbox rejected by its own mail server: ${probe.detail}`;
+        summary.smtpRejected += 1;
+      }
+    }
 
     if (reason) {
       await suppress(contact, reason);
