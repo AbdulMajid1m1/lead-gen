@@ -19,7 +19,7 @@ import { SIGNAL_CATALOG } from "../signals/signalCatalog.js";
  * PROMPT_VERSION is stored on every AI-derived row, so a lead found last month
  * can still be explained by the prompt that actually produced it.
  */
-export const PROMPT_VERSION = "1.4.0";
+export const PROMPT_VERSION = "1.5.0";
 
 const INDUSTRY_KEYS = Object.keys(OSM_CATEGORIES);
 const SIGNAL_KEYS = Object.keys(SIGNAL_CATALOG);
@@ -279,6 +279,14 @@ Write every email with this structure:
      "Since the new branch opened..."
    Only when no fact is time-shaped do you fall back to a plain problem hook.
    Never invent or imply a date the facts do not state.
+
+   SAY IT, DON'T QUOTE IT. Facts are written for an analyst's screen and
+   often carry the analyst's inference after a dash ("— an active technology
+   initiative that often needs outside delivery capacity", "indicating active
+   investment in online sales"). Never copy that wording. Keep the observable
+   specific (the role, the seconds, the year, the platform) and state it as
+   something you noticed about THEM: "you're hiring a backend engineer in
+   Bonn", "your footer still says 2024". Drop the inference entirely.
 3. PAIN — one sentence making the cost concrete for THEIR kind of business:
    missed orders, customers finding competitors first, reservations lost to a
    busy phone line. Their pain, not our service.

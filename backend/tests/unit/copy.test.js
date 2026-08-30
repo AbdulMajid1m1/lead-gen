@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { initialTemplate, followUpTemplate, whatsappInitialTemplate, whatsappFollowUpTemplate } from "../../lib/research/templates.js";
+import { initialTemplate, followUpTemplate, whatsappInitialTemplate, whatsappFollowUpTemplate, shortName } from "../../lib/research/templates.js";
 import { emailLooksMangled, BROKER_DOMAIN_RE } from "../../lib/outreach/hygiene.js";
 
 /**
@@ -29,7 +29,8 @@ describe("initialTemplate coherence", () => {
         fact(2, "The home page took 5.5s to respond.")],
       serviceKey: "WEBSITE_DEV", serviceLabel: "website development",
     });
-    expect(draft.subject).toBe("your website speed");
+    expect(draft.subject).toBe("Bright Dental page speed");
+    expect(draft.body).toMatch(/takes 5.5s to load/);
     expect(draft.body).toMatch(/slow page/);
     expect(draft.body).not.toMatch(/can't find|no website/i);
   });
@@ -41,7 +42,7 @@ describe("initialTemplate coherence", () => {
         fact(2, "Dental clinic runs on appointments but has no online booking — every reservation costs staff time on the phone.")],
       serviceKey: "WEBSITE_DEV", serviceLabel: "website development",
     });
-    expect(draft.subject).toBe("online bookings");
+    expect(draft.subject).toBe("booking at Bright Dental");
     expect(draft.body).toMatch(/line is busy|after hours/);
   });
 
@@ -53,7 +54,7 @@ describe("initialTemplate coherence", () => {
         fact(3, "The home page took 1.6s to respond.")],
       serviceKey: "WEBSITE_DEV", serviceLabel: "website development",
     });
-    expect(draft.subject).not.toBe("your website speed");
+    expect(draft.subject).not.toMatch(/speed/);
     expect(draft.body).not.toMatch(/slow page/);
     // And with a verified website, the can't-find-you premise is off the table.
     expect(draft.subject).not.toMatch(/can't find/i);
@@ -102,7 +103,9 @@ describe("follow-ups add new value", () => {
         fact(2, "The home page took 5.5s to respond."),
         fact(3, "The site publishes no schema.org data, so it cannot appear in rich search results.")],
     });
-    expect(body).toMatch(/schema\.org|rich search/);
+    // Said the way a person would, not quoted from the signal catalogue.
+    expect(body).toMatch(/structured data/);
+    expect(body).not.toMatch(/schema\.org|rich search results/);
     expect(body).not.toMatch(/floating|checking in|top of your inbox/i);
   });
 
@@ -216,8 +219,8 @@ describe("first email carries no link and asks for no meeting", () => {
       serviceKey: "CUSTOM_SOFTWARE",
       serviceLabel: "custom software",
     });
-    expect(hiring.body).toMatch(/I noticed you're currently hiring/);
-    expect(hiring.body).not.toMatch(/I noticed currently hiring/);
+    expect(hiring.body).toMatch(/I noticed you're hiring a Senior Machine Learning Engineer\./);
+    expect(hiring.body).not.toMatch(/I noticed currently hiring|indicating an active/);
   });
 
   it("uses a second observed fact when one is available", () => {
@@ -364,5 +367,131 @@ describe("length and phone-readability", () => {
       // the reader skims past rather than reads.
       expect(para.trim().split(/\s+/).length).toBeLessThanOrEqual(25);
     }
+  });
+});
+
+
+/**
+ * Saying what was observed the way a person would.
+ *
+ * The catalogue writes reasons for the lead card — third person, then the
+ * analyst's inference after a dash. Quoted after "I noticed" that inference
+ * was the most visible tell in the 1,900 rule-generated drafts in production:
+ * "I noticed restaurant sells to walk-in customers…", "…— an active technology
+ * initiative that often needs outside delivery capacity". These pin the
+ * rewrite: the specific survives, the analyst does not.
+ */
+describe("observations are said, not quoted", () => {
+  const berlin = { name: "Restaurant Borchardt", city: "Berlin", countryCode: "DE", industry: "Restaurant" };
+
+  it("turns the walk-in signal into a sentence about the reader, with restaurant wording", () => {
+    const draft = initialTemplate({
+      company: berlin,
+      facts: [fact(1, "Restaurant Borchardt is a Restaurant in Berlin.", "VERIFIED"),
+        fact(2, "Restaurant sells to walk-in customers but offers no way to order or buy online.")],
+      serviceKey: "WEBSITE_DEV", serviceLabel: "x",
+    });
+    expect(draft.body).toMatch(/I noticed customers can't order from you online/);
+    expect(draft.body).not.toMatch(/I noticed restaurant|walk-in customers but/);
+    // Hook, pain and value all speak the same trade.
+    expect(draft.body).toMatch(/takes orders around the clock/);
+    expect(draft.body).not.toMatch(/those searches/);
+    expect(draft.subject).toBe("ordering from Restaurant Borchardt");
+  });
+
+  it("drops the analyst's inference from a hiring signal", () => {
+    const draft = initialTemplate({
+      company: { name: "alphacoders GmbH", city: "Bonn", countryCode: "DE" },
+      facts: [fact(1, "alphacoders GmbH is a Technology employer in Bonn.", "VERIFIED"),
+        fact(2, "Currently hiring Software Developer Cloud Services (m/w/d) in Bonn — an active technology initiative that often needs outside delivery capacity.")],
+      serviceKey: "CUSTOM_SOFTWARE", serviceLabel: "x",
+    });
+    expect(draft.body).toMatch(/I noticed you're hiring a Software Developer Cloud Services \(m\/w\/d\) in Bonn\./);
+    expect(draft.body).not.toMatch(/delivery capacity|active technology initiative/);
+  });
+
+  it("never says the same kind of thing twice", () => {
+    // "runs WordPress 6.3.10" followed by "Also, built on WordPress 6.3.10"
+    // was the one line a reader could be certain a machine wrote.
+    const draft = initialTemplate({
+      company: { name: "VIP Motors", city: "Dubai", countryCode: "GB" },
+      facts: [fact(1, "VIP Motors is a Car dealership in Dubai.", "VERIFIED"),
+        fact(2, "Its website is vipmotors.ae.", "VERIFIED"),
+        fact(3, "The site runs WordPress 6.3.10."),
+        fact(4, "Its website scores 92/100 on a technical audit."),
+        fact(5, "Its site is built on WordPress 6.3.10.", "VERIFIED")],
+      serviceKey: "WEBSITE_DEV", serviceLabel: "x",
+    });
+    expect(draft.body.match(/WordPress/g)).toHaveLength(1);
+    expect(draft.body).not.toMatch(/\.\./);
+    expect(draft.body).not.toMatch(/^Also/m);
+  });
+
+  it("leads with the costlier observation, not the first non-verified one", () => {
+    const draft = initialTemplate({
+      company: { name: "Gulf Royal", city: "Riyadh", countryCode: "GB" },
+      facts: [fact(1, "Gulf Royal is a Restaurant in Riyadh.", "VERIFIED"),
+        fact(2, "Its website is gulfroyal.com.", "VERIFIED"),
+        fact(3, "The site runs WordPress."),
+        fact(4, "No analytics tag is installed, so the business has no measurement of its own web traffic.")],
+      serviceKey: "WEBSITE_DEV", serviceLabel: "x",
+    });
+    expect(draft.body).toMatch(/I noticed there's no analytics on your site/);
+    expect(draft.subject).toBe("Gulf Royal site traffic");
+  });
+
+  it("carries the specific into the subject and the Arabic half", () => {
+    const draft = initialTemplate({
+      company: { name: "تونتي", city: "Jeddah", countryCode: "SA" },
+      facts: [fact(1, "تونتي is a Clothing store in Jeddah.", "VERIFIED"),
+        fact(2, "Its website is twenty20-sa.com.", "VERIFIED"),
+        fact(3, "The footer copyright still reads 2024, suggesting the site has not been maintained for 2 years.")],
+      serviceKey: "WEBSITE_DEV", serviceLabel: "x",
+    });
+    expect(draft.body).toMatch(/I noticed your site's footer still says 2024\./);
+    expect(draft.body).toMatch(/سنة 2024/);
+    expect(draft.body).not.toMatch(/suggesting the site has not been maintained/);
+  });
+
+  it("gives each business its own subject line", () => {
+    const build = (name) => initialTemplate({
+      company: { name, city: "Austin", countryCode: "US" },
+      facts: [fact(1, `${name} is a Restaurant in Austin.`, "VERIFIED"),
+        fact(2, `${name} is listed as an operating business with contact details but has no website at all.`)],
+      serviceKey: "WEBSITE_DEV", serviceLabel: "x",
+    }).subject;
+    expect(build("Pizza Press")).toBe("finding Pizza Press online");
+    expect(build("Champions")).toBe("finding Champions online");
+    expect(build("Champions")).not.toBe(build("Pizza Press"));
+  });
+
+  it("keeps a brand's '& Co' and drops a real legal suffix", () => {
+    expect(shortName("Kay & Co")).toBe("Kay & Co");
+    expect(shortName("Al Nabooda Automobiles LLC")).toBe("Al Nabooda Automobiles");
+    expect(shortName("Lúcia Mateus - Hair Studio")).toBe("Lúcia Mateus");
+    expect(shortName("Gulf Royal Chinese Restaurant Trading Company")).toBeNull();
+  });
+
+  it("does not open with a fast load time when nothing else is known", () => {
+    const draft = initialTemplate({
+      company: { name: "Chase Evans", city: "London", countryCode: "GB", industry: "Real-estate agency" },
+      facts: [fact(1, "Chase Evans is a Real-estate agency in London.", "VERIFIED"),
+        fact(2, "Its website is chaseevans.co.uk.", "VERIFIED"),
+        fact(3, "The home page took 1.6s to respond.")],
+      serviceKey: "WEBSITE_DEV", serviceLabel: "x",
+    });
+    expect(draft.body).not.toMatch(/1\.6s/);
+    expect(draft.body).toMatch(/Chase Evans came up while I was looking at local businesses in London\./);
+  });
+
+  it("says the second observation in plain words in the follow-up too", () => {
+    const { body } = followUpTemplate({
+      company: berlin, serviceLabel: "x", followUpNumber: 1,
+      facts: [fact(1, "Restaurant Borchardt is a Restaurant in Berlin.", "VERIFIED"),
+        fact(2, "Restaurant sells to walk-in customers but offers no way to order or buy online."),
+        fact(3, "No analytics tag is installed, so the business has no measurement of its own web traffic.")],
+    });
+    expect(body).toMatch(/there's no analytics on your site/);
+    expect(body).not.toMatch(/no analytics tag is installed/);
   });
 });

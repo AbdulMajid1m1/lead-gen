@@ -11,8 +11,47 @@ import { OSM_CATEGORIES } from "../adapters/overpass.js";
  *  - short, peer-to-peer, one observation → one value line → one soft question.
  */
 
-/** Facts that read badly when quoted in an email opener. */
-const OPENER_BLOCKLIST = /technical audit|scores \d+\/100/i;
+/**
+ * Facts that read badly when quoted in an email opener: the audit score line,
+ * the zero-weight "a contact was found" bookkeeping signals, and the two
+ * disqualifiers — none of which is something to tell a stranger you noticed.
+ */
+const OPENER_BLOCKLIST =
+  /technical audit|scores \d+\/100|was found\.|working contact form|as a contact\.|permanently closed|is not this company's website/i;
+
+/**
+ * Every observation a fact list can open with, strongest first.
+ *
+ * Strength is how concrete and how costly the thing is to the reader: "no
+ * website" and "bookings only by phone" are losses they can feel; "runs
+ * WordPress" is a fact about a CMS. The previous rule — first non-verified
+ * fact wins — let a 95/100 site open with "I noticed the site runs WordPress"
+ * while "no analytics installed" sat unused two lines down.
+ */
+const HOOK_PRIORITY = [
+  "NO_WEBSITE", "NO_BOOKING", "NO_ORDERING", "SLOW_SITE", "NO_MOBILE", "NO_HTTPS",
+  "OLD_COPYRIGHT", "OUTDATED_CMS", "EXPANSION", "HIRING", "AUTOMATION", "NO_APP",
+  "NEW_DOMAIN", "NO_SCHEMA", "BUILDER", "NO_ANALYTICS", "TECH_DEBT", "DEFAULT",
+];
+const hookRank = (fact) => {
+  const i = HOOK_PRIORITY.indexOf(classifyObservation(fact.text));
+  return i < 0 ? HOOK_PRIORITY.length : i;
+};
+
+/** The quotable facts, strongest observation first; catalogue order breaks ties. */
+const rankedObservations = (facts) => {
+  // gatherFacts always puts the identity line first, but a fact list built
+  // elsewhere may not — so the first fact is set aside only when it reads as
+  // one ("X is a restaurant in Jeddah"), not merely because it is first.
+  const first = facts[0];
+  const identity = first && / is an? /.test(first.text) && classifyObservation(first.text) === "DEFAULT" ? first : null;
+  return facts
+    .filter((f) => f !== identity && !OPENER_BLOCKLIST.test(f.text) && !/^Its website is|^Its address is/.test(f.text))
+    .filter((f) => classifyObservation(f.text) !== "FAST_SITE")
+    .map((f, index) => ({ f, index }))
+    .sort((a, b) => hookRank(a.f) - hookRank(b.f) || a.index - b.index)
+    .map(({ f }) => f);
+};
 
 /**
  * Pick the strongest quotable observation from the fact list.
@@ -22,13 +61,7 @@ const OPENER_BLOCKLIST = /technical audit|scores \d+\/100/i;
  * resort. Signal reasons ("listed with contact details but no website at all")
  * are the real hooks and come first.
  */
-export const pickObservation = (facts) => {
-  const identity = facts[0];
-  const usable = facts.filter(
-    (f) => f !== identity && !OPENER_BLOCKLIST.test(f.text) && !/^Its website is|^Its address is/.test(f.text),
-  );
-  return usable.find((f) => f.confidenceLevel !== "VERIFIED") || usable[0] || identity;
-};
+export const pickObservation = (facts) => rankedObservations(facts)[0] || facts[0];
 
 const lowerFirst = (s) => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
 
@@ -128,13 +161,21 @@ const ARABIC = /[؀-ۿ]/;
 const OBSERVATION_KINDS = [
   { kind: "NO_WEBSITE", re: /no website at all|has no website|without a website/i },
   { kind: "SLOW_SITE", re: /took [\d.]+ ?s|slow to respond|page speed|slow site/i },
-  { kind: "NO_BOOKING", re: /no online (?:booking|ordering)|reservation costs|booking.*phone/i },
-  { kind: "NO_MOBILE", re: /viewport|zoomed-out desktop|not mobile/i },
+  { kind: "NO_BOOKING", re: /no online booking|reservation costs|booking.*phone|appointments are by phone/i },
+  { kind: "NO_ORDERING", re: /sells to walk-in customers|no way to order or buy online|no online ordering/i },
+  { kind: "NO_MOBILE", re: /viewport|zoomed-out desktop|not mobile|table layout|breaks on mobile/i },
+  { kind: "NO_HTTPS", re: /plain HTTP|not secure/i },
+  { kind: "OLD_COPYRIGHT", re: /copyright still reads|footer still says/i },
+  { kind: "OUTDATED_CMS", re: /major versions behind|end-of-life|no longer receives security|out of support|security advisories|legacy Magento/i },
   { kind: "NO_SCHEMA", re: /schema\.org|rich search|map panels/i },
+  { kind: "NO_ANALYTICS", re: /no analytics tag/i },
+  { kind: "AUTOMATION", re: /phone or email for things competitors handle automatically/i },
+  { kind: "NO_APP", re: /no mobile app presence|no native mobile app/i },
+  { kind: "NEW_DOMAIN", re: /certificate transparency|subdomain appeared/i },
   { kind: "BUILDER", re: /built on (?:Wix|Squarespace|GoDaddy|Weebly)|template builder/i },
   { kind: "EXPANSION", re: /expansion|new location|branch or opening|new branch/i },
   { kind: "TECH_DEBT", re: /built on|outgrow|custom functionality|integrations|WordPress|WooCommerce/i },
-  { kind: "HIRING", re: /currently hiring|careers page|open positions/i },
+  { kind: "HIRING", re: /currently hiring|careers page|open positions|roles are open/i },
 ];
 
 /** A load time only counts as slow when it actually is; 1.6s is not a pitch. */
@@ -144,9 +185,164 @@ const classifyObservation = (text) => {
   const kind = OBSERVATION_KINDS.find((k) => k.re.test(text || ""))?.kind || "DEFAULT";
   if (kind === "SLOW_SITE") {
     const seconds = Number(/([\d.]+) ?s/.exec(text)?.[1] || 0);
-    if (seconds > 0 && seconds < SLOW_THRESHOLD_S) return "DEFAULT";
+    // A fast load time is not an observation to open with — it is nothing.
+    if (seconds > 0 && seconds < SLOW_THRESHOLD_S) return "FAST_SITE";
   }
   return kind;
+};
+
+/**
+ * Legal suffixes and trailing descriptors that make a subject line read as a
+ * database record. "Al Nabooda Automobiles LLC" is a company; "Al Nabooda" is
+ * what a colleague would write in a subject.
+ */
+const LEGAL_SUFFIX_RE =
+  /\s*[,(]?\s*\b(?:gmbh|ag|ltd\.?|limited|llc|l\.l\.c\.?|inc\.?|corp\.?|co\.?|plc|fze|fzco|fz-llc|s\.?a\.?|s\.?r\.?l\.?|b\.?v\.?|pty|kg|ug|e\.?k\.?|oy|ab|as|sa|lda)\b\.?\)?\s*$/i;
+
+/**
+ * The name as it would appear in a subject: legal suffix dropped, at most
+ * three words, or nothing when the result would still be too long to glance
+ * at — in which case the subject falls back to a "your …" form.
+ */
+export const shortName = (name) => {
+  const raw = String(name || "").trim();
+  // "Kay & Co", "Smith and Sons Co" — the "Co" is the brand, not a suffix.
+  const brandSuffix = /(?:&|\band)\s+(?:co|sons?)\.?$/i.test(raw);
+  const trimmed = (brandSuffix ? raw : raw.replace(LEGAL_SUFFIX_RE, "")).replace(/\s+[-–—|:].*$/, "").trim();
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (!words.length || words.length > 3 || trimmed.length > 24) return null;
+  return trimmed;
+};
+
+const firstNumber = (text, re) => {
+  const m = re.exec(text || "");
+  return m ? m[1] : null;
+};
+
+/** "Currently hiring Senior Backend Engineer in Berlin — an active…" → title, location. */
+const hiringDetail = (text) => {
+  const t = String(text || "").trim();
+  let m = /^it is currently hiring:\s*(.+?)\.?$/i.exec(t);
+  if (m) return { title: m[1] };
+  m = /^currently hiring\s+(.+?)(?:\s+in\s+([^,—–]+?))?\s*(?:[,—–]\s.*)?\.?$/i.exec(t);
+  if (m) return { title: m[1].trim(), location: m[2]?.trim() || null };
+  m = /^(\d+)\s+roles are open/i.exec(t);
+  if (m) return { count: Number(m[1]) };
+  return {};
+};
+
+/** "WordPress 5.7.17 is several major versions…" / "The site runs jQuery 1.12, which…" → the thing. */
+const softwareDetail = (text) => {
+  const t = String(text || "").replace(/^the (?:site|store|server) (?:runs|advertises)(?: on)?\s+/i, "").trim();
+  const m = /^(.+?)(?:,|\s+is\s+|\s+which\s+|\s+that\s+|\.$)/.exec(t);
+  const thing = m ? m[1].trim() : null;
+  // "an end-of-life PHP version" is a phrase, not a product name.
+  return thing && thing.split(/\s+/).length <= 4 ? thing : null;
+};
+
+/**
+ * One observation, said the way a person would say it to the business.
+ *
+ * The catalogue writes reasons for the lead card: third person, present
+ * evidence, then the analyst's inference after a dash ("— an active technology
+ * initiative that often needs outside delivery capacity"). Quoted after
+ * "I noticed", that inference is the most visible tell that a machine wrote
+ * the email. This keeps the observation and the specific (the seconds, the
+ * year, the role, the builder) and drops the reasoning, in the reader's own
+ * "you/your". Returns `null` for a fact it cannot say well — the caller then
+ * either falls back to the raw quote (for the hook, where something must be
+ * said) or says nothing (for a supporting line, where silence beats prose).
+ */
+const describeObservation = (fact, company) => {
+  const text = String(fact?.text || "");
+  const kind = classifyObservation(text);
+  const name = company?.name || "the business";
+  const d = {};
+  let line = null;
+
+  switch (kind) {
+    case "NO_WEBSITE":
+      line = `${name} is listed online with contact details but no website at all`;
+      break;
+    case "NO_BOOKING":
+      line = "appointments with you can only be booked by phone";
+      break;
+    case "NO_ORDERING":
+      // A restaurant takes orders; a shop sells. The wording of the pain and
+      // the value follow this flag too, so the whole email speaks one trade.
+      d.food = /restaurant|cafe|café|coffee|bakery|pizza|food|kitchen|grill|diner|takeaway|bistro/i
+        .test(`${company?.industry || ""} ${text}`);
+      line = d.food
+        ? "customers can't order from you online — it's walk-in or phone only"
+        : "customers can't buy from you online — it's in person only";
+      break;
+    case "SLOW_SITE":
+      d.seconds = firstNumber(text, /([\d.]+) ?s\b/);
+      line = d.seconds ? `your home page takes ${d.seconds}s to load` : "your home page is slow to load";
+      break;
+    case "NO_MOBILE":
+      line = /viewport|zoomed-out/i.test(text)
+        ? "your site opens as a zoomed-out desktop page on a phone"
+        : "your site is laid out for desktop and breaks on a phone";
+      break;
+    case "NO_HTTPS":
+      line = "browsers mark your site “Not secure” because it's still on plain HTTP";
+      break;
+    case "OLD_COPYRIGHT":
+      d.year = firstNumber(text, /\b((?:19|20)\d{2})\b/);
+      line = d.year ? `your site's footer still says ${d.year}` : "your site's footer is years out of date";
+      break;
+    case "OUTDATED_CMS":
+      d.software = softwareDetail(text);
+      line = d.software ? `your site runs ${d.software}, which is well out of date` : "your site runs software that's out of date";
+      break;
+    case "NO_SCHEMA":
+      line = "your site gives Google no structured data, so your hours and reviews can't show in results";
+      break;
+    case "NO_ANALYTICS":
+      line = "there's no analytics on your site, so you can't see where visitors come from";
+      break;
+    case "AUTOMATION":
+      line = "your site asks customers to phone or email for things that could happen on the page";
+      break;
+    case "NO_APP":
+      line = "you sell online but have no app for repeat customers";
+      break;
+    case "NEW_DOMAIN": {
+      const sub = /"([^"]+)" subdomain/.exec(text)?.[1];
+      line = sub ? `a new “${sub}” part of your site went live recently` : "your domain only went live recently";
+      break;
+    }
+    case "BUILDER":
+      d.builder = /built on ([A-Z][\w.]+)/i.exec(text)?.[1] || null;
+      line = d.builder ? `your site is built on ${d.builder}` : "your site is on a template builder";
+      break;
+    case "EXPANSION":
+      line = "your site mentions a new location or opening";
+      break;
+    case "TECH_DEBT": {
+      // "6.3.10." — the fact's own full stop must not ride along.
+      const ver = /WordPress\s+(\d+(?:\.\d+)*)/i.exec(text)?.[1];
+      line = /WooCommerce/i.test(text) ? "your store runs on WooCommerce"
+        : /WordPress/i.test(text) ? `your site runs on WordPress${ver ? ` ${ver}` : ""}`
+        : null;
+      break;
+    }
+    case "HIRING": {
+      const h = hiringDetail(text);
+      Object.assign(d, h);
+      if (h.title) line = `you're hiring ${aRole(h.title)}${h.location ? ` in ${h.location}` : ""}`;
+      else if (h.count) line = `you have ${h.count} roles open right now`;
+      else line = "you have positions open on your careers page";
+      break;
+    }
+    default:
+      line = null;
+  }
+  // A hook must fit on a phone screen as one paragraph; a scraped job title
+  // can be a sentence on its own.
+  if (line && line.split(/\s+/).length > PARAGRAPH_WORD_LIMIT - 2) line = null;
+  return { kind, line, detail: d };
 };
 
 /**
@@ -156,38 +352,61 @@ const classifyObservation = (text) => {
  * copy, which is only ever used when its own premise (no real web presence)
  * is what was observed.
  */
+/**
+ * Subjects take `(short, detail)`: the company's short name when one fits a
+ * glanceable subject (else null), and whatever `describeObservation` pulled
+ * out of the fact. A subject that names the business is opened noticeably
+ * more often than a generic one, and it is what stops six hundred leads
+ * sharing four subject lines. Arabic openers take `(name, detail)` for the
+ * same reason — the year or the seconds belong in both halves.
+ */
 const HOOK_COPY = {
   NO_WEBSITE: {
     // The service copy's subject ("Customers can't find X online") is a pitch,
     // not a subject line — it announces a sales email before it is opened.
-    subject: () => "finding you online",
+    subject: (short) => (short ? `finding ${short} online` : "finding you online"),
     pain: "people searching for a place like yours are finding competitors instead",
     value: "We build a fast, mobile-first site that turns those searches into calls. Most go live in 2-3 weeks",
-    subjectAr: () => "ظهوركم في البحث",
+    subjectAr: (short) => (short ? `ظهور ${short} في البحث` : "ظهوركم في البحث"),
     painAr: "من يبحث عن نشاط مثل نشاطكم يجد منافسيكم بدلاً منكم",
     valueAr: "نبني موقعاً سريعاً يعمل على الجوال ويحوّل عمليات البحث إلى اتصالات، وغالباً خلال ٢-٣ أسابيع",
     openerAr: (name) => `لاحظت أن بيانات ${name} التجارية منشورة لكن لا يوجد له موقع إلكتروني.`,
   },
   SLOW_SITE: {
-    subject: () => "your website speed",
+    subject: (short) => (short ? `${short} page speed` : "your website speed"),
     pain: "most visitors give up on a slow page within a few seconds — they go back and tap the next result",
     value: "We rebuild the front end so pages open immediately, which is usually the cheapest enquiry increase available",
     valueAr: "نعيد بناء الواجهة لتفتح الصفحات فوراً، وهي غالباً أرخص طريقة لزيادة الاستفسارات",
-    subjectAr: () => "سرعة موقعكم",
+    subjectAr: (short) => (short ? `سرعة موقع ${short}` : "سرعة موقعكم"),
     painAr: "أغلب الزوار يغادرون الصفحة البطيئة خلال ثوانٍ ويعودون لنتيجة البحث التالية",
-    openerAr: () => "لاحظت أن موقعكم يستغرق وقتاً طويلاً في التحميل.",
+    openerAr: (name, d) => (d?.seconds
+      ? `لاحظت أن صفحتكم الرئيسية تستغرق نحو ${d.seconds} ثانية حتى تفتح.`
+      : "لاحظت أن موقعكم يستغرق وقتاً طويلاً في التحميل."),
   },
   NO_BOOKING: {
-    subject: () => "online bookings",
+    subject: (short) => (short ? `booking at ${short}` : "online bookings"),
     pain: "every booking that has to happen by phone is one you lose when the line is busy or it's after hours",
     value: "We add online booking that takes appointments around the clock, without changing how your front desk works",
     valueAr: "نضيف حجزاً أونلاين يستقبل المواعيد على مدار الساعة دون تغيير طريقة عمل الاستقبال",
-    subjectAr: () => "الحجز أونلاين",
+    subjectAr: (short) => (short ? `الحجز في ${short} أونلاين` : "الحجز أونلاين"),
     painAr: "كل حجز يتم عبر الهاتف فقط هو حجز تخسره عندما يكون الخط مشغولاً أو بعد ساعات العمل",
-    openerAr: () => "لاحظت أن الحجز أو الطلب لديكم لا يتم أونلاين.",
+    openerAr: () => "لاحظت أن الحجز لديكم لا يتم إلا عبر الهاتف.",
+  },
+  NO_ORDERING: {
+    subject: (short, d) => (short ? `${d?.food ? "ordering" : "buying"} from ${short}` : d?.food ? "online ordering" : "buying online"),
+    pain: (d) => (d?.food
+      ? "every customer who wants to order at 10pm, or while your line is busy, goes to whoever takes orders online"
+      : "every customer who wants to buy after hours, or while your line is busy, goes to whoever sells online"),
+    value: (d) => (d?.food
+      ? "We add online ordering that takes orders around the clock, without changing how the kitchen works"
+      : "We add online sales that take orders around the clock, without changing how you work in the shop"),
+    subjectAr: (short) => (short ? `الطلب من ${short} أونلاين` : "الطلب أونلاين"),
+    painAr: "كل عميل يريد الطلب في وقت متأخر أو بينما خطكم مشغول يذهب لمن يبيع أونلاين",
+    valueAr: "نضيف طلباً أونلاين يستقبل المبيعات على مدار الساعة دون تغيير طريقة عملكم في المحل",
+    openerAr: () => "لاحظت أن عملاءكم لا يستطيعون الطلب أو الشراء منكم أونلاين.",
   },
   NO_MOBILE: {
-    subject: () => "your site on phones",
+    subject: (short) => (short ? `${short} on phones` : "your site on phones"),
     pain: "most visitors are on a phone, and a desktop-only page sends them straight back to the search results",
     value: "We rebuild the site mobile-first so the majority of your visitors can actually read and use it",
     valueAr: "نعيد بناء الموقع ليعمل على الجوال أولاً حتى يستطيع أغلب زوارك قراءته واستخدامه فعلاً",
@@ -195,61 +414,145 @@ const HOOK_COPY = {
     painAr: "أغلب زوارك يستخدمون الجوال، والصفحة غير المهيأة له تعيدهم مباشرة لنتائج البحث",
     openerAr: () => "لاحظت أن موقعكم لا يعمل بشكل جيد على الجوال.",
   },
+  NO_HTTPS: {
+    subject: (short) => (short ? `${short} security warning` : "your site security warning"),
+    pain: "a “Not secure” warning is the first thing a new customer sees, and many close the tab right there",
+    value: "We move the site to HTTPS and fix what the warning is hiding — usually a day's work",
+    subjectAr: () => "تحذير الأمان في موقعكم",
+    painAr: "تحذير «غير آمن» هو أول ما يراه العميل الجديد، وكثيرون يغلقون الصفحة عنده",
+    valueAr: "ننقل الموقع إلى HTTPS ونعالج ما يخفيه التحذير، وغالباً خلال يوم عمل",
+    openerAr: () => "لاحظت أن المتصفح يعرض تحذير «غير آمن» عند فتح موقعكم.",
+  },
+  OLD_COPYRIGHT: {
+    subject: (short, d) => (short && d?.year ? `${short} site since ${d.year}` : "your site's footer"),
+    pain: "a footer years out of date tells a visitor nobody is home, and they call the next result instead",
+    value: "We refresh the site so it looks open for business and loads fast on a phone",
+    subjectAr: () => "تحديث موقعكم",
+    painAr: "تذييل الموقع القديم بسنوات يوحي للزائر أن لا أحد يتابع الموقع، فيتصل بالنتيجة التالية",
+    valueAr: "نجدّد الموقع ليبدو نشطاً ويفتح بسرعة على الجوال",
+    openerAr: (name, d) => (d?.year
+      ? `لاحظت أن تذييل موقعكم ما زال يحمل سنة ${d.year}.`
+      : "لاحظت أن موقعكم لم يُحدّث منذ سنوات."),
+  },
+  OUTDATED_CMS: {
+    subject: (short) => (short ? `${short} site updates` : "your site updates"),
+    pain: "software that far behind is the usual way small sites get hacked or quietly break",
+    value: "We bring it up to date and keep it there, without changing how the site looks",
+    subjectAr: () => "تحديثات موقعكم",
+    painAr: "البرمجيات المتأخرة بهذا القدر هي الطريقة المعتادة لاختراق المواقع الصغيرة أو تعطلها بهدوء",
+    valueAr: "نحدّث الموقع ونبقيه محدثاً دون تغيير شكله",
+    openerAr: (name, d) => (d?.software
+      ? `لاحظت أن موقعكم يعمل على ${d.software}، وهي نسخة قديمة.`
+      : "لاحظت أن موقعكم يعمل على برمجيات قديمة."),
+  },
   NO_SCHEMA: {
-    subject: () => "your Google listing",
+    subject: (short) => (short ? `${short} on Google` : "your Google listing"),
     pain: "without structured data Google can't show your hours, photos or reviews — competitors with richer listings get the click",
     value: "We mark the site up so Google can display your hours, ratings and location directly in the results",
     valueAr: "نضيف البيانات المنظمة ليعرض قوقل ساعات عملكم وتقييماتكم وموقعكم مباشرة في النتائج",
-    subjectAr: () => "ظهوركم في قوقل",
+    subjectAr: (short) => (short ? `ظهور ${short} في قوقل` : "ظهوركم في قوقل"),
     painAr: "بدون البيانات المنظمة لا يعرض قوقل ساعات عملكم وتقييماتكم، فتذهب النقرة لمنافس يظهر بشكل أفضل",
     openerAr: () => "لاحظت أن ظهوركم في نتائج قوقل يمكن تحسينه بشكل ملموس.",
   },
+  NO_ANALYTICS: {
+    subject: (short) => (short ? `${short} site traffic` : "your site traffic"),
+    pain: "without numbers you can't tell which of your marketing brings customers and which wastes money",
+    value: "We set up measurement in a day, so every decision about the site has a number behind it",
+    subjectAr: (short) => (short ? `زيارات موقع ${short}` : "زيارات موقعكم"),
+    painAr: "بدون أرقام لا يمكنكم معرفة أي تسويق يجلب العملاء وأيه يهدر المال",
+    valueAr: "نجهّز القياس خلال يوم، ليكون لكل قرار عن الموقع رقم يدعمه",
+    openerAr: () => "لاحظت أن موقعكم لا يحتوي على أي أداة لقياس الزيارات.",
+  },
+  AUTOMATION: {
+    subject: (short) => (short ? `enquiries at ${short}` : "your enquiries"),
+    pain: "every one of those calls and emails is staff time, and the ones after hours go unanswered",
+    value: "We put those steps on the site itself, so customers help themselves and your team gets the hours back",
+    subjectAr: () => "استفساراتكم",
+    painAr: "كل اتصال ورسالة من هذا النوع وقت موظف، وما يصل بعد الدوام يبقى بلا رد",
+    valueAr: "ننقل هذه الخطوات إلى الموقع نفسه ليخدم العميل نفسه ويستعيد فريقكم ساعاته",
+    openerAr: () => "لاحظت أن موقعكم يطلب من العملاء الاتصال أو المراسلة لأمور يمكن إنجازها على الصفحة.",
+  },
+  NO_APP: {
+    subject: (short) => (short ? `a ${short} app` : "an app for regulars"),
+    pain: "repeat customers have no two-tap way to reorder, so they drift to whoever is easiest",
+    value: "We build a simple app that makes reordering effortless — repeat orders typically climb within weeks",
+    subjectAr: () => "تطبيق لعملائكم الدائمين",
+    painAr: "زبائنك الدائمون لا يملكون طريقة سهلة لإعادة الطلب فيتجهون لمن يسهّل عليهم",
+    valueAr: "نبني تطبيقاً بسيطاً يجعل إعادة الطلب بلمستين، وعادة ترتفع الطلبات المتكررة خلال أسابيع",
+    openerAr: () => "لاحظت أنكم تبيعون أونلاين لكن دون تطبيق لعملائكم الدائمين.",
+  },
+  NEW_DOMAIN: {
+    subject: (short) => (short ? `${short} new site` : "your new site"),
+    pain: "a new site is the cheapest moment to get speed, mobile and search right — before the content piles up",
+    value: "We set the foundations so the site is fast and found from day one",
+    subjectAr: () => "موقعكم الجديد",
+    painAr: "الموقع الجديد هو أرخص لحظة لضبط السرعة والجوال والظهور في البحث قبل أن يتراكم المحتوى",
+    valueAr: "نرسي الأساس ليكون الموقع سريعاً وظاهراً في البحث من اليوم الأول",
+    openerAr: () => "لاحظت أن موقعكم انطلق حديثاً.",
+  },
   BUILDER: {
-    subject: () => "your website platform",
+    subject: (short, d) => (short && d?.builder ? `${short} on ${d.builder}` : "your website platform"),
     pain: "template builders are fine to start, but they cap speed, search ranking and custom features as you grow",
     value: "We move sites off template builders onto something you own, keeping everything that already works",
     valueAr: "ننقل الموقع من منصات القوالب إلى نظام تملكونه، مع الحفاظ على كل ما يعمل حالياً",
     subjectAr: () => "منصة موقعكم",
     painAr: "منصات القوالب الجاهزة مناسبة للبداية لكنها تحدّ من السرعة والظهور في البحث والميزات مع النمو",
-    openerAr: () => "لاحظت أن موقعكم مبني على منصة قوالب جاهزة.",
+    openerAr: (name, d) => (d?.builder
+      ? `لاحظت أن موقعكم مبني على ${d.builder}.`
+      : "لاحظت أن موقعكم مبني على منصة قوالب جاهزة."),
   },
   TECH_DEBT: {
-    subject: () => "your website setup",
+    subject: (short) => (short ? `${short} website setup` : "your website setup"),
     pain: "as a site grows past its platform, the workarounds start costing real time and real sales",
+    value: "We tidy what's underneath so the site stays fast and easy to change, without a rebuild",
     subjectAr: () => "البنية التقنية لموقعكم",
     painAr: "عندما يكبر الموقع على منصته تبدأ الحلول المؤقتة بأخذ وقت حقيقي ومبيعات حقيقية",
+    valueAr: "نرتّب ما تحت الموقع ليبقى سريعاً وسهل التعديل دون إعادة بناء",
     openerAr: () => "لاحظت بعض النقاط التقنية في موقعكم يمكن تحسينها.",
   },
   HIRING: {
-    subject: () => "your hiring push",
+    subject: (short, d) => {
+      const title = d?.title?.replace(/\s*\(.*?\)\s*/g, " ").trim();
+      return title && title.split(/\s+/).length <= 3 ? `your ${title} hire` : "your hiring push";
+    },
     pain: "growth like that usually strains the systems behind it, and hiring for it takes months",
     value: "We plug in as a delivery team that ships while you hire, then hand over cleanly",
     valueAr: "ننضم كفريق تطوير ينفّذ بينما توظفون، ثم نسلّم العمل بشكل منظم",
     subjectAr: () => "توسع فريقكم",
     painAr: "النمو بهذا الشكل يضغط عادة على الأنظمة خلف الكواليس، والتوظيف له يستغرق شهوراً",
-    openerAr: () => "لاحظت أن لديكم وظائف شاغرة معلنة حالياً.",
+    openerAr: (name, d) => (d?.title
+      ? `لاحظت أنكم تعلنون حالياً عن وظيفة ${d.title}.`
+      : "لاحظت أن لديكم وظائف شاغرة معلنة حالياً."),
   },
   EXPANSION: {
-    subject: () => "your new location",
+    subject: (short) => (short ? `${short}'s new location` : "your new location"),
     pain: "a new location multiplies everything the current setup already carries — bookings, orders, being found in a new area",
+    value: "We get the online side ready before the doors open — found in the new area, bookings and orders working from day one",
     subjectAr: () => "فرعكم الجديد",
     painAr: "الفرع الجديد يضاعف كل ما يتحمله وضعكم الحالي — الحجوزات والطلبات والظهور في منطقة جديدة",
+    valueAr: "نجهّز الجانب الرقمي قبل الافتتاح: الظهور في المنطقة الجديدة والحجوزات والطلبات تعمل من اليوم الأول",
     openerAr: () => "لاحظت أنكم في مرحلة توسع وافتتاح جديد.",
   },
   // A business we verified HAS a website but whose observation fits no
   // specific kind. The service copy's "can't find you online" premise would
   // be false here, so this generic-but-true pair takes over.
   HAS_SITE_DEFAULT: {
-    subject: () => "your online presence",
+    subject: (short) => (short ? `${short} website` : "your website"),
     pain: "small technical gaps quietly cost enquiries every week, and most are quick to fix",
+    value: "We fix the small things first, so the site brings enquiries in instead of losing them",
     subjectAr: () => "حضوركم الرقمي",
     painAr: "الثغرات التقنية الصغيرة تكلف استفسارات كل أسبوع، وأغلبها سريع الإصلاح",
+    valueAr: "نبدأ بإصلاح الأشياء الصغيرة ليجلب الموقع الاستفسارات بدل أن يخسرها",
     openerAr: () => "لاحظت بعض النقاط في حضوركم الرقمي يمكن تحسينها بسرعة.",
   },
   DEFAULT: {
+    subjectAr: () => "حضوركم الرقمي",
     openerAr: () => "لاحظت بعض النقاط في حضوركم الرقمي يمكن تحسينها بسرعة.",
   },
 };
+
+/** Copy entries may depend on what the observation extracted (`detail`). */
+const resolveCopy = (entry, detail) => (typeof entry === "function" ? entry(detail) : entry);
 
 /** Gulf markets where outreach should lead in Arabic even for Latin-named businesses. */
 const ARABIC_MARKETS = new Set(["SA", "AE", "KW", "QA", "BH", "OM"]);
@@ -344,6 +647,14 @@ const CTA_BY_KIND = {
   NO_SCHEMA: ["Want me to send what's missing from your listing? One word back is enough.", "Shall I send the short version of what Google is not seeing?"],
   BUILDER: ["Want me to send where that platform starts to cost you? One word is enough.", "Shall I send two things that get easier off it?"],
   TECH_DEBT: ["Want me to send the two I would fix first? One word back is enough.", "Shall I send a short list, specific to your site?"],
+  NO_ORDERING: ["Want me to send how ordering would work for a place like yours? One word is enough.", "Shall I send two ways this usually gets set up?"],
+  NO_HTTPS: ["Want me to send what's behind the warning? One word back is enough.", "Shall I send the short version of what needs changing?"],
+  OLD_COPYRIGHT: ["Want me to send the three things I'd refresh first? One word is enough.", "Shall I send what a light refresh would cover?"],
+  OUTDATED_CMS: ["Want me to send what's exposed right now? One word back is enough.", "Shall I send the short list of what needs updating?"],
+  NO_ANALYTICS: ["Want me to send what you'd be able to see with it? One word is enough.", "Shall I send the two numbers worth tracking first?"],
+  AUTOMATION: ["Want me to send which of those steps could move onto the site? One word is enough.", "Shall I send the two I'd automate first?"],
+  NO_APP: ["Want me to send what a simple app would cover? One word is enough.", "Shall I send two examples from businesses your size?"],
+  NEW_DOMAIN: ["Want me to send the three things worth getting right early? One word is enough.", "Shall I send what I'd set up first?"],
   HIRING: ["Want me to send how we usually cover a gap like this? One word is enough.", "Shall I send what the first month normally looks like?"],
   EXPANSION: ["Want me to send what usually needs doing at this stage? One word is enough.", "Shall I send two things worth setting up early?"],
   HAS_SITE_DEFAULT: ["Want me to send the two I would fix first? One word back is enough.", "Shall I send a short list, specific to your site?"],
@@ -391,14 +702,33 @@ const variantIndex = (seed, count) => {
  * and address lines, and the audit-score line — which reads as a robot even
  * when it is true.
  */
-const pickSupporting = (facts, usedId) => {
-  const candidate = facts.find((f) =>
-    f.id !== usedId
-    && !/^Its address is|^Its website is/.test(f.text)
-    && !OPENER_BLOCKLIST.test(f.text)
-    && !/ is a | is an /.test(f.text.slice(0, 60)),
-  );
-  return candidate || null;
+/**
+ * The next-strongest observation this file can say in plain words. Two rules
+ * beyond "not the hook": never the same kind twice — "runs WordPress 6.3"
+ * followed by "Also, built on WordPress 6.3" is the one line a reader is
+ * certain a machine wrote — and never a fact with no human phrasing, because
+ * a supporting line is optional and analyst prose is worse than silence.
+ */
+const pickSupporting = (facts, hookFact, hookKind, company) => {
+  for (const f of rankedObservations(facts)) {
+    if (f === hookFact) continue;
+    const said = describeObservation(f, company);
+    if (!said.line || said.kind === hookKind || said.kind === "TECH_DEBT" || said.kind === "DEFAULT") continue;
+    return { fact: f, line: said.line };
+  }
+  return null;
+};
+
+/**
+ * The opener when nothing but the identity line is known. Telling a business
+ * what it is makes a terrible first sentence, so this says what the sender
+ * was doing instead — true of every discovery run, and a claim about nobody.
+ */
+const identityOpener = (company) => {
+  const trade = company.industry && company.industry !== "Technology employer"
+    ? `${company.industry.toLowerCase()} businesses`
+    : "companies in your space";
+  return `${company.name} came up while I was looking at ${company.city ? `local businesses in ${company.city}` : trade}.`;
 };
 
 /** The initial pitch: hook → pain → value → tiny CTA, under ~80 words. */
@@ -406,22 +736,17 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel, reci
   const copy = PITCH_COPY[serviceKey] || PITCH_COPY.CUSTOM_SOFTWARE;
   const observation = pickObservation(facts);
   const hasWebsite = facts.some((f) => /^Its website is /.test(f.text));
-  let kind = classifyObservation(observation.text);
+  const said = describeObservation(observation, company);
+  let { kind } = said;
   // A lead with a verified website must never get the "can't find you online"
   // premise the generic service copy leads with.
   if (kind === "DEFAULT" && hasWebsite) kind = "HAS_SITE_DEFAULT";
   const hook = HOOK_COPY[kind] || HOOK_COPY.DEFAULT;
 
-  // A fact that opens with the company's own name must keep its capital.
   /**
-   * Fit an observation into "I noticed …" so it reads as a sentence.
-   *
-   * The signal catalogue writes reasons as standalone lines — "Currently hiring
-   * a Senior ML Engineer", "The home page took 4.2s to respond" — which is
-   * right for the lead card but produces "I noticed currently hiring a Senior
-   * ML Engineer" once lower-cased into the email. A reason that opens with a
-   * bare participle needs its subject restored, and since the email addresses
-   * the company as "you", that subject is "you are".
+   * Last-resort quoting for a fact the humaniser has no phrasing for: keep a
+   * leading company name's capital, and give a bare participle ("hiring X")
+   * its subject back so the sentence has one.
    */
   const quote = (text) => {
     if (text.startsWith(company.name)) return text;
@@ -430,11 +755,15 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel, reci
       ? `you're ${lowered}`
       : lowered;
   };
+  const opener = said.line
+    ? `I noticed ${said.line}.`
+    : observation === facts[0] ? identityOpener(company)
+    : `I noticed ${quote(observation.text)}`;
 
   // Both halves must come from the same thought: a booking hook answered with a
   // "get found in search" promise reads as two templates stitched together.
-  const pain = hook.pain || copy.pain;
-  const value = hook.value || copy.value;
+  const pain = resolveCopy(hook.pain, said.detail) || copy.pain;
+  const value = resolveCopy(hook.value, said.detail) || copy.value;
   // A first name when the business published one on its own site. `gatherFacts`
   // has always resolved this and the template simply never received it, so
   // every rule-generated email opened "Hello," at a company whose owner is
@@ -452,11 +781,11 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel, reci
   // The 70-word ceiling wins over the extra detail every time though — a long
   // email on a phone is not read at all, so specificity gained by breaking the
   // ceiling would be specificity nobody sees.
-  const candidate = pickSupporting(facts, observation.id);
+  const candidate = pickSupporting(facts, observation, kind, company);
   const compose = (extra, askLine, pivotFn) => [
     greeting,
-    `I noticed ${quote(observation.text)}`,
-    extra ? `Also ${lowerFirst(extra.text)}` : null,
+    opener,
+    extra ? `Also, ${extra.line}.` : null,
     pivotFn(pain),
     `${value}.`,
     askLine,
@@ -467,7 +796,7 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel, reci
   // Every paragraph is one line on a phone; a long "Also …" breaks that shape
   // regardless of what the total comes to.
   const extraFitsAlone = candidate
-    && `Also ${lowerFirst(candidate.text)}`.split(/\s+/).length <= PARAGRAPH_WORD_LIMIT;
+    && `Also, ${candidate.line}.`.split(/\s+/).length <= PARAGRAPH_WORD_LIMIT;
 
   // Give things up in order of what the reader loses least by losing: the
   // second observation first, then the varied ask, then the varied pivot. The
@@ -496,7 +825,7 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel, reci
   const arabic = bilingual
     ? [
         "مرحباً،",
-        (hook.openerAr || HOOK_COPY.DEFAULT.openerAr)(company.name),
+        (hook.openerAr || HOOK_COPY.DEFAULT.openerAr)(company.name, said.detail),
         `${hook.painAr || copy.painAr}.`,
         `${hook.valueAr || copy.valueAr}.`,
         CTA_AR[variantIndex(`${company.name || ""}ar`, CTA_AR.length)],
@@ -504,15 +833,23 @@ export const initialTemplate = ({ company, facts, serviceKey, serviceLabel, reci
       ].join("\n\n")
     : null;
 
+  // The subject names the business when its name fits a glance. The service
+  // copy's subjects are pitches ("Customers can't find X online") and are no
+  // longer used for a first email under any kind.
+  const short = shortName(company.name);
+  const subjectFn = hook.subject || ((s) => (s ? `${s} online` : "your online presence"));
+  // An Arabic subject already spends words on its own frame ("ظهور … في
+  // البحث"), so a Latin name only fits when it is one or two words.
+  const shortAr = short && short.split(/\s+/).length <= 2 ? short : null;
   const subject = bilingual
-    ? (hook.subjectAr || copy.subjectAr || copy.subject)(company.name)
-    : (hook.subject || copy.subject)(company.name);
+    ? (hook.subjectAr || HOOK_COPY.DEFAULT.subjectAr)(shortAr, said.detail)
+    : subjectFn(short, said.detail);
 
   return {
     aboutCompany: aboutFromFacts({ company, facts }),
     subject: subject.slice(0, 200),
     body: arabic ? `${arabic}\n\n———\n\n${english}` : english,
-    factIdsUsed: [observation.id, supporting?.id].filter(Boolean),
+    factIdsUsed: [observation.id, supporting?.fact.id].filter(Boolean),
   };
 };
 
@@ -1072,14 +1409,18 @@ export const productInitialTemplate = ({ company, facts = [], product, recipient
  * a follow-up needs. "Just checking in" chases measurably depress replies;
  * a fresh concrete detail gives the reader a reason to answer this time.
  */
-const secondObservation = (facts = []) => {
+const secondObservation = (facts = [], company = {}) => {
   const first = pickObservation(facts);
-  const usable = facts.filter(
-    (f) => f !== first && f !== facts[0]
-      && !OPENER_BLOCKLIST.test(f.text)
-      && !/^Its website is|^Its address is/.test(f.text),
-  );
-  return usable[0] || null;
+  const firstKind = first ? classifyObservation(first.text) : "DEFAULT";
+  for (const f of rankedObservations(facts)) {
+    if (f === first) continue;
+    const said = describeObservation(f, company);
+    // Same rules as the opener's supporting line: a new kind of thing, said in
+    // plain words, or nothing — a chase that quotes analyst prose is worse
+    // than a chase with no new detail.
+    if (said.line && said.kind !== firstKind && said.kind !== "DEFAULT") return { fact: f, line: said.line };
+  }
+  return null;
 };
 
 export const whatsappFollowUpTemplate = ({ company, serviceLabel, serviceKey, followUpNumber, facts = [] }) => {
@@ -1092,9 +1433,9 @@ export const whatsappFollowUpTemplate = ({ company, serviceLabel, serviceKey, fo
     };
   }
   if (followUpNumber <= 1) {
-    const second = secondObservation(facts);
+    const second = secondObservation(facts, company);
     const extra = second
-      ? `One more thing I spotted: ${second.text.charAt(0).toLowerCase()}${second.text.slice(1).replace(/\.$/, "")}. `
+      ? `One more thing I spotted: ${second.line}. `
       : `I've noted a couple of quick wins specific to ${company.name}. `;
     return {
       body:
@@ -1116,12 +1457,12 @@ export const followUpTemplate = ({ company, serviceLabel, serviceKey, followUpNu
   // A new concrete detail, never "just checking in" — that phrase measurably
   // depresses replies because it gives the reader no reason to answer.
   if (followUpNumber <= 1) {
-    const second = secondObservation(facts);
+    const second = secondObservation(facts, company);
     return {
       body: [
         "Hello,",
         second
-          ? `One more thing I noticed while looking at ${company.name}: ${second.text.charAt(0).toLowerCase()}${second.text.slice(1).replace(/\.$/, "")}.`
+          ? `One more thing I noticed while looking at ${company.name}: ${second.line}.`
           : `Since my last note I've written down the two or three things I would change first at ${company.name} — specific ones, not a generic checklist.`,
         `Happy to send the short list over — a one-word reply is enough. And if the timing is wrong, "not now" is a completely fine answer.`,
         "Best regards",
@@ -1182,9 +1523,12 @@ export const followUpTemplate = ({ company, serviceLabel, serviceKey, followUpNu
  */
 export const whatsappInitialTemplate = ({ company, facts = [], serviceLabel }) => {
   const observation = pickObservation(facts);
-  const hook = observation?.text
-    ? ` — I noticed ${observation.text.charAt(0).toLowerCase()}${observation.text.slice(1).replace(/\.$/, "")}`
-    : "";
+  const said = observation ? describeObservation(observation, company) : { line: null };
+  const hook = said.line
+    ? ` — I noticed ${said.line}`
+    : observation?.text
+      ? ` — I noticed ${lowerFirst(observation.text).replace(/\.$/, "")}`
+      : "";
   return {
     body:
       `Hello! Quick note about ${company.name}${hook}. `
