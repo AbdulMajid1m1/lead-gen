@@ -231,8 +231,14 @@ export const boardFitsCompany = (board, company) => {
   // board; "Remote - APAC" names a region the company is not in.
   const placeless = (j) => !j.remote ? false
     : !j.location.trim() || (/^(?:remote|anywhere|worldwide|global|hybrid|flexible)\s*$/i.test(j.location.trim()));
-  const matches = located.filter((j) => placeless(j) || local.test(j.location));
-  if (matches.length > 0) return { ok: true, reason: `${matches.length} of ${located.length} jobs located in ${COUNTRY_NAMES[cc] || cc}` };
+  const placed = located.filter((j) => local.test(j.location));
+  if (placed.length > 0) return { ok: true, reason: `${placed.length} of ${located.length} jobs located in ${COUNTRY_NAMES[cc] || cc}` };
+  // Placeless remote rows vouch for a board only while it is small: one
+  // "Remote" beside a dozen US postings was how a Berlin beer hall kept a
+  // US fintech's board after every other test.
+  const remoteOnly = located.filter(placeless).length;
+  const elsewhere = located.length - remoteOnly;
+  if (remoteOnly > 0 && elsewhere < 3) return { ok: true, reason: `${remoteOnly} placeless remote job(s), too few located elsewhere to judge` };
 
   const sample = [...new Set(located.map((j) => j.location))].slice(0, 4).join("; ");
   return {

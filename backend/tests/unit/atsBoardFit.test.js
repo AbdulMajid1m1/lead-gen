@@ -47,6 +47,10 @@ describe("boardFitsCompany — is this the company's board or a namesake's", () 
     expect(boardFitsCompany({ slug: "factory", jobs: [job("San Francisco, CA"), job("Remote - APAC", true), job("Central region", true)] }, { countryCode: "DE", city: "Berlin" }).ok).toBe(false);
     expect(boardFitsCompany({ slug: "haus", jobs: [job("Seattle, WA", true), job("New York, NY; San Francisco, CA; Seattle, WA", true)] }, { countryCode: "DE", city: "Berlin" }).ok).toBe(false);
     expect(boardFitsCompany({ jobs: [job("US-Remote", true)] }, { countryCode: "DE", city: "Berlin" }).ok).toBe(false);
+    // Haus's actual board: one bare "Remote" among a dozen US rows.
+    expect(boardFitsCompany({ slug: "haus", jobs: [job("Seattle, WA", true), job("San Francisco, CA"), job("New York, NY"), job("Remote", true)] }, { countryCode: "DE", city: "Berlin" }).ok).toBe(false);
+    // But a small board that is mostly remote is not evidence of anything.
+    expect(boardFitsCompany({ jobs: [job("Remote", true), job("Austin, TX")] }, { countryCode: "DE", city: "Berlin" }).ok).toBe(true);
   });
 
   it("fails open when there is nothing to judge on", () => {
