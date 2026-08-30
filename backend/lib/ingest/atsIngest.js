@@ -225,7 +225,13 @@ export const boardFitsCompany = (board, company) => {
 
   const terms = [COUNTRY_NAMES[cc], cc, ...(COUNTRY_ALIASES[cc] || []), company.city].filter(Boolean).map(escapeRe);
   const local = new RegExp(`(?:^|[\\s,(/-])(?:${terms.join("|")})(?:$|[\\s,)/.-])`, "i");
-  const matches = located.filter((j) => j.remote || local.test(j.location));
+  // A remote posting is only "possibly local" when it names no place. Ashby
+  // flags hybrid roles remote while their location still says "Bay Area
+  // (Palo Alto)", and one such row let a Berlin beer hall keep a US fintech's
+  // board; "Remote - APAC" names a region the company is not in.
+  const placeless = (j) => !j.remote ? false
+    : !j.location.trim() || (/^(?:remote|anywhere|worldwide|global|hybrid|flexible)\s*$/i.test(j.location.trim()));
+  const matches = located.filter((j) => placeless(j) || local.test(j.location));
   if (matches.length > 0) return { ok: true, reason: `${matches.length} of ${located.length} jobs located in ${COUNTRY_NAMES[cc] || cc}` };
 
   const sample = [...new Set(located.map((j) => j.location))].slice(0, 4).join("; ");

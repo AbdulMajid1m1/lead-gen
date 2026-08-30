@@ -38,8 +38,15 @@ describe("boardFitsCompany — is this the company's board or a namesake's", () 
     expect(boardFitsCompany({ jobs: [job("London, United Kingdom")] }, { countryCode: "GB", city: "Manchester" }).ok).toBe(true);
   });
 
-  it("accepts a remote job as possibly local", () => {
-    expect(boardFitsCompany({ jobs: [job("US-Remote", true)] }, { countryCode: "DE", city: "Berlin" }).ok).toBe(true);
+  it("counts a remote job as possibly local only when it names no place", () => {
+    expect(boardFitsCompany({ jobs: [job("Remote", true)] }, { countryCode: "DE", city: "Berlin" }).ok).toBe(true);
+    expect(boardFitsCompany({ jobs: [job("", true)] }, { countryCode: "DE", city: "Berlin" }).ok).toBe(true);
+    // The rows that let the three Berlin restaurants through: Ashby marks a
+    // hybrid Palo Alto role remote, and "Remote - APAC" names a region.
+    expect(boardFitsCompany({ slug: "aida", jobs: [job("Bay Area (Palo Alto)", true)] }, { countryCode: "DE", city: "Berlin" }).ok).toBe(false);
+    expect(boardFitsCompany({ slug: "factory", jobs: [job("San Francisco, CA"), job("Remote - APAC", true), job("Central region", true)] }, { countryCode: "DE", city: "Berlin" }).ok).toBe(false);
+    expect(boardFitsCompany({ slug: "haus", jobs: [job("Seattle, WA", true), job("New York, NY; San Francisco, CA; Seattle, WA", true)] }, { countryCode: "DE", city: "Berlin" }).ok).toBe(false);
+    expect(boardFitsCompany({ jobs: [job("US-Remote", true)] }, { countryCode: "DE", city: "Berlin" }).ok).toBe(false);
   });
 
   it("fails open when there is nothing to judge on", () => {
