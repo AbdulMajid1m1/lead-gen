@@ -27,12 +27,28 @@ describe("detectTechnologies", () => {
   });
 
   it("infers WordPress from WooCommerce, and labels it as an inference", () => {
-    const { technologies } = detectTechnologies({ html: '<link href="/wp-content/plugins/woocommerce/x.css">', headers: {} });
+    const { technologies } = detectTechnologies({
+      html: '<link href="/wp-content/plugins/woocommerce/x.css"><a class="button add-to-cart" href="?add-to-cart=12">Add</a>',
+      headers: {},
+    });
     const wp = technologies.find((t) => t.name === "WordPress");
     expect(wp).toBeDefined();
     // Both a direct wp-content match and the inference are legitimate; what
     // matters is that WooCommerce never appears without WordPress.
     expect(technologies.some((t) => t.name === "WooCommerce")).toBe(true);
+  });
+
+  it("does not call a site a store because its theme bundles the WooCommerce plugin", () => {
+    // In production this fingerprint fired on law firms, dental clinics and
+    // schools: the plugin's stylesheet and wc-ajax endpoint load on any
+    // WordPress theme that ships with WooCommerce, products or not. Each one
+    // was then told "the store runs on WooCommerce" in its email.
+    const { technologies } = detectTechnologies({
+      html: '<link href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css"><script>var wc_ajax = "/?wc-ajax=%%endpoint%%"</script><p>Our solicitors</p>',
+      headers: {},
+    });
+    expect(technologies.some((t) => t.name === "WordPress")).toBe(true);
+    expect(technologies.some((t) => t.name === "WooCommerce")).toBe(false);
   });
 
   it("flags end-of-life libraries with a business consequence", () => {

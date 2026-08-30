@@ -4,6 +4,7 @@ import { ensureSource, recordSourceRecord, resolveCompany, recordFact } from "..
 import { reconcileBoardJobs, initialStatusFor } from "../jobs/jobStatusEngine.js";
 import { parseJobText } from "../extract/jobTextParser.js";
 import { atsSlugCandidates, normalizeJobTitle } from "../../utils/normalize.js";
+import { COUNTRY_NAMES } from "../../utils/countries.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("atsIngest");
@@ -169,5 +170,67 @@ export const discoverAndIngestAts = async ({ companyId, companyName, providers }
   const probe = await probeAtsSlug(candidates, providers ? { providers } : {});
   if (!probe.found) return { ok: false, reason: "NO_ATS_ACCOUNT", found: false, attempts: probe.attempts.length };
 
+  // A slug that exists is not proof it is *this* company's board. "haus" is
+  // a Berlin beer hall and a US fintech; the probe found the fintech's
+  // Greenhouse board and a restaurant was scored as hiring ML engineers in
+  // Seattle. The board's own evidence — where its jobs are — has to be
+  // consistent with where the company is before a single job is attributed.
+  const company = companyId
+    ? await prisma.company.findUnique({ where: { id: companyId }, select: { countryCode: true, city: true } })
+    : null;
+  const fit = boardFitsCompany(probe, company);
+  if (!fit.ok) {
+    logger.info({ company: companyName, provider: probe.provider, slug: probe.slug, reason: fit.reason }, "ATS board rejected — not this company's");
+    if (companyId) {
+      await recordFact({
+        companyId, key: "ats_board_rejected", value: `${probe.provider}:${probe.slug}`, confidenceLevel: "VERIFIED",
+        extractorName: "atsIngest", evidenceSnippet: fit.reason.slice(0, 500),
+      });
+    }
+    return { ok: false, reason: "ATS_BOARD_MISMATCH", found: false, attempts: probe.attempts.length };
+  }
+
   return ingestAtsBoard({ provider: probe.provider, slug: probe.slug, companyId, companyName });
+};
+
+/**
+ * Words a job location uses for a country that COUNTRY_NAMES does not: the
+ * local-language name, the common abbreviation, and the cities that stand in
+ * for the country on most boards.
+ */
+const COUNTRY_ALIASES = {
+  DE: ["Deutschland", "Berlin", "München", "Munich", "Hamburg", "Frankfurt", "Köln", "Cologne", "Stuttgart", "Düsseldorf"],
+  GB: ["UK", "U.K.", "United Kingdom", "England", "Scotland", "Wales", "London", "Manchester", "Birmingham", "Edinburgh", "Leeds", "Glasgow"],
+  US: ["USA", "U.S.", "United States", "New York", "San Francisco", "Seattle", "Austin", "Chicago", "Los Angeles", "Boston", "Denver", "Remote - US"],
+  AE: ["UAE", "U.A.E.", "Emirates", "Dubai", "Abu Dhabi", "Sharjah"],
+  SA: ["KSA", "Saudi", "Riyadh", "Jeddah", "Dammam", "Khobar"],
+  PT: ["Lisboa", "Lisbon", "Porto"],
+  QA: ["Doha"], KW: ["Kuwait City"], BH: ["Manama"], OM: ["Muscat"], EG: ["Cairo"],
+  FR: ["Paris"], ES: ["España", "Madrid", "Barcelona"], IT: ["Italia", "Milan", "Milano", "Rome", "Roma"],
+  NL: ["Nederland", "Amsterdam", "Rotterdam"], IE: ["Dublin"], CH: ["Zürich", "Zurich", "Geneva"], AT: ["Österreich", "Wien", "Vienna"],
+};
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Whether a probed board could belong to this company, judged on where its
+ * jobs are. Fail-open where there is nothing to judge on: a company with no
+ * country, or a board whose jobs carry no locations, is accepted as before.
+ * Rejected only when every located job is somewhere else and none is remote.
+ */
+export const boardFitsCompany = (board, company) => {
+  const cc = company?.countryCode?.toUpperCase();
+  const located = (board?.jobs || []).filter((j) => j.location);
+  if (!cc || located.length === 0) return { ok: true, reason: "no location evidence" };
+
+  const terms = [COUNTRY_NAMES[cc], cc, ...(COUNTRY_ALIASES[cc] || []), company.city].filter(Boolean).map(escapeRe);
+  const local = new RegExp(`(?:^|[\\s,(/-])(?:${terms.join("|")})(?:$|[\\s,)/.-])`, "i");
+  const matches = located.filter((j) => j.remote || local.test(j.location));
+  if (matches.length > 0) return { ok: true, reason: `${matches.length} of ${located.length} jobs located in ${COUNTRY_NAMES[cc] || cc}` };
+
+  const sample = [...new Set(located.map((j) => j.location))].slice(0, 4).join("; ");
+  return {
+    ok: false,
+    reason: `Board "${board.slug || ""}" lists ${located.length} located jobs and none in ${COUNTRY_NAMES[cc] || cc} (${sample}) — almost certainly a different company with a similar name.`,
+  };
 };

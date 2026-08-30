@@ -75,6 +75,13 @@ export const detectTechnologies = ({ html = "", headers = {}, url = null } = {})
 
     if (!matchedOn) continue;
 
+    // A marker that proves the *software* is present is not always proof
+    // the site *uses* it: every WordPress theme that bundles the WooCommerce
+    // plugin ships its stylesheet, shop or no shop. `htmlAll` lists markers
+    // that must all be present as well — for WooCommerce, actual product or
+    // cart markup — before the fingerprint counts.
+    if (fp.htmlAll && !fp.htmlAll.every((re) => re.test(html))) continue;
+
     const version = versionFrom(fp.name, html, lowerHeaders);
     found.set(fp.name, {
       name: fp.name,

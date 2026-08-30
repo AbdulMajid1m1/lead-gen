@@ -39,8 +39,12 @@ export const FINGERPRINTS = [
     html: [/hs-scripts\.com/i, /cdn2?\.hubspot\.net/i] },
 
   // ─── E-commerce ─────────────────────────────────────────────────────────────
+  // The plugin's stylesheet and wc-ajax endpoint load on any WordPress site
+  // whose theme bundles WooCommerce — in production that made law firms,
+  // dental clinics and schools "stores". A store has products or a cart.
   { name: "WooCommerce", category: "ECOMMERCE", confidence: "VERIFIED",
-    html: [/woocommerce(?:-|\.)/i, /\/plugins\/woocommerce\//i, /wc-ajax/i] },
+    html: [/woocommerce(?:-|\.)/i, /\/plugins\/woocommerce\//i, /wc-ajax/i],
+    htmlAll: [/add-to-cart|woocommerce-product|product_cat|wc-cart|woocommerce-cart|wc-block-(?:cart|checkout|grid|product)|woocommerce-LoopProduct|\/product\//i] },
   { name: "Magento", category: "ECOMMERCE", confidence: "VERIFIED",
     html: [/\/static\/version\d+\/frontend\//i, /Magento_/i, /mage\/cookies/i] },
   { name: "BigCommerce", category: "ECOMMERCE", confidence: "VERIFIED",
