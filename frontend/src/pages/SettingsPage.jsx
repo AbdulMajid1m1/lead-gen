@@ -17,6 +17,7 @@ export default function SettingsPage() {
   const queryClient = useQueryClient();
 
   const { data: suppression, isPending } = useQuery({ queryKey: ["suppression"], queryFn: api.listSuppression });
+  const { data: catalog } = useQuery({ queryKey: ["catalog"], queryFn: api.signalCatalog, staleTime: Infinity });
 
   // The list runs to a few hundred rows once a bounce sweep has been through it,
   // and every one of them was rendered at once. Filtering happens client-side
@@ -59,7 +60,6 @@ export default function SettingsPage() {
   const catalogPages = Math.max(1, Math.ceil(catalogRows.length / catalogPageSize));
   const catalogSafePage = Math.min(catalogPage, catalogPages);
   const catalogVisible = catalogRows.slice((catalogSafePage - 1) * catalogPageSize, catalogSafePage * catalogPageSize);
-  const { data: catalog } = useQuery({ queryKey: ["catalog"], queryFn: api.signalCatalog, staleTime: Infinity });
   const { data: health } = useQuery({ queryKey: ["health"], queryFn: api.health });
 
   const add = useMutation({

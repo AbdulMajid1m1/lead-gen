@@ -308,7 +308,7 @@ export const autopilotSchema = z.object({
 
 /** GET /api/outreach/autopilot — the switch, its settings, and per-lane progress. */
 export const autopilotGet = asyncHandler(async (req, res) => {
-  res.json(await autopilotStatus());
+  res.json({ success: true, data: await autopilotStatus() });
 });
 
 /**
@@ -333,16 +333,16 @@ export const autopilotUpdate = asyncHandler(async (req, res) => {
 
   const status = await autopilotStatus();
   res.json({
-    ...status,
+    success: true,
     message: settings.enabled
       ? "Autopilot is on — lanes will send inside their local window."
       : "Autopilot is off. Nothing further will be sent automatically.",
-    laneChange,
+    data: { ...status, laneChange },
   });
 });
 
 /** POST /api/outreach/autopilot/run — top up now rather than waiting for the tick. */
 export const autopilotRun = asyncHandler(async (req, res) => {
   const result = await runAutopilotTick();
-  res.json({ result, ...(await autopilotStatus()) });
+  res.json({ success: true, data: { ...(await autopilotStatus()), result } });
 });

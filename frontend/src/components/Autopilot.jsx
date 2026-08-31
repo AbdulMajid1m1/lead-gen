@@ -60,7 +60,9 @@ export default function AutopilotSection() {
     onSuccess: (res) => {
       qc.setQueryData(["outreach", "autopilot"], res);
       qc.invalidateQueries({ queryKey: ["outreach"] });
-      toast.success(res.message || "Saved.");
+      toast.success(res.settings?.enabled
+        ? "Autopilot is on — lanes send inside their local window."
+        : "Autopilot is off. Nothing further will be sent automatically.");
     },
     onError: (err) => toast.error(err.message || "Could not save."),
   });
