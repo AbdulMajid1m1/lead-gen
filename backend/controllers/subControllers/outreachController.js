@@ -153,8 +153,16 @@ const connectNew = async (input) => {
   }
 
   const isFirst = (await prisma.emailAccount.count()) === 0;
+  // The ramp in deliverability.js is keyed off this date, and a null one means
+  // "past the ramp" — so a mailbox connected without it would open at the full
+  // daily cap on its first day, which is the standing start the ramp exists to
+  // avoid. Connecting a mailbox *is* the moment its warm-up begins.
   const created = await prisma.emailAccount.create({
-    data: { ...buildAccountData(input, null), isDefault: isFirst || input.isDefault === true },
+    data: {
+      ...buildAccountData(input, null),
+      warmupStartedAt: new Date(),
+      isDefault: isFirst || input.isDefault === true,
+    },
   });
   if (created.isDefault) await applyDefault(created.id);
 
