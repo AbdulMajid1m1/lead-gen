@@ -122,6 +122,10 @@ export const api = {
   // other campaigns, warm-up stage, recommended volume.
   campaignPlanner: (params) => request(`/outreach/campaigns/planner${qs(params)}`),
   listCampaigns: () => request("/outreach/campaigns"),
+
+  autopilot: () => request("/outreach/autopilot"),
+  updateAutopilot: (body) => request("/outreach/autopilot", { method: "PUT", body }),
+  runAutopilot: () => request("/outreach/autopilot/run", { method: "POST" }),
   getCampaign: (id) => request(`/outreach/campaigns/${id}`),
   pauseCampaign: (id) => request(`/outreach/campaigns/${id}/pause`, { method: "POST" }),
   resumeCampaign: (id) => request(`/outreach/campaigns/${id}/resume`, { method: "POST" }),

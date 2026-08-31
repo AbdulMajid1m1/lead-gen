@@ -51,12 +51,12 @@ export default function AutopilotSection() {
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["outreach", "autopilot"],
-    queryFn: () => api.get("/outreach/autopilot"),
+    queryFn: api.autopilot,
     refetchInterval: 60_000,
   });
 
   const save = useMutation({
-    mutationFn: (patch) => api.put("/outreach/autopilot", patch),
+    mutationFn: (patch) => api.updateAutopilot(patch),
     onSuccess: (res) => {
       qc.setQueryData(["outreach", "autopilot"], res);
       qc.invalidateQueries({ queryKey: ["outreach"] });
@@ -66,7 +66,7 @@ export default function AutopilotSection() {
   });
 
   const runNow = useMutation({
-    mutationFn: () => api.post("/outreach/autopilot/run"),
+    mutationFn: () => api.runAutopilot(),
     onSuccess: (res) => {
       qc.setQueryData(["outreach", "autopilot"], res);
       const added = (res.result?.toppedUp || 0) + (res.result?.created || 0);
@@ -78,7 +78,20 @@ export default function AutopilotSection() {
   });
 
   if (isLoading) return <Surface className="p-5"><Skeleton className="h-40 w-full" /></Surface>;
-  if (error) return null;
+  if (error || !data?.settings) {
+    // Never return null here. A section that erases itself on failure looks
+    // exactly like one that was never shipped, which costs far more time to
+    // diagnose than an ugly error box does to read.
+    return (
+      <Surface className="p-5">
+        <SectionHeading icon={Radar} title="Outreach autopilot" />
+        <p className="mt-3 flex items-start gap-1.5 text-xs text-[var(--text-subtle)]">
+          <AlertTriangle size={14} className="mt-px shrink-0" />
+          <span>Could not load the autopilot: {error?.message || "the server returned no settings."}</span>
+        </p>
+      </Surface>
+    );
+  }
 
   const s = data.settings;
   const channels = Array.isArray(s.channels) ? s.channels : [];
