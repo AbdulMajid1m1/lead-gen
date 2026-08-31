@@ -1,7 +1,8 @@
 import prisma from "../../prismaClient.js";
-import { SIGNAL_CATALOG, REACHABILITY_SIGNALS, isOpportunitySignal, DISQUALIFYING_SIGNALS } from "../signals/signalCatalog.js";
+import { SIGNAL_CATALOG, REACHABILITY_SIGNALS, isOpportunitySignal, DISQUALIFYING_SIGNALS, WEBSITE_PITCH_SIGNALS } from "../signals/signalCatalog.js";
 import { decayFactor } from "./decay.js";
 import { buildRecommendation } from "./recommend.js";
+import { icpFit, FIT_CAP } from "../promoter/fit.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("scoring");
@@ -9,6 +10,12 @@ const logger = log("scoring");
 export const SCORE_VERSION = 2;
 
 const CAPS = { opportunity: 50, freshness: 25, reachability: 15, fit: 10 };
+/**
+ * A promote run's caps. Fit is worth far more and website debt is worth
+ * nothing, because on a product sale the approved ICP *is* the thesis and the
+ * state of the prospect's website is not evidence either way.
+ */
+const PRODUCT_CAPS = { opportunity: 45, freshness: 20, reachability: 15, fit: FIT_CAP };
 const MIN_SCORE_TO_CREATE_LEAD = 20;
 
 /** Industries this agency actually sells into — a small fit nudge, not a gate. */
@@ -21,7 +28,12 @@ const TARGET_INDUSTRY_RE = /restaurant|cafe|retail|clothes|hotel|dentist|doctor|
  * with its raw weight, strength, decay factor and resulting points, which is
  * exactly what the UI renders. Nothing here consults an LLM.
  */
-export const scoreCompany = async (companyId, { searchQueryId = null, discoveryRunId = null } = {}) => {
+export const scoreCompany = async (companyId, { searchQueryId = null, discoveryRunId = null, product = null } = {}) => {
+  // A promote run sells one named product against one approved profile. That
+  // changes three things and nothing else: website debt stops counting as an
+  // opportunity, fit against the ICP starts counting for real, and the lead's
+  // opportunity is the product rather than a service guessed from its signals.
+  const caps = product ? PRODUCT_CAPS : CAPS;
   const company = await prisma.company.findUnique({
     where: { id: companyId },
     include: {
@@ -67,6 +79,18 @@ export const scoreCompany = async (companyId, { searchQueryId = null, discoveryR
     return { skipped: true, reason: "DISQUALIFIED", disqualifier: disqualifier.type };
   }
 
+  // A company with no website of its own is a website-development lead by
+  // definition, and the exact opposite of a SaaS buyer: the reason it is in
+  // the database is a gap this product does not fill, it published no email to
+  // sell to, and at that size it sits under the floor of every self-serve
+  // pricing tier. Five of these ranked in a single TracefyHR run, each with a
+  // "listed but has no website at all" reason that reads as an argument for
+  // hiring an agency. Gated here rather than filtered in the UI so they never
+  // become leads, and never become drafts.
+  if (product && company.signals.some((sig) => sig.type === "NO_WEBSITE")) {
+    return { skipped: true, reason: "NO_WEBSITE_FOR_PRODUCT" };
+  }
+
   const now = Date.now();
 
   // ─── Opportunity points ─────────────────────────────────────────────────────
@@ -75,6 +99,11 @@ export const scoreCompany = async (companyId, { searchQueryId = null, discoveryR
 
   for (const signal of company.signals) {
     if (!isOpportunitySignal(signal.type)) continue;
+    // On a product run the website diagnostics carry no opportunity: an
+    // end-of-life jQuery is not a reason to buy payroll software, and letting
+    // it score put schools with old websites at the top of a list meant to be
+    // ranked by HR pain.
+    if (product && WEBSITE_PITCH_SIGNALS.has(signal.type)) continue;
     const def = SIGNAL_CATALOG[signal.type];
     if (!def) continue;
 
@@ -101,7 +130,7 @@ export const scoreCompany = async (companyId, { searchQueryId = null, discoveryR
 
   contributions.sort((a, b) => b.points - a.points);
   const rawOpportunity = contributions.reduce((sum, c) => sum + c.points, 0);
-  const opportunity = Math.min(CAPS.opportunity, rawOpportunity);
+  const opportunity = Math.min(caps.opportunity, rawOpportunity);
 
   // ─── Freshness ──────────────────────────────────────────────────────────────
   // Driven by the *best-preserved* of the three newest signals, so one fresh
@@ -110,7 +139,7 @@ export const scoreCompany = async (companyId, { searchQueryId = null, discoveryR
     .sort((a, b) => new Date(b.detectedAt) - new Date(a.detectedAt))
     .slice(0, 3);
   const bestDecay = newest.length ? Math.max(...newest.map((s) => decayFactor(s, now))) : 0;
-  const freshness = Math.round(CAPS.freshness * bestDecay);
+  const freshness = Math.round(caps.freshness * bestDecay);
 
   const evidenceDates = [
     ...company.signals.map((s) => s.detectedAt),
@@ -129,16 +158,33 @@ export const scoreCompany = async (companyId, { searchQueryId = null, discoveryR
   const reachability = hasEmail ? 15 : hasPhone ? 10 : hasForm ? 6 : 0;
 
   // ─── Fit ────────────────────────────────────────────────────────────────────
+  // On a product run this is the approved ICP's own judgement of the company —
+  // its market, its industry, its headcount band — rather than the agency's
+  // standing list of industries it sells into.
   let fit = 0;
-  if (TARGET_INDUSTRY_RE.test(`${company.industry || ""} ${company.osmCategory || ""}`)) fit += 5;
-  if (["MICRO", "SMALL", "MEDIUM"].includes(company.sizeBucket)) fit += 3;
-  if (company.countryCode) fit += 2;
-  fit = Math.min(CAPS.fit, fit);
+  let fitDetail = null;
+  if (product) {
+    fitDetail = icpFit(company, product.icp);
+    fit = fitDetail.points;
+  } else {
+    if (TARGET_INDUSTRY_RE.test(`${company.industry || ""} ${company.osmCategory || ""}`)) fit += 5;
+    if (["MICRO", "SMALL", "MEDIUM"].includes(company.sizeBucket)) fit += 3;
+    if (company.countryCode) fit += 2;
+    fit = Math.min(caps.fit, fit);
+  }
 
   const total = Math.max(0, Math.min(100, Math.round(opportunity + freshness + reachability + fit)));
 
   // ─── Below the bar ──────────────────────────────────────────────────────────
-  if (total < MIN_SCORE_TO_CREATE_LEAD || contributions.length === 0) {
+  // A promote lead may stand on ICP fit alone — "a 40-staff Dubai clinic" is a
+  // real prospect for an HR platform even with no detected buying event, and
+  // that is precisely what one of the approved search strategies asks for. It
+  // will rank below anything with an actual trigger, which is the honest order.
+  // What it may not do is stand on *nothing*: a company matching neither the
+  // market nor the industry is in the run because a discovery source returned
+  // it, not because the profile wanted it.
+  const hasBasis = product ? (contributions.length > 0 || fitDetail?.matched) : contributions.length > 0;
+  if (total < MIN_SCORE_TO_CREATE_LEAD || !hasBasis) {
     if (company.leads[0]) {
       await prisma.lead.update({
         where: { id: company.leads[0].id },
@@ -149,11 +195,18 @@ export const scoreCompany = async (companyId, { searchQueryId = null, discoveryR
   }
 
   // ─── Opportunities & lead type ──────────────────────────────────────────────
-  const opportunities = [...serviceTotals.entries()]
-    .map(([service, points]) => ({ service, points: Math.round(points * 10) / 10 }))
-    .sort((a, b) => b.points - a.points)
-    .slice(0, 4);
-  const primaryOpportunity = opportunities[0]?.service || "WEBSITE_DEV";
+  // A promote run has exactly one opportunity and it is not in dispute: the
+  // product the run was launched to sell. Deriving it from the signal mix the
+  // way an agency lead does produced `WEBSITE_DEV` on every lead of a run
+  // started to sell an HR platform, which then drove the ranking, the grid's
+  // "opportunity" column and the copy the composer reached for.
+  const opportunities = product
+    ? [{ service: "SAAS_PRODUCT", points: Math.round(opportunity + fit) }]
+    : [...serviceTotals.entries()]
+        .map(([service, points]) => ({ service, points: Math.round(points * 10) / 10 }))
+        .sort((a, b) => b.points - a.points)
+        .slice(0, 4);
+  const primaryOpportunity = product ? "SAAS_PRODUCT" : (opportunities[0]?.service || "WEBSITE_DEV");
 
   // Lead type comes from whichever signal category carries the most points.
   const typeTotals = new Map();
@@ -161,14 +214,21 @@ export const scoreCompany = async (companyId, { searchQueryId = null, discoveryR
     const leadType = SIGNAL_CATALOG[c.type]?.leadType;
     if (leadType) typeTotals.set(leadType, (typeTotals.get(leadType) || 0) + c.points);
   }
-  const type = [...typeTotals.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "TECH_DEBT";
+  // TECH_DEBT is the right default for an agency lead with no dominant signal
+  // category, and the wrong one for a promote lead standing on ICP fit: it
+  // labels a company "technical debt" on the strength of website diagnostics
+  // that were deliberately excluded from its score.
+  const type = [...typeTotals.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || (product ? "DIGITAL_GAP" : "TECH_DEBT");
 
   const scoreBreakdown = {
     version: SCORE_VERSION,
     categories: { opportunity: Math.round(opportunity), freshness, reachability, fit },
-    caps: CAPS,
+    caps,
     signals: contributions,
     rawOpportunity: Number(rawOpportunity.toFixed(2)),
+    // What the approved profile actually recognised in this company, so the
+    // breakdown a user opens explains a fit score rather than just asserting it.
+    ...(fitDetail ? { icpFit: { product: product.name, matched: fitDetail.matched, reasons: fitDetail.reasons } } : {}),
     total,
     scoredAt: new Date().toISOString(),
   };
@@ -224,7 +284,18 @@ export const scoreCompany = async (companyId, { searchQueryId = null, discoveryR
   });
 
   await prisma.leadReason.deleteMany({ where: { leadId: lead.id } });
-  const reasons = buildReasons(contributions, company);
+  // A promote lead that matched on profile alone has no contributing signal to
+  // build a sentence from, and a lead card reading "why this is a lead:
+  // nothing" is worse than the honest answer — which is that the approved ICP
+  // asked for companies like this one and no buying event has been observed
+  // yet. The fit reasons are appended rather than substituted, so a lead with
+  // both a real trigger and a profile match still leads with the trigger.
+  const reasons = [
+    ...buildReasons(contributions, company),
+    ...(fitDetail?.reasons || [])
+      .filter((r) => r.points > 0)
+      .map((r) => ({ text: r.text.slice(0, 500), signalId: null, confidenceLevel: "INFERRED" })),
+  ].slice(0, 6);
   await prisma.leadReason.createMany({
     data: reasons.map((r, i) => ({
       leadId: lead.id,

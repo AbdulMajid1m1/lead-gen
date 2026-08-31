@@ -6,6 +6,7 @@ import { PageBody, PageHeader } from "../App.jsx";
 import { api } from "../lib/api.js";
 import { Badge, Button, EmptyState, Input, Skeleton, Surface, SectionHeading } from "../components/ui.jsx";
 import EmailAccountsSection from "../components/EmailAccounts.jsx";
+import AutopilotSection from "../components/Autopilot.jsx";
 import WhatsAppSection from "../components/WhatsAppSection.jsx";
 import SignaturesSection from "../components/Signatures.jsx";
 import { formatDate, titleize } from "../lib/format.js";
@@ -40,6 +41,7 @@ export default function SettingsPage() {
 
       <PageBody className="space-y-5">
         <EmailAccountsSection />
+        <AutopilotSection />
         <WhatsAppSection />
         <SignaturesSection />
 

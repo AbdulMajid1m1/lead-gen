@@ -76,8 +76,8 @@ model PromotedProduct {
 /// silently start contacting people.
 enum PromotedProductStatus {
   RESEARCHING // crawling the site and drafting the ICP
-  ICP_REVIEW  // waiting on a human to read and approve the ICP
-  READY       // approved — discovery runs may be launched
-  FAILED      // the site could not be researched (blocked, unreachable, empty)
+  ICP_REVIEW // waiting on a human to read and approve the ICP
+  READY // approved — discovery runs may be launched
+  FAILED // the site could not be researched (blocked, unreachable, empty)
   ARCHIVED
 }

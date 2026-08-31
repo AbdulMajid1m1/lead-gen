@@ -8,10 +8,10 @@ model Lead {
   type               LeadType
   primaryOpportunity ServiceType
 
-  score          Int
+  score            Int
   /// versioned, fully explainable — see SCORING_SPEC §5. Rendered directly.
-  scoreBreakdown Json
-  freshnessScore Int
+  scoreBreakdown   Json
+  freshnessScore   Int
   /// timestamp of the newest piece of evidence behind this lead
   newestEvidenceAt DateTime
 
@@ -26,17 +26,17 @@ model Lead {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  opportunities LeadOpportunity[]
-  reasons       LeadReason[]
-  actions       RecommendedAction[]
-  outreach      OutreachRecommendation[]
-  history       LeadStatusHistory[]
-  emailDrafts   LeadEmailDraft[]
+  opportunities      LeadOpportunity[]
+  reasons            LeadReason[]
+  actions            RecommendedAction[]
+  outreach           OutreachRecommendation[]
+  history            LeadStatusHistory[]
+  emailDrafts        LeadEmailDraft[]
   campaignRecipients CampaignRecipient[]
-  threads       OutreachThread[]
+  threads            OutreachThread[]
   /// Set once this lead has been promoted into the client book. Optional and
   /// one-to-one — a lead is only ever a customer once.
-  client        Client?
+  client             Client?
 
   @@index([score(sort: Desc)])
   @@index([status])
@@ -46,13 +46,13 @@ model Lead {
 }
 
 model LeadOpportunity {
-  id      String      @id @default(cuid())
-  leadId  String
-  lead    Lead        @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  service ServiceType
-  points  Int
-  rank    Int
-  rationale String    @db.VarChar(500)
+  id        String      @id @default(cuid())
+  leadId    String
+  lead      Lead        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  service   ServiceType
+  points    Int
+  rank      Int
+  rationale String      @db.VarChar(500)
 
   @@unique([leadId, service])
   @@index([leadId, rank])
@@ -92,8 +92,8 @@ model OutreachRecommendation {
   lead    Lead            @relation(fields: [leadId], references: [id], onDelete: Cascade)
   channel OutreachChannel
 
-  subjectLine String? @db.VarChar(200)
-  openingLine String? @db.VarChar(1000)
+  subjectLine   String? @db.VarChar(200)
+  openingLine   String? @db.VarChar(1000)
   /// [{ point, evidence }] — every talking point traces to something observed
   talkingPoints Json
 

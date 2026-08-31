@@ -15,20 +15,20 @@ model Company {
   lastEnrichedAt DateTime?
   lastCrawledAt  DateTime?
 
-  domains     CompanyDomain[]
-  aliases     CompanyAlias[]
-  contacts    Contact[]
-  locations   Location[]
-  facts       ExtractedFact[]
-  tech        TechnologyDetection[]
-  audits      WebsiteAudit[]
-  jobPostings JobPosting[]
-  signals     Signal[]
-  leads       Lead[]
-  dedupeKeys  DedupeKey[]
-  atsAccounts AtsAccount[]
+  domains      CompanyDomain[]
+  aliases      CompanyAlias[]
+  contacts     Contact[]
+  locations    Location[]
+  facts        ExtractedFact[]
+  tech         TechnologyDetection[]
+  audits       WebsiteAudit[]
+  jobPostings  JobPosting[]
+  signals      Signal[]
+  leads        Lead[]
+  dedupeKeys   DedupeKey[]
+  atsAccounts  AtsAccount[]
   aiCandidates AiCandidate[]
-  people      CompanyPerson[]
+  people       CompanyPerson[]
 
   @@index([normalizedName])
   @@index([industry])
@@ -42,9 +42,9 @@ model CompanyDomain {
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   /// registrable domain, lowercased, no scheme or www
-  domain    String  @unique @db.VarChar(255)
-  isPrimary Boolean @default(true)
-  httpsOk   Boolean?
+  domain          String     @unique @db.VarChar(255)
+  isPrimary       Boolean    @default(true)
+  httpsOk         Boolean?
   /// earliest certificate-transparency sighting — powers the NEW_DOMAIN signal
   firstCertSeenAt DateTime?
   discoveredVia   SourceKind
@@ -126,11 +126,11 @@ model AtsAccount {
   provider  SourceKind // ATS_GREENHOUSE | ATS_LEVER | …
   slug      String     @db.VarChar(160)
 
-  boardUrl        String?
-  lastFetchedAt   DateTime?
-  lastJobCount    Int       @default(0)
-  consecutiveFails Int      @default(0)
-  isActive        Boolean   @default(true)
+  boardUrl         String?
+  lastFetchedAt    DateTime?
+  lastJobCount     Int       @default(0)
+  consecutiveFails Int       @default(0)
+  isActive         Boolean   @default(true)
 
   @@unique([provider, slug])
   @@index([companyId])
@@ -153,7 +153,6 @@ model GeoPlace {
   fetchedAt   DateTime @default(now())
 }
 
-
 /// A named human at a company, for outreach that addresses someone rather than
 /// an anonymous inbox. Only people a business publishes about itself — team
 /// pages, staff bios, public social profiles — are ever stored here.
@@ -162,20 +161,20 @@ model CompanyPerson {
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  fullName String  @db.VarChar(200)
-  title    String? @db.VarChar(200)
+  fullName  String          @db.VarChar(200)
+  title     String?         @db.VarChar(200)
   /// Ranked so the outreach layer can pick the best available target.
   seniority PersonSeniority @default(UNKNOWN)
 
-  email       String? @db.VarChar(320)
-  linkedinUrl String? @db.VarChar(500)
-  profileUrl  String? @db.VarChar(500)
+  email         String? @db.VarChar(320)
+  linkedinUrl   String? @db.VarChar(500)
+  profileUrl    String? @db.VarChar(500)
   /// the page this person was observed on — provenance for the name and title
   observedOnUrl String? @db.VarChar(1000)
 
   confidenceLevel ConfidenceLevel
   sourceRecordId  String?
-  sourceRecord    SourceRecord? @relation(fields: [sourceRecordId], references: [id])
+  sourceRecord    SourceRecord?   @relation(fields: [sourceRecordId], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

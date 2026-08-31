@@ -55,15 +55,15 @@ enum SourceKind {
 enum DomainIdentityStatus {
   UNCHECKED // never fetched, or fetched before this check existed
   CONFIRMED // the page names the company, or carries its known phone number
-  WEAK      // reachable and not hostile, but never states whose site it is
-  REJECTED  // parked, placeholder, shared platform, or an expired-domain takeover
+  WEAK // reachable and not hostile, but never states whose site it is
+  REJECTED // parked, placeholder, shared platform, or an expired-domain takeover
 }
 
 /// How useful a person is as an outreach target, most useful first.
 enum PersonSeniority {
-  OWNER      // founder, owner, proprietor, managing director
-  EXECUTIVE  // C-level, VP, director, head of
-  MARKETING  // marketing / growth / brand — the buyer for web work
+  OWNER // founder, owner, proprietor, managing director
+  EXECUTIVE // C-level, VP, director, head of
+  MARKETING // marketing / growth / brand — the buyer for web work
   OPERATIONS // manager, coordinator, general staff with authority
   OTHER
   UNKNOWN
@@ -259,21 +259,21 @@ enum AiClaimField {
 /// *pointer to where evidence might be*, never evidence itself. It only becomes
 /// a contact once our own crawler observes the same value on a real page.
 enum AiClaimStatus {
-  UNVERIFIED            // claimed by the model, not yet checked
-  CONFIRMED_OWN_SITE    // observed on the company's own site  → contact is VERIFIED
+  UNVERIFIED // claimed by the model, not yet checked
+  CONFIRMED_OWN_SITE // observed on the company's own site  → contact is VERIFIED
   CONFIRMED_THIRD_PARTY // observed on the cited page          → contact is DETECTED
-  CONTRADICTED          // page fetched, value absent or different
-  UNCHECKABLE           // citation blocked by robots / bot wall / SSRF guard
-  SUPPRESSED            // on the suppression list
+  CONTRADICTED // page fetched, value absent or different
+  UNCHECKABLE // citation blocked by robots / bot wall / SSRF guard
+  SUPPRESSED // on the suppression list
 }
 
 enum AiCandidateStatus {
   PENDING
-  MATCHED_EXISTING      // resolved onto a company we already knew
+  MATCHED_EXISTING // resolved onto a company we already knew
   CREATED_COMPANY
-  REJECTED_UNCITED      // claimed a source URL the search never actually visited
+  REJECTED_UNCITED // claimed a source URL the search never actually visited
   REJECTED_NO_EXISTENCE // no fetchable site, no map record, nothing confirmed
-  REJECTED_EXCLUDED     // matched the brief's exclusions or the suppression list
+  REJECTED_EXCLUDED // matched the brief's exclusions or the suppression list
 }
 
 /// Pairing state of a linked WhatsApp device. PAIRING means a QR is on screen

@@ -41,24 +41,24 @@ enum OutreachMessageKind {
 /// provider fits the same shape. Several may exist at once — `isDefault` picks
 /// the one pre-selected in the composer.
 model EmailAccount {
-  id String @id @default(cuid())
+  id          String  @id @default(cuid())
   /// GMAIL | SMTP | RESEND — presets for hosts and auth shape, nothing more.
-  provider String @default("GMAIL") @db.VarChar(20)
+  provider    String  @default("GMAIL") @db.VarChar(20)
   /// The From address recipients see. May be a domain alias that differs from
   /// the SMTP login (e.g. sending as you@yourdomain.com through Resend).
   email       String  @unique @db.VarChar(255)
   displayName String? @db.VarChar(120)
   /// Where replies should be directed, when that is not the From address.
-  replyTo String? @db.VarChar(255)
+  replyTo     String? @db.VarChar(255)
   /// Pre-selected in the composer. At most one account has this set.
-  isDefault Boolean @default(false)
+  isDefault   Boolean @default(false)
 
-  smtpHost String  @db.VarChar(255)
-  smtpPort Int     @default(465)
+  smtpHost     String  @db.VarChar(255)
+  smtpPort     Int     @default(465)
   /// SMTP login when it differs from `email` (Resend uses the literal "resend").
-  smtpUser String? @db.VarChar(255)
+  smtpUser     String? @db.VarChar(255)
   /// App password / SMTP password / API key. Stored locally for this single-tenant tool.
-  authPassword String @db.VarChar(500)
+  authPassword String  @db.VarChar(500)
 
   /// Reply tracking. Null host = send-only account; replies are not polled.
   imapHost     String? @db.VarChar(255)
@@ -80,12 +80,12 @@ model EmailAccount {
   /// is where proof and the only link in the sequence live — the sequence used
   /// to jump straight from "one more observation" to "goodbye" without ever
   /// showing the reader anything we had built.
-  autoFollowUp Boolean @default(true)
-  followUpDays Json    @default("[3, 7, 14]")
-  maxFollowUps Int     @default(3)
+  autoFollowUp     Boolean    @default(true)
+  followUpDays     Json       @default("[3, 7, 14]")
+  maxFollowUps     Int        @default(3)
   /// Legacy freeform sign-off, kept as the last fallback when no Signature row
   /// is selected anywhere. New setups should use `signatureId` instead.
-  signature    String? @db.VarChar(2000)
+  signature        String?    @db.VarChar(2000)
   /// The sign-off this mailbox uses unless the composer picks another.
   signatureId      String?
   defaultSignature Signature? @relation(fields: [signatureId], references: [id], onDelete: SetNull)
@@ -109,23 +109,23 @@ model EmailAccount {
 /// follow-ups, and any reply. nextFollowUpAt drives the scheduler; a thread is
 /// "due" when AWAITING_REPLY and nextFollowUpAt has passed.
 model OutreachThread {
-  id     String @id @default(cuid())
-  leadId String
-  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  id          String           @id @default(cuid())
+  leadId      String
+  lead        Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
   /// The sending mailbox — null on WhatsApp threads, which go out through a
   /// paired device instead.
-  accountId String?
-  account   EmailAccount? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountId   String?
+  account     EmailAccount?    @relation(fields: [accountId], references: [id], onDelete: Cascade)
   /// The paired device a WhatsApp thread belongs to. SetNull rather than
   /// Cascade: unpairing a phone must not delete the conversations it held.
   waAccountId String?
   waAccount   WhatsAppAccount? @relation(fields: [waAccountId], references: [id], onDelete: SetNull)
 
-  channel OutreachChannel @default(EMAIL)
+  channel        OutreachChannel @default(EMAIL)
   /// Email address for EMAIL threads; phone number for WHATSAPP threads.
-  recipientEmail String       @db.VarChar(255)
-  subject        String       @db.VarChar(255)
-  status         ThreadStatus @default(AWAITING_REPLY)
+  recipientEmail String          @db.VarChar(255)
+  subject        String          @db.VarChar(255)
+  status         ThreadStatus    @default(AWAITING_REPLY)
 
   lastOutboundAt DateTime?
   repliedAt      DateTime?
@@ -134,11 +134,11 @@ model OutreachThread {
 
   /// The console account that opened this conversation. Null on threads that
   /// predate attribution, and on anything the scheduler started by itself.
-  startedById String?
-  startedBy   AdminUser? @relation("OutreachThreadStartedBy", fields: [startedById], references: [id], onDelete: SetNull)
+  startedById   String?
+  startedBy     AdminUser? @relation("OutreachThreadStartedBy", fields: [startedById], references: [id], onDelete: SetNull)
   /// Their name at the time, so the thread still says who reached out after the
   /// account is deleted and the foreign key above has gone to null.
-  startedByName String? @db.VarChar(160)
+  startedByName String?    @db.VarChar(160)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -177,11 +177,11 @@ model OutreachMessage {
   /// identity* the mail left from; this records *which colleague* pressed send,
   /// which is a different question once more than one person can send. Null
   /// means the system sent it — a scheduled follow-up with nobody behind it.
-  sentById String?
-  sentBy   AdminUser? @relation("OutreachMessageSentBy", fields: [sentById], references: [id], onDelete: SetNull)
+  sentById   String?
+  sentBy     AdminUser? @relation("OutreachMessageSentBy", fields: [sentById], references: [id], onDelete: SetNull)
   /// Snapshot of their name, so a deleted account does not erase the record of
   /// who contacted a lead.
-  sentByName String? @db.VarChar(160)
+  sentByName String?    @db.VarChar(160)
 
   /// HARD | SOFT, on BOUNCE messages only.
   ///
@@ -219,7 +219,7 @@ enum CampaignSendState {
   PENDING
   SENT
   SKIPPED // no usable address, already in conversation, or suppressed
-  FAILED  // the transport said no
+  FAILED // the transport said no
 }
 
 /// How a campaign paces itself. DIRECT drains at a fixed paceSeconds from the
@@ -273,9 +273,9 @@ model OutreachCampaign {
 
   /// Who launched this campaign. Every send it makes is attributed to them, so
   /// a bulk run is as accountable as a message typed by hand.
-  createdById String?
-  createdBy   AdminUser? @relation("OutreachCampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  createdByName String? @db.VarChar(160)
+  createdById   String?
+  createdBy     AdminUser? @relation("OutreachCampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdByName String?    @db.VarChar(160)
 
   createdAt   DateTime  @default(now())
   completedAt DateTime?
@@ -305,4 +305,48 @@ model CampaignRecipient {
   @@unique([campaignId, leadId])
   @@index([campaignId, emailState])
   @@index([campaignId, waState])
+}
+
+/// The standing outreach automation — one row, always `singleton`.
+///
+/// The autopilot does not send anything itself. It keeps one AUTO campaign per
+/// region topped up with newly eligible leads and lets the existing drain do the
+/// work, so pacing, daily caps, the warm-up ramp, the bounce guard, the legal
+/// gate and follow-ups are all inherited rather than re-implemented. Turning it
+/// off pauses those campaigns; nothing is deleted.
+model OutreachAutopilot {
+  id String @id @default("singleton")
+
+  enabled  Boolean @default(false)
+  /// Channels the autopilot drives. WhatsApp is opted into separately from
+  /// email on purpose: a banned number is permanent where a paused mailbox is
+  /// a config change.
+  channels Json    @default("[\"EMAIL\"]")
+
+  /// How markets whose verdict is RESTRICTED are handled.
+  /// ROLE_ONLY — only role mailboxes (info@, contact@), which identify no
+  ///   individual and so fall outside the data-protection laws that restrict
+  ///   these markets. HOLD — skip them entirely, leaving only ALLOWED
+  ///   countries. SEND — treat RESTRICTED as sendable, which is what a
+  ///   hand-launched campaign does today.
+  restrictedPolicy String @default("ROLE_ONLY") @db.VarChar(20)
+
+  /// Leads per local day across every lane combined. Null = whatever the
+  /// sender's warm-up ramp and daily cap currently allow.
+  dailyLimit  Int?
+  /// Local hours each lane may send in. Four hours rather than the classic
+  /// two-hour 9–11 peak because the drain sends at most one message per minute:
+  /// a 40-a-day quota in a two-hour window has no slack for a slow tick.
+  windowStart Int  @default(9)
+  windowEnd   Int  @default(13)
+  /// Local weekdays lanes may send on (0 = Sunday). Tuesday–Thursday by
+  /// default — Monday and Friday reply worst on cold B2B email.
+  sendDays    Json @default("[2, 3, 4]")
+
+  lastRunAt  DateTime?
+  /// What the last tick did, for the settings panel to show without needing
+  /// the logs: per-lane topped-up counts, or why it did nothing.
+  lastResult Json?
+
+  updatedAt DateTime @updatedAt
 }

@@ -33,9 +33,9 @@ model ExtractedFact {
 }
 
 model TechnologyDetection {
-  id        String  @id @default(cuid())
+  id        String         @id @default(cuid())
   companyId String
-  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company   Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   domainId  String?
   domain    CompanyDomain? @relation(fields: [domainId], references: [id])
 
@@ -63,13 +63,13 @@ model TechnologyDetection {
 }
 
 model WebsiteAudit {
-  id        String  @id @default(cuid())
+  id        String        @id @default(cuid())
   companyId String
-  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company   Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   domainId  String
   domain    CompanyDomain @relation(fields: [domainId], references: [id])
 
-  overallScore Int  // 0–100; < 40 raises OUTDATED_WEBSITE
+  overallScore Int // 0–100; < 40 raises OUTDATED_WEBSITE
   /// { security, mobile, performance, seo, freshness, content } each 0–100
   subscores    Json
   /// [{ code, severity, detail, evidence }] — the human-readable findings list

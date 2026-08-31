@@ -14,12 +14,12 @@ model Signal {
   weight       Int
   halfLifeDays Int?
 
-  detectedAt   DateTime  @default(now())
-  lastSeenAt   DateTime  @default(now())
-  active       Boolean   @default(true)
-  deactivatedAt DateTime?
+  detectedAt        DateTime  @default(now())
+  lastSeenAt        DateTime  @default(now())
+  active            Boolean   @default(true)
+  deactivatedAt     DateTime?
   /// why it stopped being true, e.g. "site now serves a viewport meta tag"
-  deactivatedReason String? @db.VarChar(300)
+  deactivatedReason String?   @db.VarChar(300)
 
   /// distinguishes repeatable instances of one type: a job id, "audit:<domainId>"
   dedupeKey String @db.VarChar(160)
@@ -46,15 +46,15 @@ model SignalEvidence {
   signal   Signal @relation(fields: [signalId], references: [id], onDelete: Cascade)
 
   extractedFactId String?
-  extractedFact   ExtractedFact? @relation(fields: [extractedFactId], references: [id])
+  extractedFact   ExtractedFact?       @relation(fields: [extractedFactId], references: [id])
   sourceRecordId  String?
-  sourceRecord    SourceRecord?  @relation(fields: [sourceRecordId], references: [id])
+  sourceRecord    SourceRecord?        @relation(fields: [sourceRecordId], references: [id])
   jobPostingId    String?
-  jobPosting      JobPosting?    @relation(fields: [jobPostingId], references: [id])
+  jobPosting      JobPosting?          @relation(fields: [jobPostingId], references: [id])
   techDetectionId String?
   techDetection   TechnologyDetection? @relation(fields: [techDetectionId], references: [id])
   websiteAuditId  String?
-  websiteAudit    WebsiteAudit?  @relation(fields: [websiteAuditId], references: [id])
+  websiteAudit    WebsiteAudit?        @relation(fields: [websiteAuditId], references: [id])
 
   note String? @db.VarChar(500)
 

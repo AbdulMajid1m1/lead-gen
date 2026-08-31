@@ -5,8 +5,8 @@ model CrawlRequest {
   host    String @db.VarChar(255)
 
   /// frontier priority: home 100, /contact 90, /about 80, /careers 75, … other 20
-  priority Int         @default(50)
-  status   CrawlStatus @default(QUEUED)
+  priority       Int             @default(50)
+  status         CrawlStatus     @default(QUEUED)
   /// what robots.txt said — stored even when ALLOWED so provenance can show it
   robotsDecision RobotsDecision?
 
@@ -32,7 +32,7 @@ model CrawlResult {
   crawlRequestId String       @unique
   crawlRequest   CrawlRequest @relation(fields: [crawlRequestId], references: [id], onDelete: Cascade)
 
-  httpStatus Int?
+  httpStatus  Int?
   /// machine-readable refusal: ROBOTS_DISALLOWED, CLOUDFLARE_CHALLENGE,
   /// SSRF_PRIVATE_HOST, RATE_LIMITED, TIMEOUT… never null when ok = false
   blockReason String? @db.VarChar(60)
@@ -74,12 +74,12 @@ model RobotsCache {
 }
 
 model HostCrawlState {
-  host          String    @id @db.VarChar(255)
-  lastRequestAt DateTime?
-  cooldownUntil DateTime?
-  cooldownReason String?  @db.VarChar(80)
-  errorStreak   Int       @default(0)
-  totalCrawled  Int       @default(0)
+  host           String    @id @db.VarChar(255)
+  lastRequestAt  DateTime?
+  cooldownUntil  DateTime?
+  cooldownReason String?   @db.VarChar(80)
+  errorStreak    Int       @default(0)
+  totalCrawled   Int       @default(0)
 
   @@index([cooldownUntil])
 }

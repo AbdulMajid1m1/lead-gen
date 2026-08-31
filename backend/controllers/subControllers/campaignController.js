@@ -5,6 +5,10 @@ import {
   DAILY_EMAIL_CAP, DAILY_WA_CAP, sentTodayCount, CAMPAIGN_MAX_RECIPIENTS, MAX_SCHEDULE_AHEAD_DAYS,
 } from "../../lib/outreach/campaigns.js";
 import { senderPlan, MIN_DAILY_LIMIT } from "../../lib/outreach/planner.js";
+import {
+  autopilotStatus, getAutopilot, updateAutopilot, runAutopilotTick,
+  pauseAllLanes, resumeAllLanes,
+} from "../../lib/outreach/autopilot.js";
 import { listAccounts } from "../../lib/outreach/service.js";
 import { listWhatsAppAccounts } from "../../lib/outreach/whatsapp.js";
 import { regenerateDrafts, exportComposeContext, importDrafts } from "../../lib/research/compose.js";
@@ -285,4 +289,60 @@ export const stats = asyncHandler(async (req, res) => {
       })),
     },
   });
+});
+
+// ─── Autopilot ───────────────────────────────────────────────────────────────
+
+export const autopilotSchema = z.object({
+  enabled: z.boolean().optional(),
+  channels: z.array(z.enum(["EMAIL", "WHATSAPP"])).min(1, "Pick at least one channel.").optional(),
+  restrictedPolicy: z.enum(["ROLE_ONLY", "HOLD", "SEND"]).optional(),
+  // Null clears the override and hands the ceiling back to the warm-up ramp.
+  dailyLimit: z.coerce.number().int().min(MIN_DAILY_LIMIT).max(DAILY_EMAIL_CAP).nullable().optional(),
+  windowStart: z.coerce.number().int().min(0).max(22).optional(),
+  windowEnd: z.coerce.number().int().min(1).max(23).optional(),
+  sendDays: z.array(z.number().int().min(0).max(6)).min(1, "Pick at least one sending day.").max(7).optional(),
+}).refine((v) => v.windowStart === undefined || v.windowEnd === undefined || v.windowEnd > v.windowStart, {
+  message: "The sending window must end after it starts.", path: ["windowEnd"],
+});
+
+/** GET /api/outreach/autopilot — the switch, its settings, and per-lane progress. */
+export const autopilotGet = asyncHandler(async (req, res) => {
+  res.json(await autopilotStatus());
+});
+
+/**
+ * PUT /api/outreach/autopilot — change the settings, and act on the switch.
+ *
+ * Turning it off pauses the lanes immediately rather than letting the current
+ * day's quota drain: "off" has to mean nothing more goes out, or the switch is
+ * not worth having. Turning it on runs a tick straight away so the panel shows
+ * real numbers instead of an empty state until the next quarter-hour.
+ */
+export const autopilotUpdate = asyncHandler(async (req, res) => {
+  const before = await getAutopilot();
+  const settings = await updateAutopilot(req.body);
+
+  let laneChange = null;
+  if (before.enabled && settings.enabled === false) {
+    laneChange = { paused: await pauseAllLanes() };
+  } else if (!before.enabled && settings.enabled === true) {
+    laneChange = { resumed: await resumeAllLanes() };
+    await runAutopilotTick();
+  }
+
+  const status = await autopilotStatus();
+  res.json({
+    ...status,
+    message: settings.enabled
+      ? "Autopilot is on — lanes will send inside their local window."
+      : "Autopilot is off. Nothing further will be sent automatically.",
+    laneChange,
+  });
+});
+
+/** POST /api/outreach/autopilot/run — top up now rather than waiting for the tick. */
+export const autopilotRun = asyncHandler(async (req, res) => {
+  const result = await runAutopilotTick();
+  res.json({ result, ...(await autopilotStatus()) });
 });

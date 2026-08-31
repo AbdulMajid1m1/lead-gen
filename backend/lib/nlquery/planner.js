@@ -600,7 +600,14 @@ export const buildPromotePlan = (product, options = {}) => {
   // a busy one take a couple of minutes; six steps would spend the whole run's
   // time budget before the crawler ever started.
   const cities = (rankedCities.length ? rankedCities : [q.location?.name].filter(Boolean)).slice(0, 2);
-  const categories = (q.industries || []).slice(0, 2);
+  // Two markets by three industries. Two was too few: an ICP naming eight
+  // industries had six of them silently dropped, and because the map engine is
+  // usually the only discovery source that works on a Gulf promote run, the
+  // whole set came back as one industry — a TracefyHR run whose profile listed
+  // schools, clinics, hotels, logistics, construction and cleaning returned
+  // nineteen schools out of twenty. Still bounded: each step is one Overpass
+  // request per tag, and the crawl cap downstream governs the real cost.
+  const categories = (q.industries || []).slice(0, 3);
   if (cities.length && categories.length) {
     for (const city of cities) {
       for (const categoryKey of categories) {

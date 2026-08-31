@@ -223,7 +223,14 @@ export const composeEmailForLead = async ({ leadId, runId = null, tracker = null
     const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { discoveryRunId: true } });
     if (!lead) return null;
     await composeForRun({ runId: runId ?? lead.discoveryRunId, leadIds: [leadId], tracker, product: resolvedProduct });
-    return prisma.leadEmailDraft.findFirst({ where: { leadId }, orderBy: { createdAt: "desc" } });
+    // Scoped to the product, not "newest of any": if the compose above wrote
+    // nothing (fact gathering threw, say), an unscoped read would hand the
+    // caller a leftover agency draft and report it as the product pitch it
+    // just asked for. Returning null instead lets the caller skip the send.
+    return prisma.leadEmailDraft.findFirst({
+      where: { leadId, promotedProductId: resolvedProduct.id },
+      orderBy: { createdAt: "desc" },
+    });
   }
 
   const gathered = await gatherFacts(leadId);
@@ -300,6 +307,29 @@ export const promotedProductForLead = async (leadId) => {
 const promotedProductForRun = async (runId) => {
   const run = await prisma.discoveryRun.findUnique({ where: { id: runId }, select: { promotedProduct: true } });
   return run?.promotedProduct || null;
+};
+
+/**
+ * Split a set of leads by the product each one is for.
+ *
+ * The one-lead-at-a-time resolver above is the wrong tool for a book-wide pass:
+ * it is a query per lead, and the caller still has to do the grouping. Returns
+ * a Map keyed by product id with `null` for the agency leads, so a caller can
+ * run one compose batch per offering.
+ */
+export const groupLeadsByProduct = async (leadIds) => {
+  const leads = await prisma.lead.findMany({
+    where: { id: { in: leadIds } },
+    select: { id: true, discoveryRun: { select: { promotedProduct: true } } },
+  });
+  const groups = new Map();
+  for (const lead of leads) {
+    const product = lead.discoveryRun?.promotedProduct || null;
+    const key = product?.id || null;
+    if (!groups.has(key)) groups.set(key, { product, leadIds: [] });
+    groups.get(key).leadIds.push(lead.id);
+  }
+  return groups;
 };
 
 const saveDraft = async ({ leadId, runId, draft, facts, generatedBy, model, promotedProductId = null }) =>
@@ -444,14 +474,44 @@ const CONTACTABLE = { status: { notIn: ["ARCHIVED", "DO_NOT_CONTACT", "DISQUALIF
  */
 export const exportComposeContext = async () => {
   const leads = await prisma.lead.findMany({ where: CONTACTABLE, select: { id: true }, orderBy: { score: "desc" } });
+  // One query for the whole book rather than one per lead; the export runs
+  // over every contactable lead there is.
+  const groups = await groupLeadsByProduct(leads.map((l) => l.id));
+  const productByLead = new Map();
+  for (const { product, leadIds } of groups.values()) {
+    for (const leadId of leadIds) productByLead.set(leadId, product);
+  }
+
   const out = [];
   for (const { id } of leads) {
-    const g = await gatherFacts(id);
+    // A promoter lead is exported as the product sale it is: website
+    // diagnostics stripped from its facts, and the product's own profile in
+    // place of an agency service label. Without this the export described
+    // every lead as a website-services prospect, the author wrote to that
+    // brief, and the import then landed agency pitches on leads sourced to
+    // sell a SaaS product — which is how a run's whole set lost its pitch.
+    const product = productByLead.get(id) || null;
+    const g = await gatherFacts(id, { forProduct: Boolean(product) });
     if (!g) continue;
     out.push({
       leadId: id,
       company: { name: g.company.name, city: g.company.city, countryCode: g.company.countryCode, industry: g.company.industry },
-      serviceLabel: SERVICE_LABELS[g.lead.primaryOpportunity] || "software development",
+      ...(product
+        ? {
+            offering: "PRODUCT",
+            product: {
+              id: product.id,
+              name: product.name,
+              summary: product.summary,
+              pitchAngle: product.pitchAngle,
+              senderContext: product.senderContext,
+              painPoints: product.icp?.painPoints || [],
+            },
+          }
+        : {
+            offering: "SERVICE",
+            serviceLabel: SERVICE_LABELS[g.lead.primaryOpportunity] || "software development",
+          }),
       recipientHint: g.recipientHint,
       facts: g.facts.map(({ id: fid, text, confidenceLevel }) => ({ id: fid, text, confidenceLevel })),
     });
@@ -465,12 +525,19 @@ export const exportComposeContext = async () => {
  * imported email that mentions a phone, address or URL the facts don't
  * contain is rejected, whoever wrote it.
  */
-export const importDrafts = async ({ drafts, author = "external", forProduct = false }) => {
+export const importDrafts = async ({ drafts, author = "external", forProduct = null }) => {
   const summary = { imported: 0, rejected: [] };
   for (const d of drafts) {
-    // Checked against the same narrowed fact list the author was given, or a
-    // product email would be rejected for grounding on facts it never saw.
-    const gathered = await gatherFacts(d.leadId, { forProduct });
+    // Which offering this lead is for decides both halves of the import: the
+    // fact list the body is checked against, and the product the stored draft
+    // is stamped with. Resolved per lead rather than taken from the caller's
+    // flag, because an export covers the whole book and a single import file
+    // routinely mixes promoter leads with agency ones — one flag for the batch
+    // gets one of the two groups wrong every time. `forProduct` survives as an
+    // explicit override (pass `true`/`false` to force it); null means resolve.
+    const product = await promotedProductForLead(d.leadId);
+    const narrowed = forProduct === null ? Boolean(product) : forProduct;
+    const gathered = await gatherFacts(d.leadId, { forProduct: narrowed });
     if (!gathered) { summary.rejected.push({ leadId: d.leadId, reason: "lead not found" }); continue; }
     const grounded = bodyIsGrounded(d.body, gathered.facts);
     if (!grounded.ok) { summary.rejected.push({ leadId: d.leadId, reason: `invented "${grounded.offending}"` }); continue; }
@@ -478,6 +545,11 @@ export const importDrafts = async ({ drafts, author = "external", forProduct = f
       leadId: d.leadId, runId: null,
       draft: { subject: d.subject, body: d.body, aboutCompany: d.aboutCompany || "", factIdsUsed: d.factIdsUsed || [] },
       facts: gathered.facts, generatedBy: "LLM", model: author,
+      // Unstamped, an imported product email was indistinguishable from an
+      // agency one, so the campaign sender could not tell which pitch it was
+      // about to send — and the audit trail the column exists for was blank
+      // on exactly the drafts a human wrote by hand.
+      promotedProductId: product?.id || null,
     });
     summary.imported += 1;
   }
@@ -510,11 +582,23 @@ export const regenerateDrafts = async ({ budgetUsd = 2, keepAuthored = true } = 
   let written = 0;
   let templated = 0;
 
-  for (let i = 0; i < leads.length; i += AI_COMPOSE_MAX_LEADS) {
-    const chunk = leads.slice(i, i + AI_COMPOSE_MAX_LEADS).map((l) => l.id);
-    const res = await composeForRun({ runId: null, leadIds: chunk, tracker });
-    written += res.written;
-    templated += res.templated;
+  // Grouped by offering before anything is written. `composeForRun` can only
+  // discover a product through a runId, and this pass has none to give it — so
+  // every promoter lead in the book used to be rewritten as an agency lead,
+  // stamped `promotedProductId: null`, and (being the newest draft) became the
+  // email that actually went out. A run started to sell an HR platform had its
+  // whole set quietly converted to website-redesign pitches by an unrelated
+  // regeneration. The product is a property of the lead, so resolve it per
+  // lead and give each group its own batch.
+  const groups = await groupLeadsByProduct(leads.map((l) => l.id));
+
+  for (const { product, leadIds } of groups.values()) {
+    for (let i = 0; i < leadIds.length; i += AI_COMPOSE_MAX_LEADS) {
+      const chunk = leadIds.slice(i, i + AI_COMPOSE_MAX_LEADS);
+      const res = await composeForRun({ runId: null, leadIds: chunk, tracker, product });
+      written += res.written;
+      templated += res.templated;
+    }
   }
 
   const summary = { leads: all.length, kept: all.length - leads.length, written, aiWritten: written - templated, templated, cost: tracker.toJSON() };

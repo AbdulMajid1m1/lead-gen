@@ -3,9 +3,9 @@
 /// Stored 1:1 with the run so a search opened from history can always show
 /// exactly how it was interpreted at the time, even after the prompts change.
 model ResearchBrief {
-  id     String       @id @default(cuid())
-  runId  String       @unique
-  run    DiscoveryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  id    String       @id @default(cuid())
+  runId String       @unique
+  run   DiscoveryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 
   searchQueryId String?
   /// restatedGoal, industries, location, service, signals, icpTraits,
@@ -33,21 +33,21 @@ model AiCandidate {
   sourceRecord   SourceRecord @relation(fields: [sourceRecordId], references: [id])
   strategyLabel  String       @db.VarChar(120)
 
-  name           String  @db.VarChar(160)
-  nameLocal      String? @db.VarChar(160) // e.g. the Arabic name, when shown
-  claimedWebsite String? @db.VarChar(300)
-  claimedCity    String? @db.VarChar(80)
-  industryGuess  String? @db.VarChar(60)
-  whyMatch       String  @db.VarChar(300)
-  matchConfidence String @db.VarChar(10)  // HIGH | MEDIUM | LOW
+  name            String  @db.VarChar(160)
+  nameLocal       String? @db.VarChar(160) // e.g. the Arabic name, when shown
+  claimedWebsite  String? @db.VarChar(300)
+  claimedCity     String? @db.VarChar(80)
+  industryGuess   String? @db.VarChar(60)
+  whyMatch        String  @db.VarChar(300)
+  matchConfidence String  @db.VarChar(10) // HIGH | MEDIUM | LOW
   /// true when the model cited a URL the search never actually visited
-  uncited        Boolean @default(false)
+  uncited         Boolean @default(false)
 
-  status    AiCandidateStatus @default(PENDING)
-  companyId String?
-  company   Company?          @relation(fields: [companyId], references: [id])
-  matchedOn String?           @db.VarChar(20) // which DedupeKind resolved it
-  rejectedReason String?      @db.VarChar(300)
+  status         AiCandidateStatus @default(PENDING)
+  companyId      String?
+  company        Company?          @relation(fields: [companyId], references: [id])
+  matchedOn      String?           @db.VarChar(20) // which DedupeKind resolved it
+  rejectedReason String?           @db.VarChar(300)
 
   claims    AiClaim[]
   citations AiCitation[]
@@ -69,13 +69,13 @@ model AiClaim {
   /// the page the model says carried this value — what we go and check
   foundOnUrl String?      @db.VarChar(600)
 
-  status        AiClaimStatus @default(UNVERIFIED)
+  status            AiClaimStatus @default(UNVERIFIED)
   /// the Contact row created once the claim was independently observed
   verifiedContactId String?
   /// the fetch that decided the verdict, including the blocked ones
-  crawlResultId String?
-  checkedAt     DateTime?
-  note          String?       @db.VarChar(300)
+  crawlResultId     String?
+  checkedAt         DateTime?
+  note              String?       @db.VarChar(300)
 
   @@unique([candidateId, field])
   @@index([status])
@@ -88,8 +88,8 @@ model AiCitation {
   candidateId String
   candidate   AiCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
-  url   String  @db.VarChar(600)
-  title String? @db.VarChar(300)
+  url       String  @db.VarChar(600)
+  title     String? @db.VarChar(300)
   /// whether it appeared in the API's own list of pages it retrieved
   inSources Boolean @default(true)
 
@@ -101,20 +101,20 @@ model AiCitation {
 /// Kept per run rather than per lead so history shows the email as it was
 /// written then, together with the facts it was grounded on.
 model LeadEmailDraft {
-  id     String        @id @default(cuid())
-  leadId String
-  lead   Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  runId  String?
-  run    DiscoveryRun? @relation(fields: [runId], references: [id])
+  id                String           @id @default(cuid())
+  leadId            String
+  lead              Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  runId             String?
+  run               DiscoveryRun?    @relation(fields: [runId], references: [id])
   /// Set when the email pitches a promoted SaaS product rather than an agency
   /// service, so a draft can always be audited against the product copy it was
   /// allowed to use as well as the facts it was allowed to know.
   promotedProductId String?
   promotedProduct   PromotedProduct? @relation(fields: [promotedProductId], references: [id], onDelete: SetNull)
 
-  subject      String @db.VarChar(200)
-  body         String @db.VarChar(4000)
-  aboutCompany String @db.VarChar(1000)
+  subject        String @db.VarChar(200)
+  body           String @db.VarChar(4000)
+  aboutCompany   String @db.VarChar(1000)
   /// snapshot of the numbered facts handed to the model, so the email can
   /// always be audited against what it was allowed to know
   groundingFacts Json

@@ -21,7 +21,7 @@ model JobPosting {
   updatedAtSource DateTime?
   deadlineAt      DateTime?
 
-  status JobStatus @default(UNKNOWN)
+  status           JobStatus @default(UNKNOWN)
   /// last time the job was observed present on its own board — the only
   /// evidence that justifies ACTIVE
   lastSeenActiveAt DateTime?

@@ -34,8 +34,8 @@ model AdminUser {
 
   // Who provisioned this seat. SetNull rather than Cascade: removing the person
   // who created an account must never remove the account itself.
-  createdById String?
-  createdBy   AdminUser?  @relation("AdminUserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdById  String?
+  createdBy    AdminUser?  @relation("AdminUserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   createdUsers AdminUser[] @relation("AdminUserCreatedBy")
 
   createdAt DateTime @default(now())
@@ -59,7 +59,7 @@ model AdminSession {
 
   // SHA-256 of the cookie value, never the value itself. A leaked database
   // backup therefore does not hand over live sessions.
-  tokenHash String   @unique
+  tokenHash String    @unique
   userId    String
   user      AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 

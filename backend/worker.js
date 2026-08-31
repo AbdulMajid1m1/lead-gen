@@ -14,6 +14,7 @@ import { evaluateCompanySignals } from "./lib/signals/signalEngine.js";
 import { scoreCompany } from "./lib/scoring/scoreEngine.js";
 import { runCampaignTick } from "./lib/outreach/campaigns.js";
 import { runOutreachMaintenance } from "./lib/outreach/service.js";
+import { runAutopilotTick } from "./lib/outreach/autopilot.js";
 import { resolveCompanyDomain } from "./lib/ingest/domainResolver.js";
 import { REDIS_URL, WORKER_HEALTH_PORT } from "./configs/envConfig.js";
 import { logger } from "./utils/logger.js";
@@ -46,11 +47,15 @@ const outreachQueue = new Queue(OUTREACH_QUEUE_NAME, { connection });
 const OUTREACH_REPEATABLE = [
   { name: "outreach-campaigns", pattern: "* * * * *" },      // paced bulk-send drain
   { name: "outreach-maintenance", pattern: "*/30 * * * *" }, // replies + follow-ups
+  // Top-up only. The lanes it maintains drain themselves every minute, so this
+  // just has to notice new leads and keep the day's split honest.
+  { name: "outreach-autopilot", pattern: "*/15 * * * *" },   // standing automation
 ];
 
 const outreachHandlers = {
   "outreach-campaigns": async () => runCampaignTick(),
   "outreach-maintenance": async () => runOutreachMaintenance(),
+  "outreach-autopilot": async () => runAutopilotTick(),
 };
 
 const REPEATABLE = [
@@ -329,7 +334,8 @@ const outreachWorker = new Worker(
     const startedAt = Date.now();
     const result = await handler(job);
     // The every-minute tick is silent when idle; only real activity is logged.
-    if (job.name !== "outreach-campaigns" || result?.sent || result?.failed || result?.completed) {
+    if ((job.name !== "outreach-campaigns" && job.name !== "outreach-autopilot")
+      || result?.sent || result?.failed || result?.completed || result?.toppedUp || result?.created) {
       logger.info({ job: job.name, ms: Date.now() - startedAt, ...result }, "outreach job complete");
     }
     return result;

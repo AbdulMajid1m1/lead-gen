@@ -151,6 +151,12 @@ router.post("/outreach/campaigns/:id/pause", canOutreach, writeLimiter, validate
 router.post("/outreach/campaigns/:id/resume", canOutreach, writeLimiter, validate({ params: idParam }), campaigns.resume);
 router.post("/outreach/campaigns/:id/cancel", canOutreach, writeLimiter, validate({ params: idParam }), campaigns.cancel);
 router.get("/outreach/stats", requirePermission("outreach", "dashboard"), validate({ query: campaigns.statsSchema }), campaigns.stats);
+
+// The standing automation. Reading it needs only outreach access; changing the
+// switch is a settings action, because it decides what sends while nobody watches.
+router.get("/outreach/autopilot", canOutreach, campaigns.autopilotGet);
+router.put("/outreach/autopilot", canSettings, writeLimiter, validate({ body: campaigns.autopilotSchema }), campaigns.autopilotUpdate);
+router.post("/outreach/autopilot/run", canSettings, writeLimiter, campaigns.autopilotRun);
 router.post("/outreach/drafts/regenerate", canOutreach, writeLimiter, campaigns.regenerate);
 router.get("/outreach/drafts/context", canOutreach, campaigns.draftContext);
 router.post("/outreach/drafts/import", canOutreach, writeLimiter, validate({ body: campaigns.draftImportSchema }), campaigns.draftImport);

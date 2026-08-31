@@ -7,23 +7,23 @@
 /// just look like noise.
 
 model Signature {
-  id String @id @default(cuid())
+  id        String  @id @default(cuid())
   /// What it is called in the picker — "Abdul Majid — CTO", "Support", …
   name      String  @unique @db.VarChar(80)
   /// Pre-selected in the composer. At most one signature has this set.
   isDefault Boolean @default(false)
 
-  fullName String  @db.VarChar(120)
-  title    String? @db.VarChar(120)
-  company  String? @db.VarChar(120)
+  fullName    String  @db.VarChar(120)
+  title       String? @db.VarChar(120)
+  company     String? @db.VarChar(120)
   /// Stored bare ("deventiatech.com"); the renderers add the scheme.
-  website  String? @db.VarChar(200)
-  email    String? @db.VarChar(255)
-  phone    String? @db.VarChar(40)
+  website     String? @db.VarChar(200)
+  email       String? @db.VarChar(255)
+  phone       String? @db.VarChar(40)
   /// One free line under the block — a tagline, a booking link, a disclaimer.
-  tagline  String? @db.VarChar(300)
+  tagline     String? @db.VarChar(300)
   /// Accent for the rule and the name in the HTML rendering.
-  accentColor String @default("#d97757") @db.VarChar(9)
+  accentColor String  @default("#d97757") @db.VarChar(9)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -41,7 +41,7 @@ model Signature {
 /// the composer pre-selects, and every thread records which device sent it so a
 /// reply is always matched back to the right conversation.
 model WhatsAppAccount {
-  id String @id @default(cuid())
+  id        String  @id @default(cuid())
   /// A human label, set before pairing: "Sales phone", "Personal", …
   label     String  @db.VarChar(80)
   isDefault Boolean @default(false)

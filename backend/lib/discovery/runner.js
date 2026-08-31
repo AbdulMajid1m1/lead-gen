@@ -346,7 +346,12 @@ const runStep = async ({ kind, params, parsed, runId, touchedCompanyIds, stats, 
       let skipped = 0;
       for (const companyId of touchedCompanyIds) {
         try {
-          const res = await scoreCompany(companyId, { discoveryRunId: runId });
+          // The product is what makes this the ICP's scoring rather than the
+          // agency's. Without it a promote run sourced against an approved
+          // profile still came out ranked by website debt, every lead labelled
+          // WEBSITE_DEV — the run found companies for one sale and scored them
+          // for a different one.
+          const res = await scoreCompany(companyId, { discoveryRunId: runId, product });
           if (res.skipped) skipped += 1;
           else created += 1;
         } catch (err) {

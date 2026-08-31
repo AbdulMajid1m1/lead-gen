@@ -4,8 +4,9 @@ import { getWhatsAppAccount } from "./whatsapp.js";
 import { pickWhatsAppNumber } from "./phoneRank.js";
 import { sendPolicyFor, isRoleAddress, isSendBlocked } from "./sendPolicy.js";
 import { domainHasMx, emailLooksMangled, BROKER_DOMAIN_RE } from "./hygiene.js";
+import { buyerInboxes, inboxScore } from "./inboxFit.js";
 import { bounceRate, shouldPauseForBounces, warmupDailyCap, BOUNCE_PAUSE_THRESHOLD } from "./deliverability.js";
-import { composeEmailForLead, gatherFacts } from "../research/compose.js";
+import { composeEmailForLead, gatherFacts, promotedProductForLead } from "../research/compose.js";
 import { toActor } from "./attribution.js";
 import { whatsappInitialTemplate } from "../research/templates.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
@@ -143,10 +144,24 @@ export const sentTodayCount = (channel, senderId) =>
     },
   });
 
-/** Best usable email on a lead's company, source-authored proof first. */
-export const pickEmailContact = (contacts) => {
+/**
+ * Best usable email on a lead's company, source-authored proof first.
+ *
+ * `icp` is optional and only ever breaks ties the confidence ranking leaves
+ * open: when it is supplied, an address belonging to the department that
+ * actually buys this product outranks one belonging to a department that does
+ * not. Without it the behaviour is exactly as before.
+ */
+export const pickEmailContact = (contacts, icp = null) => {
   const usable = contacts.filter((c) => c.kind === "EMAIL" && !c.isSuppressed && c.roleHint !== "NON_OUTREACH");
-  const rank = (c) => (c.confidenceLevel === "VERIFIED" ? 2 : 1) + (c.roleHint === "ROLE" ? 1 : 0);
+  const buyer = icp ? buyerInboxes(icp) : [];
+  const rank = (c) =>
+    (c.confidenceLevel === "VERIFIED" ? 2 : 1)
+    + (c.roleHint === "ROLE" ? 1 : 0)
+    // Weighted above the two flags combined, because a verified address at the
+    // wrong desk still reaches the wrong person: `admissions@` answers parents,
+    // and an HR pitch dies there however well the address was proved.
+    + (icp ? inboxScore(c.value, buyer) : 0);
   return usable.sort((a, b) => rank(b) - rank(a))[0] || null;
 };
 
@@ -155,6 +170,66 @@ export const pickEmailContact = (contacts) => {
 // decision, and it lives in phoneRank.js. Keeping the name exported here means
 // every existing importer (and its tests) is unaffected by the move.
 export { pickWhatsAppNumber };
+
+/** Statuses that mean a human has decided this lead is not to be pitched. */
+export const LOCKED_LEAD_STATUSES = [
+  "DO_NOT_CONTACT", "ARCHIVED", "DISQUALIFIED", "NOT_INTERESTED", "CONVERTED",
+];
+const LOCKED = new Set(LOCKED_LEAD_STATUSES);
+
+/**
+ * Decide each lead's per-channel starting state.
+ *
+ * Extracted so the autopilot can top up a standing campaign through exactly the
+ * same gate a hand-launched one passes through. Duplicating this would mean two
+ * places deciding whether a cold message is lawful, and the automated one — the
+ * one no human reads before it sends — would be the copy that drifted.
+ *
+ * Each lead needs `company.contacts` and `threads` loaded.
+ */
+export const buildRecipientRows = (leads, { wantEmail, wantWa }) => leads.map((lead) => {
+  const locked = LOCKED.has(lead.status);
+  // The product this lead was sourced to sell, when it was sourced to sell one
+  // — its approved profile names the buyer, and the buyer decides which of the
+  // company's inboxes is the right one to write to.
+  const icp = lead.discoveryRun?.promotedProduct?.icp || null;
+  const email = pickEmailContact(lead.company.contacts, icp);
+  const wa = pickWhatsAppNumber(lead.company.contacts, lead.company.countryCode);
+  const hasEmailThread = lead.threads.some((t) => t.channel === "EMAIL");
+  const hasWaThread = lead.threads.some((t) => t.channel === "WHATSAPP");
+
+  // The legal gate comes before every other reason to skip: in the opt-in
+  // markets a cold email is unlawful however good the address is, and a
+  // single one is actionable by the recipient without any regulator.
+  const emailPolicy = sendPolicyFor({
+    countryCode: lead.company.countryCode,
+    channel: "EMAIL",
+    roleAddress: isRoleAddress(email),
+  });
+  const waPolicy = sendPolicyFor({ countryCode: lead.company.countryCode, channel: "WHATSAPP" });
+
+  const emailState = !wantEmail ? ["SKIPPED", "Channel not in this campaign."]
+    : isSendBlocked(emailPolicy) ? ["SKIPPED", `Cold email is not lawful in ${emailPolicy.country} (${emailPolicy.law}).`]
+    : locked ? ["SKIPPED", `Lead status is ${lead.status} — locked by a human decision.`]
+    : hasEmailThread ? ["SKIPPED", "Already in an email conversation."]
+    : !email ? ["SKIPPED", "No usable email address on this lead."]
+    : ["PENDING", email.value];
+
+  const waState = !wantWa ? ["SKIPPED", "Channel not in this campaign."]
+    : isSendBlocked(waPolicy) ? ["SKIPPED", `Cold messaging is not lawful in ${waPolicy.country} (${waPolicy.law}).`]
+    : locked ? ["SKIPPED", `Lead status is ${lead.status} — locked by a human decision.`]
+    : hasWaThread ? ["SKIPPED", "Already in a WhatsApp conversation."]
+    : !wa ? ["SKIPPED", "No usable phone number on this lead."]
+    // `display` rather than `number`: this string is shown in the campaign
+    // log and echoed in any send error, so it stays in the form a human wrote.
+    : ["PENDING", wa.display];
+
+  return {
+    leadId: lead.id,
+    emailState: emailState[0], emailDetail: emailState[1].slice(0, 300),
+    waState: waState[0], waDetail: waState[1].slice(0, 300),
+  };
+});
 
 /**
  * Create a campaign over a set of leads.
@@ -195,51 +270,14 @@ export const createCampaign = async ({
       company: { include: { contacts: { where: { isSuppressed: false } } } },
       // An existing conversation means this campaign must not pitch again.
       threads: { select: { channel: true } },
+      // The approved profile behind a promoter lead, which names the buyer and
+      // so decides which of the company's inboxes to write to.
+      discoveryRun: { select: { promotedProduct: { select: { icp: true } } } },
     },
   });
   if (leads.length === 0) return { ok: false, error: "None of the selected leads exist any more." };
 
-  const LOCKED = new Set(["DO_NOT_CONTACT", "ARCHIVED", "DISQUALIFIED", "NOT_INTERESTED", "CONVERTED"]);
-
-  const recipients = leads.map((lead) => {
-    const locked = LOCKED.has(lead.status);
-    const email = pickEmailContact(lead.company.contacts);
-    const wa = pickWhatsAppNumber(lead.company.contacts, lead.company.countryCode);
-    const hasEmailThread = lead.threads.some((t) => t.channel === "EMAIL");
-    const hasWaThread = lead.threads.some((t) => t.channel === "WHATSAPP");
-
-    // The legal gate comes before every other reason to skip: in the opt-in
-    // markets a cold email is unlawful however good the address is, and a
-    // single one is actionable by the recipient without any regulator.
-    const emailPolicy = sendPolicyFor({
-      countryCode: lead.company.countryCode,
-      channel: "EMAIL",
-      roleAddress: isRoleAddress(email),
-    });
-    const waPolicy = sendPolicyFor({ countryCode: lead.company.countryCode, channel: "WHATSAPP" });
-
-    const emailState = !wantEmail ? ["SKIPPED", "Channel not in this campaign."]
-      : isSendBlocked(emailPolicy) ? ["SKIPPED", `Cold email is not lawful in ${emailPolicy.country} (${emailPolicy.law}).`]
-      : locked ? ["SKIPPED", `Lead status is ${lead.status} — locked by a human decision.`]
-      : hasEmailThread ? ["SKIPPED", "Already in an email conversation."]
-      : !email ? ["SKIPPED", "No usable email address on this lead."]
-      : ["PENDING", email.value];
-
-    const waState = !wantWa ? ["SKIPPED", "Channel not in this campaign."]
-      : isSendBlocked(waPolicy) ? ["SKIPPED", `Cold messaging is not lawful in ${waPolicy.country} (${waPolicy.law}).`]
-      : locked ? ["SKIPPED", `Lead status is ${lead.status} — locked by a human decision.`]
-      : hasWaThread ? ["SKIPPED", "Already in a WhatsApp conversation."]
-      : !wa ? ["SKIPPED", "No usable phone number on this lead."]
-      // `display` rather than `number`: this string is shown in the campaign
-      // log and echoed in any send error, so it stays in the form a human wrote.
-      : ["PENDING", wa.display];
-
-    return {
-      leadId: lead.id,
-      emailState: emailState[0], emailDetail: emailState[1].slice(0, 300),
-      waState: waState[0], waDetail: waState[1].slice(0, 300),
-    };
-  });
+  const recipients = buildRecipientRows(leads, { wantEmail, wantWa });
 
   const sendable = recipients.filter((r) => r.emailState === "PENDING" || r.waState === "PENDING");
 
@@ -331,9 +369,24 @@ const attemptEmail = async (campaign, recipient) => {
       return ["SKIPPED", `${domain} has no mail server — the address would bounce.`];
     }
 
-    // The freshest draft wins; a lead without one gets the deterministic
-    // template through the same composer the research flow uses.
-    let draft = await prisma.leadEmailDraft.findFirst({ where: { leadId: recipient.leadId }, orderBy: { createdAt: "desc" } });
+    // The freshest draft *that pitches the right thing* wins; a lead without
+    // one gets the deterministic template through the same composer the
+    // research flow uses.
+    //
+    // Scoped to the lead's own product rather than taken as "newest of any",
+    // because the two kinds of draft live in the same table and a lead can
+    // hold both. A promoter lead accumulates agency drafts every time
+    // regenerateDrafts runs over the whole book, and those are written later
+    // than the product pitch that the run itself composed — so "newest" sent
+    // an HR-platform prospect a website-redesign pitch, which is both the
+    // wrong offer and a stranger's first impression of the sender. Which
+    // product a lead is for is a property of the lead (via its discovery run),
+    // not of the campaign, so a mixed campaign still gets this right per row.
+    const product = await promotedProductForLead(recipient.leadId);
+    let draft = await prisma.leadEmailDraft.findFirst({
+      where: { leadId: recipient.leadId, promotedProductId: product?.id ?? null },
+      orderBy: { createdAt: "desc" },
+    });
     if (!draft) draft = await composeEmailForLead({ leadId: recipient.leadId });
     if (!draft) return ["SKIPPED", "No email could be composed for this lead."];
 

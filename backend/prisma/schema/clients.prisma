@@ -14,7 +14,7 @@ model Client {
   id String @id @default(cuid())
 
   /// The client organisation as we refer to it.
-  name String @db.VarChar(200)
+  name           String @db.VarChar(200)
   /// Lowercased, accent-folded, legal-suffix-stripped (utils/normalize.js), so
   /// "Acme Ltd." and "acme" cannot both be entered. Unique because a duplicate
   /// client row silently splits one relationship's history in two.
@@ -33,7 +33,7 @@ model Client {
 
   /// Anything worth remembering that is not a project: how we met them, who
   /// signs off, billing quirks.
-  notes String? @db.VarChar(4000)
+  notes String?  @db.VarChar(4000)
   /// Free labels for slicing the list — "retainer", "referral", "SLA".
   tags  String[]
 
@@ -46,7 +46,7 @@ model Client {
   lastContactedAt DateTime?
   /// The point of the whole feature: when to check in about maintenance,
   /// updates, or new work.
-  nextFollowUpAt DateTime?
+  nextFollowUpAt  DateTime?
 
   /// Set when a lead was promoted into the book, so the outreach engine and the
   /// client book agree about who is already a customer. Unique: one lead can
@@ -105,7 +105,7 @@ model ClientProject {
   clientId String
   client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
-  name String @db.VarChar(200)
+  name        String  @db.VarChar(200)
   /// Live URL, repository, or app-store listing. http(s) only — anything else
   /// would be rendered into an anchor href.
   url         String? @db.VarChar(500)
