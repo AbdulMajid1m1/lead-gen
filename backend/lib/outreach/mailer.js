@@ -22,6 +22,24 @@ export const buildTransport = (account) =>
     auth: { user: smtpLogin(account), pass: account.authPassword },
   });
 
+/**
+ * The two headers that put a message inside an existing conversation.
+ *
+ * Deduped, because callers that pass the whole conversation as `references`
+ * also pass its newest entry as `inReplyTo`, and appending it blindly repeated
+ * the last id in every threaded message we sent. Order is preserved: a mail
+ * client reads References as the path back through the thread, so the newest
+ * id has to stay last.
+ *
+ * An empty result is correct for a first message — a References header with no
+ * conversation behind it is what a spam filter sees on a forged reply.
+ */
+export const threadHeaders = ({ inReplyTo = null, references = [] } = {}) => {
+  if (!inReplyTo) return {};
+  const chain = [...references, inReplyTo].filter(Boolean);
+  return { inReplyTo, references: [...new Set(chain)] };
+};
+
 /** Verify SMTP credentials without sending anything. */
 export const verifySmtp = async (account) => {
   const transport = buildTransport(account);
@@ -70,7 +88,7 @@ export const sendMail = async ({
       text,
       html: buildEmailHtml({ body, signature, legacyText }),
       ...(account.replyTo ? { replyTo: account.replyTo } : {}),
-      ...(inReplyTo ? { inReplyTo, references: [...references, inReplyTo] } : {}),
+      ...threadHeaders({ inReplyTo, references }),
     });
     // `text` comes back so the caller can store exactly what was sent — the
     // thread history should match the recipient's inbox, signature included.

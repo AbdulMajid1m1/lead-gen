@@ -143,6 +143,7 @@ export const api = {
   sendOutreachEmail: (body) => request("/outreach/send", { method: "POST", body }),
   syncOutreach: (accountId) => request("/outreach/sync", { method: "POST", body: accountId ? { accountId } : {} }),
   listThreads: (leadId) => request(`/outreach/threads${qs({ leadId })}`),
+  replyToThread: (threadId, body) => request(`/outreach/threads/${threadId}/reply`, { method: "POST", body }),
   // The working queue: who replied, what chase is due, what is still in flight.
   outreachInbox: (params) => request(`/outreach/inbox${qs(params)}`),
   sendFollowUpNow: (threadId) => request(`/outreach/threads/${threadId}/follow-up`, { method: "POST" }),

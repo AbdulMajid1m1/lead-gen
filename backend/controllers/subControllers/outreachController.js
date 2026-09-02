@@ -5,7 +5,7 @@ import { createError } from "../../utils/createError.js";
 import { verifySmtp } from "../../lib/outreach/mailer.js";
 import { verifyImap, canReceive } from "../../lib/outreach/inbox.js";
 import {
-  getAccount, listAccounts, sendInitialEmail, sendFollowUp, syncReplies, processDueFollowUps,
+  getAccount, listAccounts, sendInitialEmail, sendFollowUp, sendReply, syncReplies, processDueFollowUps,
   sendWhatsAppForLead, sendWhatsAppFollowUp, processDueWhatsAppFollowUps, outreachInbox,
 } from "../../lib/outreach/service.js";
 import {
@@ -418,6 +418,41 @@ export const followUpNow = asyncHandler(async (req, res) => {
   const result = await sendFollowUp({ account, threadId: req.params.id, sentBy: req.auth.user });
   if (!result.ok) throw createError(400, result.error);
   res.json({ success: true, message: "Follow-up sent.", data: { thread: result.thread } });
+});
+
+export const replySchema = z.object({
+  body: z.string().trim().min(1, "Write something to send.").max(8000),
+  // Threads keep their subject unless you deliberately change it, so a reply
+  // stays in the same conversation in the recipient's client.
+  subject: z.string().trim().max(255).optional(),
+  signatureId: z.string().max(64).nullable().optional(),
+});
+
+/**
+ * POST /api/outreach/threads/:id/reply — write back by hand.
+ *
+ * Goes out from the mailbox the thread was opened with, never the default one:
+ * a reply arriving from a different address breaks the conversation in the
+ * recipient's client and reads as a stranger joining the thread.
+ */
+export const replyToThread = asyncHandler(async (req, res) => {
+  const thread = await prisma.outreachThread.findUnique({
+    where: { id: req.params.id },
+    select: { accountId: true, channel: true },
+  });
+  if (!thread) throw createError(404, "Thread not found.");
+  if (thread.channel !== "EMAIL") throw createError(400, "This is a WhatsApp thread — reply on that channel.");
+
+  const account = await getAccount(thread.accountId || null);
+  if (!account) throw createError(400, "The mailbox this thread was sent from is no longer connected.");
+
+  const result = await sendReply({
+    account, threadId: req.params.id,
+    body: req.body.body, subject: req.body.subject, signatureId: req.body.signatureId,
+    sentBy: req.auth.user,
+  });
+  if (!result.ok) throw createError(400, result.error);
+  res.json({ success: true, message: "Reply sent.", data: { thread: result.thread } });
 });
 
 export const inboxQuerySchema = z.object({

@@ -272,6 +272,18 @@ function OutreachComposer({ leadId, name, contacts = null, address = null, onClo
     onError: (err) => toast.error(err.message),
   });
 
+  const [reply, setReply] = useState("");
+  const sendReply = useMutation({
+    mutationFn: () => api.replyToThread(activeThread.id, { body: reply }),
+    onSuccess: () => {
+      setReply("");
+      queryClient.invalidateQueries({ queryKey: ["outreach-threads"] });
+      queryClient.invalidateQueries({ queryKey: ["outreach-inbox"] });
+      toast.success("Reply sent. Automatic follow-ups on this thread are now off.");
+    },
+    onError: (err) => toast.error(err.message || "Could not send the reply."),
+  });
+
   const followUp = useMutation({
     mutationFn: (threadId) => api.sendFollowUpNow(threadId),
     onSuccess: () => {
@@ -417,6 +429,46 @@ function OutreachComposer({ leadId, name, contacts = null, address = null, onClo
                 <p className="border-t border-[var(--border)] px-3 py-2 text-[11px] text-[var(--text-subtle)]">
                   Replies arrive here automatically while the app is running.
                 </p>
+              )}
+
+              {activeThread.channel !== "WHATSAPP" && (
+                <div className="border-t border-[var(--border)] px-3 py-2.5">
+                  {activeThread.status === "BOUNCED" ? (
+                    <p className="text-[11px] text-[var(--text-subtle)]">
+                      The last message to this address bounced. Fix or replace the address before writing again.
+                    </p>
+                  ) : (
+                    <>
+                      <Textarea
+                        className="w-full text-[12px]"
+                        rows={3}
+                        placeholder={`Write back to ${activeThread.recipientEmail}…`}
+                        value={reply}
+                        onChange={(e) => setReply(e.target.value)}
+                        onKeyDown={(e) => {
+                          // Cmd/Ctrl+Enter sends, because a reply box you have to
+                          // reach for the mouse to send is a reply box people
+                          // leave and go back to Gmail for.
+                          if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && reply.trim() && !sendReply.isPending) {
+                            sendReply.mutate();
+                          }
+                        }}
+                      />
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <p className="text-[10px] text-[var(--text-subtle)]">
+                          Goes out from {account?.email || "the thread's mailbox"} · ⌘↵ to send
+                        </p>
+                        <Button
+                          size="sm"
+                          onClick={() => sendReply.mutate()}
+                          disabled={!reply.trim() || sendReply.isPending}
+                        >
+                          {sendReply.isPending ? <Spinner size={12} /> : <CornerUpLeft size={12} />}Send reply
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </div>
               )}
             </div>
           )}

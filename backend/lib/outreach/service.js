@@ -311,6 +311,90 @@ export const sendFollowUp = async ({ account, threadId, sentBy = null }) => {
 };
 
 /**
+ * Write back into a conversation by hand, as many times as the exchange needs.
+ *
+ * The difference from `sendFollowUp` is not the transport but the authorship: a
+ * follow-up is a generated chase the scheduler is also allowed to send, capped
+ * by `maxFollowUps` and counted. This is a person typing, so it is uncapped,
+ * never counted as a chase, and always attributed to whoever sent it. Replying
+ * to someone who has already answered is the normal case, not an edge one —
+ * that is the whole point of not having to open the mailbox.
+ *
+ * Sending by hand also **stops the automated chase** on that thread. Once a
+ * person is in the conversation, a robot sending "just circling back" three
+ * days later over the top of a live exchange is the worst thing the system
+ * could do, so `nextFollowUpAt` is cleared and the thread goes back to
+ * awaiting *their* reply.
+ */
+export const sendReply = async ({ account, threadId, body, subject = null, signatureId = undefined, sentBy = null }) => {
+  const actor = toActor(sentBy);
+  const text = String(body || "").trim();
+  if (!text) return { ok: false, error: "Write something to send." };
+
+  const thread = await prisma.outreachThread.findUnique({
+    where: { id: threadId },
+    include: { lead: { include: { company: true } }, messages: { orderBy: { createdAt: "asc" } } },
+  });
+  if (!thread) return { ok: false, error: "Thread not found." };
+  if (thread.channel !== "EMAIL") return { ok: false, error: "This is a WhatsApp thread — reply on that channel." };
+  // A bounced address is not a conversation, it is a dead mailbox: sending
+  // again would earn a second bounce on a domain that already paid for one.
+  if (thread.status === "BOUNCED") {
+    return { ok: false, error: "The last message to this address bounced — fix or replace the address first." };
+  }
+
+  const blocked = await sendIsBlocked({ lead: thread.lead, recipientEmail: thread.recipientEmail });
+  if (blocked) return { ok: false, error: blocked };
+
+  // Thread against the newest message in the conversation whichever way it
+  // travelled: replying to their reply is what keeps our message inside the
+  // same conversation in their client, rather than starting a second one.
+  const newest = [...thread.messages].reverse().find((m) => m.messageId);
+  const references = thread.messages.map((m) => m.messageId).filter(Boolean);
+
+  const finalSubject = (subject?.trim() || (thread.subject.startsWith("Re:") ? thread.subject : `Re: ${thread.subject}`)).slice(0, 255);
+  const signature = await resolveSignature({ signatureId, account });
+
+  const sent = await sendMail({
+    account, to: thread.recipientEmail, subject: finalSubject, body: text, signature,
+    inReplyTo: newest?.messageId || null,
+    references,
+  });
+  if (!sent.ok) return { ok: false, error: `Sending failed: ${sent.error}` };
+
+  await prisma.outreachMessage.create({
+    data: {
+      threadId, direction: "OUTBOUND", kind: "REPLY",
+      subject: finalSubject, body: (sent.text || text).slice(0, 8000),
+      // generatedBy stays null: nothing generated this. ParserUsed names the
+      // machine that wrote a message, and a person typing is not one of them.
+      messageId: sent.messageId, sentAt: new Date(),
+      sentById: actor?.id ?? null, sentByName: actor?.name ?? null,
+    },
+  });
+
+  const updated = await prisma.outreachThread.update({
+    where: { id: threadId },
+    data: {
+      // Back to waiting on them, with no scheduled chase behind it.
+      status: "AWAITING_REPLY",
+      lastOutboundAt: new Date(),
+      nextFollowUpAt: null,
+      subject: finalSubject,
+    },
+    include: {
+      messages: {
+        orderBy: { createdAt: "asc" },
+        include: { sentBy: { select: { id: true, name: true, email: true } } },
+      },
+    },
+  });
+
+  logger.info({ threadId, to: thread.recipientEmail, sentBy: actor?.id || "system" }, "manual reply sent");
+  return { ok: true, thread: updated };
+};
+
+/**
  * Send one WhatsApp follow-up on a thread. The email twin above, minus the
  * reply-chain headers WhatsApp has no equivalent of — continuity there comes
  * from the chat itself, so the message just has to be short and human.

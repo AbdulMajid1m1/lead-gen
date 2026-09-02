@@ -167,6 +167,9 @@ router.post("/outreach/sync", canSyncMailboxes, writeLimiter, validate({ body: o
 router.get("/outreach/inbox", canInbox, validate({ query: outreach.inboxQuerySchema }), outreach.inbox);
 router.get("/outreach/threads", canReadThreads, validate({ query: outreach.threadsQuerySchema }), outreach.listThreads);
 router.post("/outreach/threads/:id/follow-up", canFollowUp, writeLimiter, validate({ params: idParam }), outreach.followUpNow);
+// Writing back by hand. Same permission as a follow-up — both put a message in
+// front of the lead — but uncapped, because a conversation is not a chase.
+router.post("/outreach/threads/:id/reply", canFollowUp, writeLimiter, validate({ params: idParam, body: outreach.replySchema }), outreach.replyToThread);
 router.post("/outreach/compose-batch", requirePermission("research", "outreach"), writeLimiter, validate({ body: outreach.composeBatchSchema }), outreach.composeBatch);
 
 // ─── Signatures: reusable sign-offs, one selected per send ───────────────────
