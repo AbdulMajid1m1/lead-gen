@@ -25,6 +25,7 @@ import { classifyAutoReply } from "../lib/outreach/autoReply.js";
 import { recordFact } from "../lib/provenance/recorder.js";
 import { evaluateCompanySignals } from "../lib/signals/signalEngine.js";
 import { scoreCompany, setStatus } from "../lib/scoring/scoreEngine.js";
+import { normalizeCompanyName } from "../utils/normalize.js";
 
 const apply = process.argv.includes("--apply");
 const say = (...a) => console.log(...a);
@@ -33,7 +34,11 @@ const say = (...a) => console.log(...a);
 const domains = await prisma.companyDomain.findMany({
   include: { company: { include: { domains: true, facts: true, contacts: true, people: true, leads: { include: { threads: true } } } } },
 });
-const affected = domains.filter((d) => hostedPlatformFor(d.domain));
+// The platform itself, found as an employer through a job board, owns its
+// own domain — Checkatrade at checkatrade.com is not a tradesman hosted there.
+const isThePlatformItself = (company, domain) =>
+  normalizeCompanyName(company.name).replace(/\s+/g, "").startsWith(domain.split(".")[0].replace(/-/g, ""));
+const affected = domains.filter((d) => hostedPlatformFor(d.domain) && !isThePlatformItself(d.company, d.domain));
 
 say(`Companies with a hosted-platform domain: ${affected.length}`);
 for (const d of affected) {

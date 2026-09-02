@@ -62,10 +62,13 @@ describe("classifyExcludedBusiness", () => {
       "Chennai Darbar", "Bill's Oyster", "Harvester", "Kensington Dentist", "Sushi Bar Tokyo", "Milk Bar",
       "Juice Bar Dubai", "Nail Bar London", "West Ham Chippy", "Bombay Bistro", "Boots Pharmacy Dispensary",
       "Coral Reef Restaurant", "Stripe", "Barnes & Partners Solicitors", "Kanzlei Bartels", "Orlebar Brown",
-      "Ale-free Kitchen", "Ginger & Co", "Rumi's Kitchen", "Poker Face Photography Studio".replace("Poker Face ", ""),
+      "Ale-free Kitchen", "Ginger & Co", "Rumi's Kitchen", "Photography Studio", "Brandy Melville", "Sake House Sushi",
     ]) {
       expect(excluded(name), name).toBeNull();
     }
+    // A car dealer's saloons are cars; a Wild West Saloon is a bar.
+    expect(excluded("Brindley Hyundai", { description: "New and used Hyundai saloons, SUVs and hatchbacks in West Bromwich" })).toBeNull();
+    expect(excluded("Last Chance Saloon")).toBe("ALCOHOL");
   });
 
   it("works from a Company row and writes a readable note", () => {
