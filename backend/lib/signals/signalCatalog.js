@@ -15,7 +15,9 @@ export const SIGNAL_CATALOG = {
     weight: 30, halfLifeDays: null, leadType: "DIGITAL_GAP",
     label: "No website",
     services: { WEBSITE_DEV: 1 },
-    reason: (c) => `${c.companyName} is listed as an operating business with contact details but has no website at all.`,
+    reason: (c) => c.hostedOn
+      ? `${c.companyName} is listed as an operating business with contact details but has no website of its own — only a ${c.hostedKind === "SOCIAL" ? "social profile" : c.hostedKind === "BOOKING" ? "booking page" : c.hostedKind === "DIRECTORY" ? "directory listing" : "hosted page"} on ${c.hostedOn}.`
+      : `${c.companyName} is listed as an operating business with contact details but has no website at all.`,
   },
   OUTDATED_WEBSITE: {
     weight: 25, halfLifeDays: 365, leadType: "TECH_DEBT",

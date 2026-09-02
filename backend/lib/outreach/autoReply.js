@@ -59,6 +59,12 @@ const AUTO_BODY_RES = [
   /(?:this|it) is (?:an? )?(?:auto(?:matic|mated)|system[- ]generated) (?:reply|response|message|e-?mail)/i,
   /(?:we|our (?:team|support team)) will (?:try (?:and|to) )?(?:get back|respond|reply|be in touch|contact you) (?:to you )?(?:as soon as|shortly|within|soon)/i,
   /(?:thank you|thanks) for (?:contacting|reaching out to|getting in touch with|your (?:email|message|enquiry|inquiry)) .{0,60}(?:support|help ?desk|customer (?:care|service|success))/i,
+  // WhatsApp Business greeting / away messages: "Thanks for messaging us!
+  // We'll get back to you as soon as possible." Weak on its own — a person
+  // opens with thanks too — so it needs the second phrase to count.
+  /^(?:hi|hello|hey)?[!,.\s]*(?:thank you|thanks) for (?:messaging|contacting|reaching out|getting in touch|your message)/i,
+  /(?:we(?:'ll| will)|our team will|someone will) (?:get back to you|respond|reply|be with you|contact you|be in touch)/i,
+  /(?:outside|out of) (?:our )?(?:business|office|opening|working) hours/i,
   /(?:i am|i'm|i will be) (?:currently )?(?:out of (?:the )?office|away from (?:the |my )?(?:office|desk)|on (?:annual |sick |maternity |paternity |parental )?leave|travel(?:l)?ing|on holiday|on vacation)/i,
   /(?:limited|no) access to (?:my )?e-?mail/i,
   /(?:will|shall) (?:respond|reply|get back to you|answer) (?:to your (?:email|message) )?(?:on|upon|when|after) (?:my|i) return/i,

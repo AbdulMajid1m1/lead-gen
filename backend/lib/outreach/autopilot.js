@@ -98,7 +98,9 @@ export const updateAutopilot = async (patch) => {
  */
 export const emailAdmissible = (lead, restrictedPolicy) => {
   const countryCode = lead.company?.countryCode;
-  const contact = pickEmailContact(lead.company?.contacts || []);
+  // The same pick buildRecipientRows will make, so the admissibility verdict
+  // is about the address that actually gets used.
+  const contact = pickEmailContact(lead.company?.contacts || [], null, { people: lead.company?.people || [], countryCode });
   if (!contact) return false;
 
   const verdict = sendPolicyFor({ countryCode, channel: "EMAIL", roleAddress: isRoleAddress(contact) });

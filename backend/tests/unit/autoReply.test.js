@@ -63,6 +63,12 @@ describe("classifyAutoReply", () => {
     expect(classifyAutoReply({ subject: "[#45012] Your enquiry", body: "Thank you for contacting Acme Support. Your ticket has been logged and a member of our team will respond shortly." }).kind).toBe("TICKET_ACK");
   });
 
+  it("recognises a WhatsApp Business greeting, but not a person who opens with thanks", () => {
+    expect(classifyAutoReply({ from: "923001234567", body: "Hi! Thanks for messaging us. We'll get back to you as soon as possible." }).isAutoReply).toBe(true);
+    expect(classifyAutoReply({ from: "923001234567", body: "Thank you for contacting Al Noor Dental. We are currently outside our business hours and will respond when we open." }).isAutoReply).toBe(true);
+    expect(classifyAutoReply({ from: "923001234567", body: "Thanks for your message, yes we are interested. Call me tomorrow." }).isAutoReply).toBe(false);
+  });
+
   it("leaves a person's answer alone, however short or formal", () => {
     for (const body of [
       "yes interested",

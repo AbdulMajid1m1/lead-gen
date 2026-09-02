@@ -72,11 +72,19 @@ export const evaluateCompanySignals = async (companyId) => {
     // websites would end up pitched a new one).
     const absenceEvidence = fact("osm_no_website_tag") || fact("domain_unresolved");
     if (contactability && absenceEvidence) {
+      // A page on an ordering marketplace or a social network is not a
+      // website of their own, but it is worth naming: the pitch to "Bombay
+      // Bistro, whose only web presence is a Menufy ordering page" is a
+      // different — and truer — sentence than "we can't find you online".
+      const hosted = fact("hosted_listing");
+      const hostedOn = hosted?.valueJson?.platform || null;
       push("NO_WEBSITE", {
-        context: { companyName: company.name },
+        context: { companyName: company.name, hostedOn, hostedKind: hosted?.valueJson?.kind || null, hostedUrl: hosted?.value || null },
         evidence: {
           factId: absenceEvidence.id,
-          note: absenceEvidence.key === "osm_no_website_tag"
+          note: hostedOn
+            ? `The public listing's only web address is a page on ${hostedOn}; no website of the business's own was found.`
+            : absenceEvidence.key === "osm_no_website_tag"
             ? "No website tag on the public business listing, and no domain discovered by enrichment."
             : "Candidate domains were checked and none belonged to this company.",
         },

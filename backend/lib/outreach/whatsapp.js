@@ -235,18 +235,29 @@ const handleIncoming = async (accountId, messages, sock) => {
         continue;
       }
 
+      // A WhatsApp Business greeting or away message ("Thanks for messaging
+      // us! We'll get back to you as soon as possible") is the phone answering,
+      // not the owner. Same classifier as email; lazily imported for the same
+      // reason as leadStatus below.
+      const { classifyAutoReply } = await import("./autoReply.js");
+      const auto = text ? classifyAutoReply({ from: fromNumber, subject: "", body: text }) : { isAutoReply: false };
+
       await prisma.outreachMessage.create({
         data: {
           threadId: thread.id,
           direction: "INBOUND",
-          kind: "REPLY",
+          kind: auto.isAutoReply ? "AUTO_REPLY" : "REPLY",
           subject: "WhatsApp reply",
-          body: (text || "(non-text reply — open WhatsApp to view)").slice(0, 8000),
+          body: (auto.isAutoReply ? `[${auto.reason}]\n\n${text}` : (text || "(non-text reply — open WhatsApp to view)")).slice(0, 8000),
           messageId: msg.key.id || null,
           fromAddress: fromNumber,
           receivedAt: new Date(Number(msg.messageTimestamp) * 1000 || Date.now()),
         },
       });
+      if (auto.isAutoReply) {
+        logger.info({ accountId, threadId: thread.id, fromNumber, kind: auto.kind }, "WhatsApp auto-reply recorded — thread left open");
+        continue;
+      }
       await prisma.outreachThread.update({
         where: { id: thread.id },
         data: { status: "REPLIED", repliedAt: new Date(), nextFollowUpAt: null },
