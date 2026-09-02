@@ -1021,7 +1021,7 @@ const WORKFORCE_SHAPES = [
     terms: ["payroll", "leave", "spreadsheet", "approval", "expense", "commission", "freelance", "contractor", "onboard", "remote"],
   },
   {
-    keys: ["restaurant", "cafe", "fast_food", "bar", "bakery", "supermarket", "clothes", "jewelry", "florist", "furniture", "electronics", "hardware", "pet_shop", "car_dealer", "car_repair"],
+    keys: ["restaurant", "cafe", "fast_food", "bakery", "supermarket", "clothes", "jewelry", "florist", "furniture", "electronics", "hardware", "pet_shop", "car_dealer", "car_repair"],
     re: /restaurant|cafe|café|coffee|food|bakery|\bbar\b|\bpub\b|shop|store|retail|supermarket|grocer|showroom|garage|repair/,
     plural: "shops and restaurants",
     staff: "part-time hours and high turnover",

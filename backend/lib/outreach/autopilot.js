@@ -148,7 +148,7 @@ export const eligibleLeads = async ({ lane, settings, excludeLeadIds = [], take 
       ...(excludeLeadIds.length ? { id: { notIn: excludeLeadIds } } : {}),
     },
     include: {
-      company: { include: { contacts: { where: { isSuppressed: false } } } },
+      company: { include: { contacts: { where: { isSuppressed: false } }, people: true } },
       threads: { select: { channel: true } },
       // Same reason as the hand-launched path: a promoter lead's approved
       // profile names the buyer, and buildRecipientRows picks the inbox from it.

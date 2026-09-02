@@ -3,6 +3,7 @@ import { SIGNAL_CATALOG, REACHABILITY_SIGNALS, isOpportunitySignal, DISQUALIFYIN
 import { decayFactor } from "./decay.js";
 import { buildRecommendation } from "./recommend.js";
 import { icpFit, FIT_CAP } from "../promoter/fit.js";
+import { classifyCompanyExclusion, exclusionNote } from "../qualify/excludedCategories.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("scoring");
@@ -62,6 +63,20 @@ export const scoreCompany = async (companyId, { searchQueryId = null, discoveryR
       await setStatus(company.leads[0].id, "DO_NOT_CONTACT", `Suppressed: ${suppressed.reason || suppressed.kind}`);
     }
     return { skipped: true, reason: "SUPPRESSED" };
+  }
+
+  // A line of trade this agency does not work with — alcohol, gambling and the
+  // rest — is a lead-level verdict, not a score. Checked here, on every scoring
+  // pass, so it covers every source at once: a company that entered before the
+  // rule existed is disqualified the next time the scheduler re-scores it,
+  // and the "resurrect ARCHIVED/DISQUALIFIED to NEW" step further down never
+  // gets to run for it.
+  const excludedTrade = classifyCompanyExclusion(company);
+  if (excludedTrade) {
+    if (company.leads[0] && company.leads[0].status !== "DISQUALIFIED") {
+      await setStatus(company.leads[0].id, "DISQUALIFIED", exclusionNote(excludedTrade));
+    }
+    return { skipped: true, reason: "EXCLUDED_CATEGORY", category: excludedTrade.category, matched: excludedTrade.matched };
   }
 
   // A disqualified company must never surface as a lead either, however well it

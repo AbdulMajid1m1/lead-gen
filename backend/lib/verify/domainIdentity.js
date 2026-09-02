@@ -3,6 +3,7 @@ import { fetchPage } from "../crawler/fetchPage.js";
 import { extractContacts } from "../extract/contacts.js";
 import { normalizeCompanyName, normalizeDomain } from "../../utils/normalize.js";
 import { phoneMatchKey } from "../../utils/normalize.js";
+import { isHostedPlatformDomain } from "./hostedPlatforms.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("verify:domainIdentity");
@@ -50,14 +51,14 @@ const TAKEOVER_MARKERS = [
 /** Web-server and hosting placeholders — live, but not a business site. */
 const HOLDING_MARKERS = /(?:welcome to nginx|apache2? (?:ubuntu |debian )?default page|index of \/|it works!|future home of something|this site is under construction|coming soon|default web site page|plesk|cpanel|site not (?:configured|published)|account suspended)/i;
 
-/** Free hosts and platform subdomains — a match there identifies the platform. */
+/**
+ * Free hosts and platform subdomains — a match there identifies the platform.
+ * The list itself lives in lib/verify/hostedPlatforms.js, shared with the
+ * map ingest and the contact extractor, so the three cannot disagree about
+ * whether `menufy.com` is somebody's website.
+ */
 const SHARED_HOSTS = /^(?:jobs|boards|apply|careers|my|app)\./i;
-const PLATFORM_DOMAINS = new Set([
-  "greenhouse.io", "lever.co", "ashbyhq.com", "workable.com", "recruitee.com",
-  "smartrecruiters.com", "linkedin.com", "facebook.com", "instagram.com",
-  "notion.site", "github.io", "wixsite.com", "weebly.com", "blogspot.com",
-  "wordpress.com", "godaddysites.com", "business.site", "sites.google.com",
-]);
+const PLATFORM_DOMAINS = { has: (domain) => isHostedPlatformDomain(domain) };
 
 // ─── Positive identity evidence ───────────────────────────────────────────────
 // Weighted so that no single weak signal can carry a domain on its own. A

@@ -3,6 +3,7 @@ import { searchAndParse, citationsAreGrounded, isResearchAvailable } from "../ll
 import { DISCOVER_SYSTEM, buildDiscoverUser, DISCOVER_SCHEMA } from "./prompts.js";
 import { ensureSource, recordSourceRecord, resolveCompany } from "../provenance/recorder.js";
 import { normalizeDomain, normalizeCompanyName } from "../../utils/normalize.js";
+import { classifyExcludedBusiness, exclusionNote } from "../qualify/excludedCategories.js";
 import { AI_MAX_CANDIDATES, AI_SEARCH_MODEL } from "../../configs/envConfig.js";
 import { log } from "../../utils/logger.js";
 
@@ -137,6 +138,21 @@ export const resolveCandidates = async (runId, { exclusions = [], countryCode = 
     : null;
 
   for (const candidate of candidates) {
+    // The standing exclusions come first and do not depend on the brief: the
+    // model is told not to return bars, casinos and the rest, but a claim is a
+    // claim and is checked here regardless.
+    const trade = classifyExcludedBusiness({
+      name: candidate.name, industry: candidate.industryGuess, description: candidate.whyMatch,
+    });
+    if (trade) {
+      await prisma.aiCandidate.update({
+        where: { id: candidate.id },
+        data: { status: "REJECTED_EXCLUDED", rejectedReason: exclusionNote(trade).slice(0, 500) },
+      });
+      stats.excluded += 1;
+      continue;
+    }
+
     // Honour the brief's exclusions — "businesses that need POS software" must
     // not return the companies that sell it.
     if (exclusionRe && exclusionRe.test(`${candidate.name} ${candidate.whyMatch}`)) {

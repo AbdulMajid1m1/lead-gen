@@ -2,6 +2,7 @@ import prisma from "../../prismaClient.js";
 import { searchArea, OSM_CATEGORIES, OVERPASS_ATTRIBUTION } from "../adapters/overpass.js";
 import { geocode } from "../adapters/nominatim.js";
 import { ensureSource, recordSourceRecord, resolveCompany, recordFact, recordContact } from "../provenance/recorder.js";
+import { classifyExcludedBusiness } from "../qualify/excludedCategories.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("overpassIngest");
@@ -40,7 +41,21 @@ export const ingestArea = async ({ location, categoryKey, radiusMeters = 10_000,
   const withoutWebsite = [];
 
   let skipped = 0;
+  let excluded = 0;
   for (const el of result.elements) {
+    // A business in a line of trade this agency does not work with is dropped
+    // before it becomes a company at all. A restaurant node whose name is
+    // "Sports Bar & Grill" or whose tags say microbrewery=yes arrives under
+    // amenity=restaurant, so the category search alone cannot keep it out.
+    const exclusion = classifyExcludedBusiness({
+      name: el.name, osmCategory: el.categoryTag, tags: el.tags, cuisine: el.cuisine,
+    });
+    if (exclusion) {
+      excluded += 1;
+      logger.debug({ name: el.name, osm: el.osmKey, category: exclusion.category, matched: exclusion.matched }, "excluded line of business — not ingested");
+      continue;
+    }
+
     // One unusable record must never abort the whole area. Before this, a
     // single element whose name normalised to nothing threw and failed the
     // entire OVERPASS step, discarding the other 119 businesses with it.
@@ -99,12 +114,33 @@ export const ingestArea = async ({ location, categoryKey, radiusMeters = 10_000,
       });
     } else {
       withoutWebsite.push(company.id);
+      // A listing whose "website" is a page on an ordering marketplace, a
+      // booking service or a social network has no website of its own. That
+      // is recorded as the absence it is — with the platform named, so the
+      // pitch can say "your only web presence is a Menufy ordering page"
+      // rather than "we can't find you online".
+      const hosted = el.hostedOn;
       await recordFact({
         companyId: company.id, key: "osm_no_website_tag", value: "true",
         confidenceLevel: "VERIFIED", extractorName: "overpassIngest",
-        evidenceSnippet: `The OpenStreetMap listing for ${el.name} records ${el.phone ? "a phone number" : "contact details"} but no website.`,
+        evidenceSnippet: hosted
+          ? `The OpenStreetMap listing for ${el.name} gives only a ${hosted.label} on ${hosted.domain} (${el.website}) — no website of its own.`
+          : `The OpenStreetMap listing for ${el.name} records ${el.phone ? "a phone number" : "contact details"} but no website.`,
         sourceRecordId: record.id,
       });
+      if (hosted) {
+        await recordFact({
+          companyId: company.id, key: "hosted_listing", value: el.website.slice(0, 500), valueJson: { platform: hosted.domain, kind: hosted.kind },
+          confidenceLevel: "VERIFIED", extractorName: "overpassIngest",
+          evidenceSnippet: `OpenStreetMap's website tag points at a ${hosted.label} on ${hosted.domain}.`,
+          sourceRecordId: record.id,
+        });
+        // A social profile is still a way to reach them, so keep it as one.
+        if (hosted.kind === "SOCIAL" && /facebook|instagram/i.test(hosted.domain)) {
+          const network = /instagram/i.test(hosted.domain) ? "INSTAGRAM" : "FACEBOOK";
+          await recordContact({ companyId: company.id, kind: "SOCIAL", value: el.website, roleHint: network, confidenceLevel: "DETECTED", sourceRecordId: record.id });
+        }
+      }
     }
 
     if (el.openingHours) {
@@ -128,7 +164,7 @@ export const ingestArea = async ({ location, categoryKey, radiusMeters = 10_000,
   }
 
   logger.info(
-    { location, categoryKey, found: result.elements.length, created, updated, skipped, withoutWebsite: withoutWebsite.length },
+    { location, categoryKey, found: result.elements.length, created, updated, skipped, excluded, withoutWebsite: withoutWebsite.length },
     "overpass area ingested",
   );
 
@@ -141,6 +177,7 @@ export const ingestArea = async ({ location, categoryKey, radiusMeters = 10_000,
     created,
     updated,
     skipped,
+    excluded,
     companyIds,
     withoutWebsite,
     endpoint: result.endpoint,

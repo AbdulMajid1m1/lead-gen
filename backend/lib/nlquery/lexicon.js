@@ -12,7 +12,7 @@ export const INDUSTRY_TERMS = [
   ["coffee shop", "cafe"], ["coffee shops", "cafe"], ["cafes", "cafe"], ["cafe", "cafe"], ["café", "cafe"], ["coffee", "cafe"],
   ["restaurants", "restaurant"], ["restaurant", "restaurant"], ["diners", "restaurant"], ["eateries", "restaurant"],
   ["bakeries", "bakery"], ["bakery", "bakery"],
-  ["bars", "bar"], ["pubs", "bar"], ["bar", "bar"], ["pub", "bar"],
+  // "bars" and "pubs" are deliberately absent — see lib/qualify/excludedCategories.js.
   ["hotels", "hotel"], ["hotel", "hotel"], ["guest houses", "hotel"],
   ["dental clinics", "dentist"], ["dental clinic", "dentist"], ["dentists", "dentist"], ["dentist", "dentist"], ["dental", "dentist"],
   ["medical clinics", "doctor"], ["clinics", "doctor"], ["clinic", "doctor"], ["doctors", "doctor"], ["gp practices", "doctor"],

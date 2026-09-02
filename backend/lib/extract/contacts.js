@@ -3,6 +3,7 @@ import {
   decodeCloudflareEmail, decodeWordSeparators, normaliseForMatching,
   decodeCandidate, emailsFromMailto, emailsFromJson,
 } from "./emailDecode.js";
+import { emailBelongsToPlatform } from "../verify/hostedPlatforms.js";
 
 /**
  * Extracts publicly published business contact points from a page.
@@ -23,7 +24,12 @@ const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}\b/g;
 // `(?![\w-])` rather than `\b` on the placeholder group: `\b` matches before a
 // hyphen, so real businesses at test-labor.de and email-marketing.de were being
 // thrown away as placeholder text.
-const EMAIL_BLOCKLIST_RE = /(?:^|@)(?:example|test|domain|yourdomain|email|sentry|wixpress|godaddy|squarespace|shopify|placeholder|localhost)(?![\w-])|@(?:domainster|domainmarket|hugedomains|brandbucket|sedo|afternic|dan|undeveloped|namecheap|dynadot|sav|epik|escrow)\.|\.(?:png|jpe?g|gif|webp|svg|css|js|woff2?|ico)$|^(?:user|name|your|someone)@/i;
+// The vendor group matches anywhere in the host, not only as its first label:
+// `605a7b…@sentry-next.wixpress.com` and `…@o462166.ingest.sentry.io` are
+// error-tracking DSNs that Wix and Sentry embed in every page, and both were
+// being stored as business contacts because "sentry" was not the label after
+// the "@".
+const EMAIL_BLOCKLIST_RE = /(?:^|@)(?:example|test|domain|yourdomain|email|placeholder|localhost)(?![\w-])|@(?:[\w-]+\.)*(?:sentry|wixpress|godaddy|squarespace|shopify|domainster|domainmarket|hugedomains|brandbucket|sedo|afternic|dan|undeveloped|namecheap|dynadot|sav|epik|escrow)\.|\.(?:png|jpe?g|gif|webp|svg|css|js|woff2?|ico)$|^(?:user|name|your|someone)@/i;
 
 /**
  * Methods where the page is *declaring* an address rather than mentioning one.
@@ -116,6 +122,11 @@ const hasValidTld = (email) => {
 const classifyEmail = (email) => {
   const local = email.split("@")[0].toLowerCase().replace(/[._-]/g, "");
   if (NON_OUTREACH_PREFIXES.has(local)) return "NON_OUTREACH";
+  // An address on an ordering marketplace, a booking service or a help desk is
+  // the platform's, not the business's — `info@menufy.com` on a restaurant's
+  // Menufy page reaches Menufy's ticket queue. Kept, so the record shows what
+  // the page published, but never offered to the sender.
+  if (emailBelongsToPlatform(email)) return "NON_OUTREACH";
   if (ROLE_PREFIXES.has(local)) return "ROLE";
   return "PERSONAL";
 };

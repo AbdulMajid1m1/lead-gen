@@ -2,6 +2,7 @@ import { safeFetch, FetchBlockedError } from "../crawler/safeFetch.js";
 import { withHostSlot, setCrawlDelay } from "../crawler/hostPolicy.js";
 import { OVERPASS_URL } from "../../configs/envConfig.js";
 import { normalizeDomain } from "../../utils/normalize.js";
+import { hostedPlatformFor } from "../verify/hostedPlatforms.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("overpass");
@@ -41,7 +42,10 @@ export const OSM_CATEGORIES = {
   restaurant:      { label: "Restaurant",            tags: [["amenity", "restaurant"]] },
   cafe:            { label: "Café",                  tags: [["amenity", "cafe"]] },
   fast_food:       { label: "Fast food",             tags: [["amenity", "fast_food"]] },
-  bar:             { label: "Bar",                   tags: [["amenity", "bar"], ["amenity", "pub"]] },
+  // No `bar` (amenity=bar / amenity=pub): this agency does not work with
+  // alcohol, gambling or the other trades in lib/qualify/excludedCategories.js,
+  // so those businesses are never searched for, and any that arrive under
+  // another tag are dropped at ingest and scoring.
   bakery:          { label: "Bakery",                tags: [["shop", "bakery"]] },
   hotel:           { label: "Hotel",                 tags: [["tourism", "hotel"], ["tourism", "guest_house"]] },
   dentist:         { label: "Dental clinic",         tags: [["amenity", "dentist"], ["healthcare", "dentist"]] },
@@ -123,7 +127,13 @@ export const normalizeElement = (el) => {
   if (!name) return null;
 
   const websiteRaw = t.website || t["contact:website"] || t.url || t["contact:url"] || null;
-  const domain = normalizeDomain(websiteRaw);
+  // A website tag that points at an ordering marketplace, a booking page or a
+  // social profile is not the business's own site. Reducing it to a registrable
+  // domain would make `menufy.com` the company's domain, and the crawler would
+  // then describe the platform as the business. The URL is kept as a listing;
+  // the domain is not claimed.
+  const hostedOn = websiteRaw ? hostedPlatformFor(websiteRaw) : null;
+  const domain = hostedOn ? null : normalizeDomain(websiteRaw);
 
   const city = t["addr:city"] || t["addr:suburb"] || t["addr:town"] || null;
   const addressLine = [t["addr:housenumber"], t["addr:street"]].filter(Boolean).join(" ") || null;
@@ -146,8 +156,10 @@ export const normalizeElement = (el) => {
     website: websiteRaw,
     domain,
     // A business listed with a phone but no website is the cleanest
-    // website-development lead this product can produce.
-    hasWebsiteTag: Boolean(websiteRaw),
+    // website-development lead this product can produce. A listing whose only
+    // "website" is a hosted platform page is the same lead with extra evidence.
+    hasWebsiteTag: Boolean(websiteRaw) && !hostedOn,
+    hostedOn,
     phone: t.phone || t["contact:phone"] || t["contact:mobile"] || null,
     email: t.email || t["contact:email"] || null,
     facebook: t["contact:facebook"] || null,

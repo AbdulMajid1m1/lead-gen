@@ -402,6 +402,10 @@ function OutreachComposer({ leadId, name, contacts = null, address = null, onClo
                     // never wear the green a real reply does.
                     m.kind === "BOUNCE"
                       ? "border-[color-mix(in_oklch,var(--color-critical)_35%,transparent)] bg-[color-mix(in_oklch,var(--color-critical)_7%,transparent)]"
+                      // An auto-reply is inbound but nobody has read the
+                      // message yet, so it wears the waiting colour, not green.
+                      : m.kind === "AUTO_REPLY"
+                      ? "border-[color-mix(in_oklch,var(--color-caution)_35%,transparent)] bg-[color-mix(in_oklch,var(--color-caution)_7%,transparent)]"
                       : m.direction === "INBOUND"
                       ? "border-[color-mix(in_oklch,var(--color-positive)_35%,transparent)] bg-[color-mix(in_oklch,var(--color-positive)_7%,transparent)]"
                       : "border-[var(--border)] bg-[var(--surface-raised)]")}>
@@ -409,6 +413,7 @@ function OutreachComposer({ leadId, name, contacts = null, address = null, onClo
                       <span>
                         {m.kind === "BOUNCE"
                           ? `Bounced${m.bounceType ? ` — ${m.bounceType.toLowerCase()}` : ""}${m.bounceCode ? ` (${m.bounceCode})` : ""}`
+                          : m.kind === "AUTO_REPLY" ? `Auto-reply from ${m.fromAddress || "them"} — not a real answer`
                           : m.direction === "INBOUND" ? `Reply from ${m.fromAddress || "them"}`
                           // Who pressed send, not which mailbox it left from —
                           // with a shared inbox those are different questions.

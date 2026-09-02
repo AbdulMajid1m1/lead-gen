@@ -2,9 +2,12 @@ import prisma from "../../prismaClient.js";
 import { getAccount, sendInitialEmail, sendWhatsAppForLead } from "./service.js";
 import { getWhatsAppAccount } from "./whatsapp.js";
 import { pickWhatsAppNumber } from "./phoneRank.js";
-import { sendPolicyFor, isRoleAddress, isSendBlocked } from "./sendPolicy.js";
+import { sendPolicyFor, isRoleAddress, isSendBlocked, POLICY } from "./sendPolicy.js";
 import { domainHasMx, emailLooksMangled, BROKER_DOMAIN_RE } from "./hygiene.js";
 import { buyerInboxes, inboxScore } from "./inboxFit.js";
+import { emailBelongsToPlatform } from "../verify/hostedPlatforms.js";
+import { classifyCompanyExclusion } from "../qualify/excludedCategories.js";
+import { emailMatchesName } from "../extract/people.js";
 import { bounceRate, shouldPauseForBounces, warmupDailyCap, BOUNCE_PAUSE_THRESHOLD } from "./deliverability.js";
 import { composeEmailForLead, gatherFacts, promotedProductForLead } from "../research/compose.js";
 import { toActor } from "./attribution.js";
@@ -152,16 +155,38 @@ export const sentTodayCount = (channel, senderId) =>
  * actually buys this product outranks one belonging to a department that does
  * not. Without it the behaviour is exactly as before.
  */
-export const pickEmailContact = (contacts, icp = null) => {
-  const usable = contacts.filter((c) => c.kind === "EMAIL" && !c.isSuppressed && c.roleHint !== "NON_OUTREACH");
+export const pickEmailContact = (contacts, icp = null, { people = [], countryCode = null } = {}) => {
+  const usable = contacts.filter((c) =>
+    c.kind === "EMAIL" && !c.isSuppressed && c.roleHint !== "NON_OUTREACH"
+    // Belt and braces: an address on the ordering platform or help desk whose
+    // page it was read from is never the business's, whatever it was stored as.
+    && !emailBelongsToPlatform(c.value));
   const buyer = icp ? buyerInboxes(icp) : [];
+
+  // The owner's own address beats every generic inbox — but only where a
+  // named address is lawful to cold-email. In the Gulf markets the legal
+  // basis rests on the address identifying no individual (see sendPolicy.js),
+  // so there the role mailbox stays preferred and a person's is a fallback.
+  const namedAllowed = sendPolicyFor({ countryCode, channel: "EMAIL", roleAddress: false }).policy === POLICY.ALLOWED;
+  const decisionMakers = namedAllowed
+    ? (people || []).filter((p) => p.seniority === "OWNER" || p.seniority === "EXECUTIVE")
+    : [];
+  const ownerBonus = (c) => {
+    const match = decisionMakers.find((p) =>
+      (p.email && p.email.toLowerCase() === c.value.toLowerCase()) || emailMatchesName(c.value, p.fullName));
+    if (!match) return 0;
+    return match.seniority === "OWNER" ? 4 : 3;
+  };
+
   const rank = (c) =>
     (c.confidenceLevel === "VERIFIED" ? 2 : 1)
     + (c.roleHint === "ROLE" ? 1 : 0)
     // Weighted above the two flags combined, because a verified address at the
     // wrong desk still reaches the wrong person: `admissions@` answers parents,
     // and an HR pitch dies there however well the address was proved.
-    + (icp ? inboxScore(c.value, buyer) : 0);
+    + (icp ? inboxScore(c.value, buyer) : 0)
+    // And the person who decides beats the desk that forwards.
+    + ownerBonus(c);
   return usable.sort((a, b) => rank(b) - rank(a))[0] || null;
 };
 
@@ -189,11 +214,15 @@ const LOCKED = new Set(LOCKED_LEAD_STATUSES);
  */
 export const buildRecipientRows = (leads, { wantEmail, wantWa }) => leads.map((lead) => {
   const locked = LOCKED.has(lead.status);
+  // A trade this agency does not work with. The scoring engine disqualifies
+  // these, but a lead scored before the rule existed may still read NEW until
+  // the next re-score, and this is the last gate before a message leaves.
+  const excluded = classifyCompanyExclusion(lead.company);
   // The product this lead was sourced to sell, when it was sourced to sell one
   // — its approved profile names the buyer, and the buyer decides which of the
   // company's inboxes is the right one to write to.
   const icp = lead.discoveryRun?.promotedProduct?.icp || null;
-  const email = pickEmailContact(lead.company.contacts, icp);
+  const email = pickEmailContact(lead.company.contacts, icp, { people: lead.company.people || [], countryCode: lead.company.countryCode });
   const wa = pickWhatsAppNumber(lead.company.contacts, lead.company.countryCode);
   const hasEmailThread = lead.threads.some((t) => t.channel === "EMAIL");
   const hasWaThread = lead.threads.some((t) => t.channel === "WHATSAPP");
@@ -209,6 +238,7 @@ export const buildRecipientRows = (leads, { wantEmail, wantWa }) => leads.map((l
   const waPolicy = sendPolicyFor({ countryCode: lead.company.countryCode, channel: "WHATSAPP" });
 
   const emailState = !wantEmail ? ["SKIPPED", "Channel not in this campaign."]
+    : excluded ? ["SKIPPED", `Excluded line of business (${excluded.label}: "${excluded.matched}").`]
     : isSendBlocked(emailPolicy) ? ["SKIPPED", `Cold email is not lawful in ${emailPolicy.country} (${emailPolicy.law}).`]
     : locked ? ["SKIPPED", `Lead status is ${lead.status} — locked by a human decision.`]
     : hasEmailThread ? ["SKIPPED", "Already in an email conversation."]
@@ -216,6 +246,7 @@ export const buildRecipientRows = (leads, { wantEmail, wantWa }) => leads.map((l
     : ["PENDING", email.value];
 
   const waState = !wantWa ? ["SKIPPED", "Channel not in this campaign."]
+    : excluded ? ["SKIPPED", `Excluded line of business (${excluded.label}: "${excluded.matched}").`]
     : isSendBlocked(waPolicy) ? ["SKIPPED", `Cold messaging is not lawful in ${waPolicy.country} (${waPolicy.law}).`]
     : locked ? ["SKIPPED", `Lead status is ${lead.status} — locked by a human decision.`]
     : hasWaThread ? ["SKIPPED", "Already in a WhatsApp conversation."]
@@ -267,7 +298,8 @@ export const createCampaign = async ({
   const leads = await prisma.lead.findMany({
     where: { id: { in: uniqueIds } },
     include: {
-      company: { include: { contacts: { where: { isSuppressed: false } } } },
+      // People, so the owner's own address can outrank the generic inbox.
+      company: { include: { contacts: { where: { isSuppressed: false } }, people: true } },
       // An existing conversation means this campaign must not pitch again.
       threads: { select: { channel: true } },
       // The approved profile behind a promoter lead, which names the buyer and
@@ -364,6 +396,10 @@ const attemptEmail = async (campaign, recipient) => {
     const domain = recipient.emailDetail.split("@")[1]?.toLowerCase() || "";
     if (emailLooksMangled(recipient.emailDetail) || BROKER_DOMAIN_RE.test(domain)) {
       return ["SKIPPED", "Address failed verification (malformed or broker domain)."];
+    }
+    const platform = emailBelongsToPlatform(recipient.emailDetail);
+    if (platform) {
+      return ["SKIPPED", `${recipient.emailDetail} belongs to ${platform.domain} (a ${platform.label}), not to the business.`];
     }
     if (!(await domainHasMx(domain))) {
       return ["SKIPPED", `${domain} has no mail server — the address would bounce.`];

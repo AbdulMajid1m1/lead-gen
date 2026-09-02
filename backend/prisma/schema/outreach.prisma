@@ -34,6 +34,11 @@ enum OutreachMessageKind {
   /// system said to us, and the reason text is what distinguishes "no such
   /// mailbox" from "mailbox full" from "your domain is being rejected".
   BOUNCE
+  /// A machine's answer — an out-of-office, a receipt confirmation or a help
+  /// desk's "your request has been received". Stored so the thread shows what
+  /// came back, but it never marks the thread REPLIED, never cancels a
+  /// follow-up and never moves the lead: nobody has read the message yet.
+  AUTO_REPLY
 }
 
 /// A connected mailbox used to send outreach and (optionally) poll for replies.

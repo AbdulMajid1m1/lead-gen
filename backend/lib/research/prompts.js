@@ -1,5 +1,6 @@
 import { OSM_CATEGORIES } from "../adapters/overpass.js";
 import { SIGNAL_CATALOG } from "../signals/signalCatalog.js";
+import { EXCLUDED_CATEGORIES_PROMPT } from "../qualify/excludedCategories.js";
 
 /**
  * Prompt architecture for the AI research layer.
@@ -19,7 +20,7 @@ import { SIGNAL_CATALOG } from "../signals/signalCatalog.js";
  * PROMPT_VERSION is stored on every AI-derived row, so a lead found last month
  * can still be explained by the prompt that actually produced it.
  */
-export const PROMPT_VERSION = "1.5.0";
+export const PROMPT_VERSION = "1.6.0";
 
 const INDUSTRY_KEYS = Object.keys(OSM_CATEGORIES);
 const SIGNAL_KEYS = Object.keys(SIGNAL_CATALOG);
@@ -47,7 +48,11 @@ Rules — follow all of them:
 5. exclusions list what must NOT be returned. Think carefully about the
    inversion trap: for a request like "businesses that NEED X", the companies
    that SELL X are the opposite of the target and must be excluded explicitly.
-6. Output JSON only, matching the schema exactly.`;
+6. The agency has standing exclusions that apply to every brief, whatever the
+   request says: ${EXCLUDED_CATEGORIES_PROMPT} If the request itself asks for
+   one of these trades, return an empty industries list and say so in
+   exclusions rather than planning a search for it.
+7. Output JSON only, matching the schema exactly.`;
 
 export const buildBriefUser = ({ rawQuery, deterministicParse }) => `Request: "${rawQuery}"
 
@@ -128,7 +133,8 @@ Hard rules:
 7. Returning fewer companies than the maximum — including zero — is a correct
    and expected outcome when the evidence is not there. A short, well-evidenced
    list is far more valuable than a padded one. Do not invent companies to
-   reach a target count.`;
+   reach a target count.
+8. Standing exclusion, on top of anything the brief says: ${EXCLUDED_CATEGORIES_PROMPT}`;
 
 export const buildDiscoverUser = ({ strategy, brief, region, maxCompanies = 12 }) => `Strategy: ${strategy.searchInstruction}
 
@@ -659,10 +665,10 @@ export const PROMOTE_DISCOVER_SYSTEM = `${DISCOVER_SYSTEM}
 
 You are searching on behalf of a specific software product, for companies that
 would BUY it. Two further rules follow from that:
-8. Never return the product itself, its competitors, or any company that sells
+9. Never return the product itself, its competitors, or any company that sells
    software in the same category. They are the inversion of the target — a
    payroll vendor is not a buyer of payroll software.
-9. whyMatch must name the evidence that this company fits the ideal customer
+10. whyMatch must name the evidence that this company fits the ideal customer
    profile — the hiring post, the team size, the tooling gap you actually saw on
    the page. Not that they are "a good fit for the product".`;
 
@@ -690,6 +696,7 @@ ${[
   ...(icp.disqualifiers || []),
   ...(icp.competitorsToDisplace || []).map((c) => `${c} and other vendors in this category`),
   `${product.name} itself`,
+  EXCLUDED_CATEGORIES_PROMPT,
 ].map((e) => `  - ${e}`).join("\n")}
 
 Return at most ${maxCompanies} companies.`;
@@ -774,6 +781,7 @@ ${[
   "Any individual person, reviewer, username or display name",
   "Reviews with no identifiable company behind them",
   ...(icp.disqualifiers || []),
+  EXCLUDED_CATEGORIES_PROMPT,
 ].map((e) => `  - ${e}`).join("\n")}
 
 Return at most ${maxCompanies} companies. Fewer, including none, is expected.`;

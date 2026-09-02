@@ -15,6 +15,7 @@ import { scoreCompany } from "./lib/scoring/scoreEngine.js";
 import { runCampaignTick } from "./lib/outreach/campaigns.js";
 import { runOutreachMaintenance } from "./lib/outreach/service.js";
 import { runAutopilotTick } from "./lib/outreach/autopilot.js";
+import { runContactHygiene } from "./lib/outreach/hygiene.js";
 import { resolveCompanyDomain } from "./lib/ingest/domainResolver.js";
 import { REDIS_URL, WORKER_HEALTH_PORT } from "./configs/envConfig.js";
 import { logger } from "./utils/logger.js";
@@ -67,6 +68,11 @@ const REPEATABLE = [
   { name: "prune-payloads", pattern: "0 5 * * 0" },        // weekly
   { name: "resolve-missing-domains", pattern: "45 1 * * *" }, // nightly repair
   { name: "close-orphaned-runs", pattern: "*/20 * * * *" },  // every 20 minutes
+  // Nightly, after the crawl has added the day's contacts. Until this was
+  // scheduled the sweep only ran when somebody pressed the button, so every
+  // mangled or third-party address the crawler stored between presses was
+  // sendable — nine of them were live in production on 2026-09-02.
+  { name: "contact-hygiene", pattern: "30 4 * * *" },
 ];
 
 const handlers = {
@@ -309,6 +315,9 @@ const handlers = {
     }
     return { pruned: stale.length };
   },
+
+  /** Suppress addresses that cannot be sent to: brokers, platforms, mangled, no MX. */
+  "contact-hygiene": async () => runContactHygiene({ checkMx: true }),
 };
 
 const worker = new Worker(

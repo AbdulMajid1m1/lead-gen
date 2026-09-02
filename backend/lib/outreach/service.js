@@ -2,6 +2,7 @@ import prisma from "../../prismaClient.js";
 import { sendMail } from "./mailer.js";
 import { findReplies, canReceive } from "./inbox.js";
 import { recordBounce } from "./deliverability.js";
+import { classifyAutoReply } from "./autoReply.js";
 import { sendWhatsAppText, getWhatsAppAccount, listWhatsAppAccounts } from "./whatsapp.js";
 import { resolveSignature, signatureSuffix } from "./signature.js";
 import { toActor } from "./attribution.js";
@@ -467,7 +468,10 @@ export const syncReplies = async ({ account }) => {
 
   const open = await prisma.outreachThread.findMany({
     where: { accountId: account.id, status: "AWAITING_REPLY" },
-    include: { messages: { where: { direction: "OUTBOUND" }, select: { messageId: true } } },
+    include: {
+      messages: { where: { direction: "OUTBOUND" }, select: { messageId: true } },
+      lead: { select: { id: true, status: true, company: { select: { domains: { select: { domain: true }, take: 1 } } } } },
+    },
   });
   if (!open.length) {
     await prisma.emailAccount.update({ where: { id: account.id }, data: { lastSyncAt: new Date(), lastError: null } });
@@ -500,6 +504,7 @@ export const syncReplies = async ({ account }) => {
 
   let replies = 0;
   let bounces = 0;
+  let autoReplies = 0;
   for (const hit of hits) {
     const exists = hit.messageId
       ? await prisma.outreachMessage.findFirst({ where: { messageId: hit.messageId } })
@@ -516,6 +521,21 @@ export const syncReplies = async ({ account }) => {
     if (hit.bounce?.isBounce) {
       const recorded = await recordBounce({ threadId: hit.threadId, hit, classification: hit.bounce });
       if (recorded) bounces += 1;
+      continue;
+    }
+
+    // Neither is a machine's acknowledgement. A help desk's "your request has
+    // been received" and an out-of-office both carry our Message-ID in
+    // In-Reply-To, so they match the thread exactly as a person's answer would.
+    // Recorded on the thread for the record, but the thread stays open, the
+    // follow-ups stay scheduled and the lead does not move to REPLIED.
+    const auto = classifyAutoReply({
+      from: hit.from, subject: hit.subject, body: hit.snippet || "", headers: hit.headers || "",
+      companyDomain: thread.lead?.company?.domains?.[0]?.domain || null,
+    });
+    if (auto.isAutoReply) {
+      await recordAutoReply({ thread, hit, auto });
+      autoReplies += 1;
       continue;
     }
 
@@ -545,8 +565,60 @@ export const syncReplies = async ({ account }) => {
     where: { id: account.id },
     data: { lastSyncAt: new Date(), status: "CONNECTED", lastError: null },
   });
-  logger.info({ checked: open.length, replies, bounces }, "reply sync complete");
-  return { checked: open.length, replies, bounces };
+  logger.info({ checked: open.length, replies, bounces, autoReplies }, "reply sync complete");
+  return { checked: open.length, replies, bounces, autoReplies };
+};
+
+/**
+ * Store a machine's answer without treating it as one.
+ *
+ * Two cases, told apart by who sent it. An out-of-office from the person we
+ * wrote to changes nothing: they will read the message when they are back,
+ * and the next follow-up lands then. A ticket acknowledgement from a
+ * third-party platform — Menufy's support desk answering for a restaurant —
+ * means the address was never the business's at all: it is suppressed so no
+ * follow-up chases a ticket queue, the thread is closed, and the lead is
+ * handed back with a note saying a real contact is still needed.
+ */
+const recordAutoReply = async ({ thread, hit, auto }) => {
+  await prisma.outreachMessage.create({
+    data: {
+      threadId: thread.id, direction: "INBOUND", kind: "AUTO_REPLY",
+      subject: (hit.subject || "").slice(0, 255),
+      body: `[${auto.reason}]\n\n${hit.snippet || ""}`.slice(0, 8000),
+      messageId: hit.messageId || null,
+      fromAddress: hit.from, receivedAt: hit.date,
+    },
+  });
+
+  const platform = auto.platform;
+  if (!platform) {
+    logger.info({ threadId: thread.id, kind: auto.kind, from: hit.from }, "auto-reply recorded — thread left open");
+    return;
+  }
+
+  // The address reaches a platform's queue, not the business.
+  const recipient = thread.recipientEmail.toLowerCase();
+  const reason = `Answered by ${platform.domain}'s ticket system (${auto.kind}) — a ${platform.label}, not the business.`;
+  await prisma.suppressionEntry.upsert({
+    where: { kind_value: { kind: "EMAIL", value: recipient } },
+    create: { kind: "EMAIL", value: recipient, reason: reason.slice(0, 500) },
+    update: { reason: reason.slice(0, 500) },
+  });
+  await prisma.contact.updateMany({ where: { kind: "EMAIL", value: { equals: recipient, mode: "insensitive" } }, data: { isSuppressed: true } });
+  await prisma.outreachThread.update({
+    where: { id: thread.id },
+    data: { status: "CLOSED", nextFollowUpAt: null },
+  });
+  if (thread.lead) {
+    await prisma.leadStatusHistory.create({
+      data: {
+        leadId: thread.lead.id, fromStatus: thread.lead.status, toStatus: thread.lead.status,
+        note: `${reason} ${recipient} suppressed and the thread closed. The business still needs a real contact — try the owner's own address, phone or a social profile.`.slice(0, 1000),
+      },
+    });
+  }
+  logger.warn({ threadId: thread.id, recipient, platform: platform.domain }, "auto-reply from a third-party platform — address suppressed, thread closed");
 };
 
 /**
