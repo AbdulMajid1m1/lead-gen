@@ -157,6 +157,14 @@ export const resolveCompany = async ({
  * Assert a fact about a company, attributed to the record that proves it.
  * Same (company, key, sourceRecord) → update, so re-extraction is idempotent.
  */
+/**
+ * Postgres `text` cannot hold U+0000, and a page that embeds one (a broken
+ * PDF link, a binary blob served as HTML) turned every fact from that crawl
+ * into a "unsupported Unicode escape sequence" write failure. Strip it here,
+ * on the one path every extracted fact passes through.
+ */
+const stripNul = (text) => text.replace(/\u0000/g, "");
+
 export const recordFact = async ({
   companyId,
   key,
@@ -172,12 +180,12 @@ export const recordFact = async ({
   const data = {
     companyId,
     key: key.slice(0, 100),
-    value: value === null || value === undefined ? null : String(value).slice(0, 2000),
+    value: value === null || value === undefined ? null : stripNul(String(value)).slice(0, 2000),
     valueJson,
     confidenceLevel,
     extractorName,
     extractorVersion,
-    evidenceSnippet: evidenceSnippet ? String(evidenceSnippet).slice(0, 1000) : null,
+    evidenceSnippet: evidenceSnippet ? stripNul(String(evidenceSnippet)).slice(0, 1000) : null,
     sourceRecordId,
     crawlResultId,
     extractedAt: new Date(),

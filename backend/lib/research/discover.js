@@ -133,8 +133,23 @@ export const resolveCandidates = async (runId, { exclusions = [], countryCode = 
   const candidates = await prisma.aiCandidate.findMany({ where: { runId, status: "PENDING" } });
   const stats = { matched: 0, created: 0, excluded: 0 };
 
+  // Each exclusion is matched as the phrase it is, against the candidate's
+  // name and website only. It used to be split into words and tested against
+  // the description too, so "Zoho People" on a promote run's competitor list
+  // became a bare "People" keyword — and every candidate whose evidence
+  // mentioned a People Operations or People & Culture vacancy was thrown out
+  // as if it were the competitor. Those were the strongest HR-buying signals
+  // in the whole run.
+  const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const exclusionRe = exclusions.length
-    ? new RegExp(exclusions.map((e) => String(e).split(/\s+/).filter((w) => w.length > 4).join("|")).filter(Boolean).join("|"), "i")
+    ? new RegExp(
+        exclusions
+          .map((e) => String(e || "").trim())
+          .filter((e) => e.length > 2)
+          .map((e) => `\\b${escape(e).replace(/\s+/g, "\\s+")}\\b`)
+          .join("|"),
+        "i",
+      )
     : null;
 
   for (const candidate of candidates) {
@@ -155,7 +170,7 @@ export const resolveCandidates = async (runId, { exclusions = [], countryCode = 
 
     // Honour the brief's exclusions — "businesses that need POS software" must
     // not return the companies that sell it.
-    if (exclusionRe && exclusionRe.test(`${candidate.name} ${candidate.whyMatch}`)) {
+    if (exclusionRe && exclusionRe.test(`${candidate.name} ${candidate.claimedWebsite || ""}`)) {
       await prisma.aiCandidate.update({
         where: { id: candidate.id },
         data: { status: "REJECTED_EXCLUDED", rejectedReason: "Matched an exclusion from the research brief." },

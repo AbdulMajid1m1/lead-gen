@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import { emailLooksMangled } from "../outreach/hygiene.js";
 import {
   decodeCloudflareEmail, decodeWordSeparators, normaliseForMatching,
   decodeCandidate, emailsFromMailto, emailsFromJson,
@@ -15,6 +16,28 @@ import { emailBelongsToPlatform } from "../verify/hostedPlatforms.js";
  */
 
 const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}\b/g;
+
+/**
+ * Whether a scraped string is plausibly an address somebody actually publishes.
+ *
+ * The local part and the registrable label both have to be at least two
+ * characters, and when either is that short the other must be a real word's
+ * length. "d@a.legal" fails on both; "hr@ge.ae" passes (a two-letter company
+ * on a country TLD is normal); "info@x.io" passes.
+ */
+export const looksLikePublishedAddress = (email) => {
+  const [local, domain] = String(email || "").toLowerCase().split("@");
+  if (!local || !domain) return false;
+  const labels = domain.split(".").filter(Boolean);
+  if (labels.length < 2) return false;
+  const registrable = labels[labels.length - 2];
+  if (local.length < 2 || registrable.length < 2) return false;
+  // The send-time hygiene rule already knows the other shape of this failure
+  // — a word split around an "at": "loc@ion.delivery", "civiliz@ion.in" —
+  // and there is no reason to let an address into the table that the sender
+  // would refuse to use anyway.
+  return !emailLooksMangled(email);
+};
 
 // Addresses that are never a business contact: asset filenames, tracking
 // pixels, example/placeholder text, CMS/vendor noise — and domain brokers,
@@ -270,6 +293,15 @@ export const extractContacts = (html, ctx = {}) => {
     const email = String(value).trim().toLowerCase().replace(/^mailto:/, "").split("?")[0];
     if (!email || !/^[^@]+@[^@]+\.[a-z]{2,24}$/i.test(email)) return;
     if (EMAIL_BLOCKLIST_RE.test(email)) return;
+    // Text that merely has the shape of an address. Minified scripts and
+    // concatenated prose produce fragments like "d@a.legal", "loc@ion.delivery"
+    // and "m@ter.in": a one-letter mailbox at a one- or two-letter domain on a
+    // TLD that is an ordinary English word. Nobody publishes an address like
+    // that, and five of the first thirty companies on one promote run carried
+    // one as a contact — where the sender would have picked it up and bounced.
+    // A declared address (a mailto: link, a schema.org field) is the site's
+    // own statement and is exempt, the same way it is exempt from the TLD list.
+    if (!DECLARED_METHODS.has(method) && !looksLikePublishedAddress(email)) return;
     // The TLD allowlist exists to stop prose ("...checkout.view") reading as an
     // address. It must not apply to a *declared* address — a mailto: href, a
     // Cloudflare-encoded span, a schema.org `email` field or a data- attribute

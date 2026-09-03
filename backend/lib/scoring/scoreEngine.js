@@ -181,6 +181,16 @@ export const scoreCompany = async (companyId, { searchQueryId = null, discoveryR
   if (product) {
     fitDetail = icpFit(company, product.icp);
     fit = fitDetail.points;
+    // Outside the profile's headcount band is outside the profile. Handled
+    // like the other disqualifiers above — a human-set status is kept, an
+    // existing NEW lead is parked — rather than as a low score, because a low
+    // score still ranks and still gets emailed.
+    if (fitDetail.excluded) {
+      if (company.leads[0] && company.leads[0].status === "NEW") {
+        await setStatus(company.leads[0].id, "DISQUALIFIED", `Not a fit for ${product.name}: ${fitDetail.excluded}`);
+      }
+      return { skipped: true, reason: "ICP_EXCLUDED", detail: fitDetail.excluded };
+    }
   } else {
     if (TARGET_INDUSTRY_RE.test(`${company.industry || ""} ${company.osmCategory || ""}`)) fit += 5;
     if (["MICRO", "SMALL", "MEDIUM"].includes(company.sizeBucket)) fit += 3;
@@ -260,8 +270,13 @@ export const scoreCompany = async (companyId, { searchQueryId = null, discoveryR
       freshnessScore: freshness,
       newestEvidenceAt,
       scoredAt: new Date(),
-      // Never resurrect a lead a human has already dispositioned.
-      ...(existing && ["ARCHIVED", "DISQUALIFIED"].includes(existing.status) ? { status: "NEW" } : {}),
+      // ARCHIVED is the engine's own disposition (scored below the bar on an
+      // earlier pass), so fresh evidence may lift it back to NEW. DISQUALIFIED
+      // is a person's decision — and it used to be resurrected here too, the
+      // comment above the line saying the opposite of what the line did. A
+      // school judged out of profile by hand came back as a NEW lead on the
+      // next run that touched its company.
+      ...(existing && existing.status === "ARCHIVED" ? { status: "NEW" } : {}),
       ...(searchQueryId ? { searchQueryId } : {}),
       ...(discoveryRunId ? { discoveryRunId } : {}),
     },

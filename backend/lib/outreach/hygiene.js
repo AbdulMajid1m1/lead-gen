@@ -93,7 +93,14 @@ export const emailLooksMangled = (value) => {
   const local = m[1].toLowerCase();
   const [label] = m[2].toLowerCase().split(".");
 
-  if (local.length <= 3 && !SHORT_LOCAL_ALLOW.has(local)) return true;
+  // A one-letter mailbox is never real. A two- or three-letter one usually is
+  // a split word ("wh@sapp", "d@a") — unless it sits at a domain long enough
+  // to be a company's own: "jbr@toddlertown.ae", "jlt@modernvet.com" and
+  // "cs@lulupestcontrol.ae" are branch and department inboxes that the
+  // blanket rule was throwing away, and a split word never leaves a label
+  // that long on the domain side.
+  if (local.length <= 1) return true;
+  if (local.length <= 3 && !SHORT_LOCAL_ALLOW.has(local) && label.length < 5) return true;
 
   // `inform` + `at` + `ion` is `information`; `careers` + `at` + `stripe` is
   // not a word, and `stripe` is not a word-ending, so it is left alone.

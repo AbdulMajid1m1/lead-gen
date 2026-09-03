@@ -92,6 +92,7 @@ import { buildPromotePlan } from "../lib/nlquery/planner.js";
 import { createDiscoveryRun, startDiscoveryRun } from "../lib/discovery/runner.js";
 import { ensureSource, recordSourceRecord } from "../lib/provenance/recorder.js";
 import { normalizeCompanyName } from "../utils/normalize.js";
+import { DISCOVERY_MAX_CRAWL_HOSTS } from "../configs/envConfig.js";
 
 /** VarChar limits from promoter.prisma. Writing past one is a 500, not a truncation. */
 const LIMITS = {
@@ -458,13 +459,35 @@ const importLeads = async () => {
   if (ungrounded.length) console.log(`  uncited : ${ungrounded.map((c) => c.name).join(", ")}`);
 
   // The promote plan with the steps this file has already done removed — the
-  // web search and the competitor sweep — and composition left for
-  // import-drafts, with the ordinals closed up so the runner's progress is
-  // consecutive.
+  // web search, the competitor sweep, and now the map and aggregator engines
+  // too — and composition left for import-drafts, with the ordinals closed up
+  // so the runner's progress is consecutive.
+  //
+  // The map and aggregator steps used to stay in. On a candidate import that
+  // was wrong twice over: they took minutes of the run's fixed budget before
+  // the crawler reached a single researched company, and they refilled the
+  // run with whatever OpenStreetMap had in the ICP's categories — which for
+  // one product meant the same schools the researcher had just spent an hour
+  // ruling out. A file of researched candidates *is* this run's discovery; the
+  // steps that remain exist to verify it, not to add to it. ATS_PROBE stays:
+  // it checks the researched companies' own job boards, which is corroboration.
+  const DISCOVERY_STEPS = new Set(["AI_DISCOVER", "COMPETITOR_USERS", "OVERPASS", "AGGREGATOR", "AI_COMPOSE"]);
   const full = buildPromotePlan(product);
   const steps = full.steps
-    .filter((s) => s.kind !== "AI_DISCOVER" && s.kind !== "COMPETITOR_USERS" && s.kind !== "AI_COMPOSE")
+    .filter((s) => !DISCOVERY_STEPS.has(s.kind))
     .map((s, i) => ({ ...s, ordinal: i }));
+  // The crawl ceiling follows the file rather than the plan's default of 30:
+  // a hundred researched candidates behind a thirty-host cap means seventy of
+  // them fail the existence gate for never having been fetched, and are
+  // reported as businesses that could not be shown to exist.
+  for (const step of steps) {
+    if (step.kind !== "CRAWL") continue;
+    step.params = {
+      ...step.params,
+      maxHosts: Math.min(candidates.length + 10, DISCOVERY_MAX_CRAWL_HOSTS),
+      maxResolve: Math.min(candidates.length, 25),
+    };
+  }
   const plan = { ...full, steps };
   console.log(`plan      : ${steps.length} steps (${full.steps.length - steps.length} AI steps removed) — ${steps.map((s) => s.kind).join(" → ")}`);
 

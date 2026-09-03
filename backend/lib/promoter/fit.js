@@ -151,26 +151,32 @@ export const icpFit = (company, icp) => {
   }
 
   const wanted = bucketsForRange(safe.companySize);
+  let excluded = null;
   if (company.sizeBucket && company.sizeBucket !== "UNKNOWN") {
     if (wanted.includes(company.sizeBucket)) {
       points += 5;
       reasons.push({ key: "SIZE", points: 5, text: `Its headcount band (${company.sizeBucket}) is inside the profile's range.` });
     } else {
-      // A confirmed miss is worth stating and worth costing, unlike an unknown.
-      // The 250-staff ceiling on this product's self-serve tiers is a real
-      // boundary: above it the sale is a different, longer conversation.
-      points -= 8;
-      reasons.push({ key: "SIZE", points: -8, text: `Its headcount band (${company.sizeBucket}) is outside the profile's range.` });
+      // A confirmed miss is not a weaker match, it is the profile's own
+      // boundary: the 250-staff ceiling on a self-serve tier means the sale
+      // above it is a different, longer conversation the run was not started
+      // for. Costing it a few points was not enough — with reachability and
+      // freshness a 20,000-staff school group still cleared the bar on
+      // market and industry alone, so it is a hard exclusion.
+      excluded = `Its headcount band (${company.sizeBucket}) is outside the profile's ${safe.companySize.min ?? "?"}–${safe.companySize.max ?? "?"} range.`;
+      reasons.push({ key: "SIZE", points: -FIT_CAP, text: excluded });
     }
   }
 
   return {
-    points: Math.max(0, Math.min(FIT_CAP, points)),
+    points: excluded ? 0 : Math.max(0, Math.min(FIT_CAP, points)),
     reasons,
     // Whether anything at all corroborated that this company belongs in the
     // profile. A company matching on neither market nor industry is in the run
     // because some discovery source returned it, not because the ICP asked for
     // it — and on a product run that is the definition of noise.
-    matched: reasons.some((r) => r.points > 0),
+    matched: !excluded && reasons.some((r) => r.points > 0),
+    // The one reason the profile rules a company out entirely, or null.
+    excluded,
   };
 };
