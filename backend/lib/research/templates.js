@@ -1458,6 +1458,104 @@ export const whatsappFollowUpTemplate = ({ company, serviceLabel, serviceKey, fo
   };
 };
 
+/**
+ * A product's own proof, in the order a sceptical reader wants it: a named
+ * saving first, then the risk-free way in. Everything here is read off the
+ * researched profile, never invented, and a proof point that carries a link
+ * is stripped to its claim — links wait for the second chase.
+ */
+const productProof = (product) => {
+  const points = (Array.isArray(product?.proofPoints) ? product.proofPoints : [])
+    .map((p) => stripLinks(typeof p === "string" ? p : p?.value))
+    .filter(Boolean);
+  const pick = (re) => points.find((p) => re.test(p)) || null;
+  return {
+    saving: pick(/save|saving|cheaper/i),
+    trial: pick(/free trial|no credit card|cancel anytime/i),
+    pedigree: pick(/built by|shipped to|customers/i),
+    founders: pick(/founding|founder pricing|lifetime/i),
+  };
+};
+
+/** The cheapest plan's price and reach, as one clause: "$20 a month for up to 50 staff". */
+const productEntryPrice = (product) => {
+  const plans = Array.isArray(product?.pricing) ? product.pricing : [];
+  const entry = plans.find((p) => p?.price && /\d/.test(String(p.price))) || null;
+  if (!entry) return null;
+  const price = String(entry.price).replace(/\/\s*month/i, " a month").replace(/\/mo\b/i, " a month");
+  const reach = /up to (\d+)/i.exec(String(entry.capacity || ""))?.[1];
+  return reach ? `${price} for up to ${reach} staff` : price;
+};
+
+/**
+ * Follow-ups for a promoted product. The agency chase below talks about
+ * "website development" and a portfolio piece, which is the wrong subject in
+ * an HR-software thread and, until this existed, exactly what a promoter lead
+ * received three days after the product pitch.
+ *
+ * The sequence is built on what moves a reader who did not answer the first
+ * time: the second message names the outcome rather than the feature, the
+ * third carries proof and removes the risk, the last is the breakup. Each is
+ * shorter than the one before, and none may claim anything about the reader —
+ * the pain lines quote the approved ICP, the proof quotes the product profile.
+ */
+export const productFollowUpTemplate = ({ company, product, followUpNumber, facts = [] }) => {
+  const name = productDisplayName(product) || "the product";
+  const shape = workforceShape(company, facts);
+  const pains = (Array.isArray(product?.icp?.painPoints) ? product.icp.painPoints : []).filter((p) => p?.pain);
+  const first = choosePain(product, shape);
+  // A different pain from the one the first email led with, so the chase says
+  // something new rather than repeating the pitch in other words.
+  const second = pains.find((p) => p !== first && p.productAnswer) || null;
+  const proof = productProof(product);
+  const price = productEntryPrice(product);
+  const who = company?.name || "your team";
+
+  // ── Chase 1: the outcome, not the feature ──
+  if (followUpNumber <= 1) {
+    const answer = second?.productAnswer ? asClause(firstClause(second.productAnswer)) : null;
+    const pain = second ? asClause(firstClause(second.pain)) : null;
+    return {
+      body: [
+        "Hello,",
+        pain && answer
+          ? `One thing I didn't mention: for a team like ${who}, the part people notice first is usually that ${pain} stops being anyone's job — ${name} gives you ${answer}.`
+          : `One thing I didn't mention: the part people notice first with ${name} is the hours that come back each week — the same team, without the re-keying.`,
+        price
+          ? `It stays at ${price} however the headcount moves.`
+          : null,
+        `Would a two-minute walkthrough of that be worth your time? "Yes" is enough and I'll send it.`,
+        "Best regards",
+      ].filter(Boolean).join("\n\n"),
+    };
+  }
+
+  // ── Chase 2: proof and the risk-free way in ──
+  // The first message in the sequence that may point at the product itself.
+  if (followUpNumber === 2) {
+    const lines = ["Hello,"];
+    if (proof.saving) lines.push(`Rather than describe ${name}, here is what it has meant for others: ${lowerFirst(proof.saving)}.`);
+    else if (proof.pedigree) lines.push(`Rather than describe ${name} further: ${lowerFirst(proof.pedigree)}.`);
+    else lines.push(`Rather than describe ${name} further, the fastest judge is ten minutes inside it.`);
+    if (proof.trial) lines.push(`There is nothing to commit to — ${lowerFirst(proof.trial)}.`);
+    if (proof.founders) lines.push(`${proof.founders.replace(/\.$/, "")}, which is why I'm writing now rather than later.`);
+    if (product?.proofLink || product?.url) lines.push(`Have a look here: ${product.proofLink || product.url}`);
+    lines.push(`If it isn't for ${who}, a one-word "no" is a perfectly good answer and I'll stop.`);
+    lines.push("Best regards");
+    return { body: lines.join("\n\n") };
+  }
+
+  // ── Chase 3: the breakup ──
+  return {
+    body: [
+      "Hello,",
+      `Last note from me — I won't keep writing.`,
+      `If running payroll, leave and hiring in one place ever comes up at ${who}, reply to this thread and it will reach me${product?.url ? `, or start with the trial at ${product.url}` : ""}. All the best either way.`,
+      "Best regards",
+    ].join("\n\n"),
+  };
+};
+
 export const followUpTemplate = ({ company, serviceLabel, serviceKey, followUpNumber, facts = [] }) => {
   const bilingual = ARABIC.test(company.name) || ARABIC_MARKETS.has(company.countryCode);
 

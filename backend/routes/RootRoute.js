@@ -113,6 +113,10 @@ router.put("/promoter/products/:id/icp", canPromote, writeLimiter, validate({ pa
 router.post("/promoter/products/:id/research", canPromote, discoveryLimiter, validate({ params: idParam }), promoter.researchProduct);
 router.post("/promoter/products/:id/runs", canPromote, discoveryLimiter, validate({ params: idParam, body: promoter.runLaunchSchema }), promoter.launchRun);
 router.post("/promoter/products/:id/archive", canPromote, writeLimiter, validate({ params: idParam }), promoter.archiveProduct);
+// The product's standing automation: its own mailbox, its own daily budget.
+router.get("/promoter/products/:id/autopilot", canPromote, validate({ params: idParam }), promoter.getAutopilot);
+router.put("/promoter/products/:id/autopilot", canPromote, writeLimiter, validate({ params: idParam, body: promoter.autopilotSchema }), promoter.updateAutopilot);
+router.post("/promoter/products/:id/autopilot/run", canPromote, writeLimiter, validate({ params: idParam }), promoter.runAutopilot);
 
 // ─── Leads ────────────────────────────────────────────────────────────────────
 router.get("/leads", canListLeads, validate({ query: leads.listSchema }), leads.listLeads);

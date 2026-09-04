@@ -8,6 +8,12 @@ import {
   launchPromoteRun, archivePromotedProduct,
 } from "../../lib/promoter/service.js";
 import { normalizeProductUrl } from "../../lib/promoter/productResearch.js";
+import {
+  getPromoterAutopilot, updatePromoterAutopilot, promoterAutopilotStatus, runProductAutopilot,
+  pauseProductCampaign, resumeProductCampaign,
+} from "../../lib/outreach/promoterAutopilot.js";
+import { getAccount } from "../../lib/outreach/service.js";
+import { DAILY_EMAIL_CAP } from "../../lib/outreach/campaigns.js";
 
 const logger = log("promoter");
 
@@ -298,3 +304,73 @@ export const archiveProduct = asyncHandler(async (req, res) => {
   const product = await archivePromotedProduct(existing.id);
   res.json({ success: true, message: `${product.name} archived.`, data: { product } });
 });
+
+// ─── Product autopilot ───────────────────────────────────────────────────────
+
+export const autopilotSchema = z.object({
+  enabled: z.boolean().optional(),
+  // Null hands the mailbox back to the default sender.
+  accountId: z.string().trim().min(1).max(64).nullable().optional(),
+  // Null clears the override and hands the ceiling back to the warm-up ramp.
+  dailyLimit: z.coerce.number().int().min(1).max(DAILY_EMAIL_CAP).nullable().optional(),
+  windowStart: z.coerce.number().int().min(0).max(22).optional(),
+  windowEnd: z.coerce.number().int().min(1).max(23).optional(),
+  tzOffsetMinutes: z.coerce.number().int().min(-720).max(840).optional(),
+  sendDays: z.array(z.number().int().min(0).max(6)).min(1, "Pick at least one sending day.").max(7).optional(),
+}).refine((v) => v.windowStart === undefined || v.windowEnd === undefined || v.windowEnd > v.windowStart, {
+  message: "The sending window must end after it starts.", path: ["windowEnd"],
+});
+
+const requireProduct = async (id) => {
+  const product = await getPromotedProduct(id);
+  if (!product) throw createError(404, "Product not found.");
+  return product;
+};
+
+/** GET /api/promoter/products/:id/autopilot — the switch, the mailbox, today's progress. */
+export const getAutopilot = asyncHandler(async (req, res) => {
+  await requireProduct(req.params.id);
+  res.json({ success: true, data: await promoterAutopilotStatus(req.params.id) });
+});
+
+/**
+ * PUT /api/promoter/products/:id/autopilot — change the settings, and act on
+ * the switch. Off pauses the campaign at once; on tops it up straight away so
+ * the tab shows real numbers rather than an empty state until the next tick.
+ */
+export const updateAutopilot = asyncHandler(async (req, res) => {
+  const product = await requireProduct(req.params.id);
+  if (req.body.enabled === true && !product.icpApproved) {
+    throw createError(409, "Approve the ICP before switching the autopilot on — it decides who gets written to.");
+  }
+  if (req.body.accountId) {
+    const account = await getAccount(req.body.accountId);
+    if (!account) throw createError(422, "That mailbox is not connected. Pick one from Settings → Outreach.");
+  }
+  const before = await getPromoterAutopilot(req.params.id);
+  const settings = await updatePromoterAutopilot(req.params.id, req.body);
+
+  let change = null;
+  if (before.enabled && settings.enabled === false) {
+    change = { paused: await pauseProductCampaign(req.params.id) };
+  } else if (settings.enabled) {
+    if (!before.enabled) change = { resumed: await resumeProductCampaign(req.params.id) };
+    await runProductAutopilot(req.params.id);
+  }
+
+  res.json({
+    success: true,
+    message: settings.enabled
+      ? `Autopilot is on — ${product.name} leads are sent inside the local window.`
+      : "Autopilot is off. Nothing further will be sent for this product.",
+    data: { ...(await promoterAutopilotStatus(req.params.id)), change },
+  });
+});
+
+/** POST /api/promoter/products/:id/autopilot/run — top up now rather than waiting for the tick. */
+export const runAutopilot = asyncHandler(async (req, res) => {
+  await requireProduct(req.params.id);
+  const result = await runProductAutopilot(req.params.id);
+  res.json({ success: true, data: { ...(await promoterAutopilotStatus(req.params.id)), result } });
+});
+

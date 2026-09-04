@@ -99,7 +99,7 @@ model EmailAccount {
   /// the ramp. A brand-new sending identity that opens at full volume is the
   /// classic way to land in spam on week one, so the daily cap starts small and
   /// climbs from this date instead of applying in full immediately.
-  warmupStartedAt DateTime?
+  warmupStartedAt    DateTime?
   /// Set when a human resumes a campaign the bounce guard paused. The guard
   /// counts sends from here on, so a cleaned list gets a fresh sample instead
   /// of re-tripping on the bounces it was already told about.
@@ -109,7 +109,8 @@ model EmailAccount {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
-  threads OutreachThread[]
+  threads            OutreachThread[]
+  promoterAutopilots PromoterAutopilot[]
 
   @@index([isDefault])
 }
@@ -286,6 +287,11 @@ model OutreachCampaign {
   createdBy     AdminUser? @relation("OutreachCampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   createdByName String?    @db.VarChar(160)
 
+  /// Set when a promoter autopilot owns this campaign, so it can be found again
+  /// by id rather than by name.
+  promotedProductId String?
+  promotedProduct   PromotedProduct? @relation(fields: [promotedProductId], references: [id], onDelete: SetNull)
+
   createdAt   DateTime  @default(now())
   completedAt DateTime?
 
@@ -294,6 +300,7 @@ model OutreachCampaign {
   @@index([status, createdAt])
   @@index([status, startAt])
   @@index([createdById])
+  @@index([promotedProductId])
 }
 
 model CampaignRecipient {

@@ -6,8 +6,8 @@ import { classifyAutoReply } from "./autoReply.js";
 import { sendWhatsAppText, getWhatsAppAccount, listWhatsAppAccounts } from "./whatsapp.js";
 import { resolveSignature, signatureSuffix } from "./signature.js";
 import { toActor } from "./attribution.js";
-import { followUpTemplate, whatsappFollowUpTemplate } from "../research/templates.js";
-import { gatherFacts } from "../research/compose.js";
+import { followUpTemplate, productFollowUpTemplate, whatsappFollowUpTemplate } from "../research/templates.js";
+import { gatherFacts, promotedProductForLead } from "../research/compose.js";
 import { onInitialSent, onFollowUpSent, onReplyReceived, onFollowUpsExhausted } from "./leadStatus.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
 import { log } from "../../utils/logger.js";
@@ -266,13 +266,20 @@ export const sendFollowUp = async ({ account, threadId, sentBy = null }) => {
   // Facts give the chase something new to say; a lead that vanished mid-thread
   // still gets the factless variant rather than an error.
   const gathered = await gatherFacts(thread.lead.id).catch(() => null);
-  const { body } = followUpTemplate({
-    company: thread.lead.company,
-    serviceLabel,
-    serviceKey: thread.lead.primaryOpportunity,
-    followUpNumber,
-    facts: gathered?.facts || [],
-  });
+  // A promoter lead is chased about the product it was pitched, not about the
+  // agency's services — the thread has to read as one conversation.
+  const product = await promotedProductForLead(thread.lead.id).catch(() => null);
+  const { body } = product
+    ? productFollowUpTemplate({
+        company: thread.lead.company, product, followUpNumber, facts: gathered?.facts || [],
+      })
+    : followUpTemplate({
+        company: thread.lead.company,
+        serviceLabel,
+        serviceKey: thread.lead.primaryOpportunity,
+        followUpNumber,
+        facts: gathered?.facts || [],
+      });
 
   const lastOutbound = [...thread.messages].reverse().find((m) => m.direction === "OUTBOUND");
   const subject = thread.subject.startsWith("Re:") ? thread.subject : `Re: ${thread.subject}`;

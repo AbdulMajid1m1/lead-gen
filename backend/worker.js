@@ -15,6 +15,7 @@ import { scoreCompany } from "./lib/scoring/scoreEngine.js";
 import { runCampaignTick } from "./lib/outreach/campaigns.js";
 import { runOutreachMaintenance } from "./lib/outreach/service.js";
 import { runAutopilotTick } from "./lib/outreach/autopilot.js";
+import { runPromoterAutopilotTick } from "./lib/outreach/promoterAutopilot.js";
 import { runContactHygiene } from "./lib/outreach/hygiene.js";
 import { resolveCompanyDomain } from "./lib/ingest/domainResolver.js";
 import { REDIS_URL, WORKER_HEALTH_PORT } from "./configs/envConfig.js";
@@ -56,7 +57,12 @@ const OUTREACH_REPEATABLE = [
 const outreachHandlers = {
   "outreach-campaigns": async () => runCampaignTick(),
   "outreach-maintenance": async () => runOutreachMaintenance(),
-  "outreach-autopilot": async () => runAutopilotTick(),
+  // Both standing automations on one cadence: the regional lanes for agency
+  // leads, then one campaign per promoted product from its own mailbox.
+  "outreach-autopilot": async () => ({
+    agency: await runAutopilotTick(),
+    promoter: await runPromoterAutopilotTick(),
+  }),
 };
 
 const REPEATABLE = [

@@ -7,8 +7,13 @@
  * no verified credentials. This does what the UI does, from env, on either side.
  *
  * Usage (inside the api container in production):
- *   node scripts/connect-mailbox.mjs            # create or update, then verify
- *   node scripts/connect-mailbox.mjs --dry-run  # verify credentials, write nothing
+ *   node scripts/connect-mailbox.mjs               # create or update, then verify
+ *   node scripts/connect-mailbox.mjs --dry-run     # verify credentials, write nothing
+ *   node scripts/connect-mailbox.mjs --no-default  # add a second mailbox without making it the default
+ *
+ * MAILBOX_PROVIDER=GMAIL picks Gmail's hosts (smtp/imap.gmail.com); the default
+ * is Zoho. MAILBOX_SIGNATURE_FULL_NAME (+ _TITLE, _COMPANY, _WEBSITE, _PHONE,
+ * _TAGLINE) gives the mailbox a signature of its own.
  *
  * Idempotent: re-running updates hosts and credentials in place. `warmupStartedAt`
  * is written only when the row is first created — re-running must never restart
@@ -21,6 +26,18 @@ import { verifySmtp } from "../lib/outreach/mailer.js";
 import { verifyImap } from "../lib/outreach/inbox.js";
 
 const dryRun = process.argv.includes("--dry-run");
+// A second mailbox for one product (a promoter sender) must not displace the
+// agency's default: pass --no-default and pick it per product instead.
+const keepDefault = process.argv.includes("--no-default");
+
+/**
+ * Host presets by provider, mirroring the Settings UI. Anything set explicitly
+ * in MAILBOX_SMTP_HOST / MAILBOX_IMAP_HOST still wins.
+ */
+const PRESETS = {
+  ZOHO: { smtpHost: "smtp.zoho.com", imapHost: "imap.zoho.com" },
+  GMAIL: { smtpHost: "smtp.gmail.com", imapHost: "imap.gmail.com" },
+};
 
 const required = (key) => {
   const value = process.env[key]?.trim();
@@ -34,16 +51,18 @@ const required = (key) => {
 const email = required("MAILBOX_EMAIL").toLowerCase();
 const appPassword = required("MAILBOX_APP_PASSWORD").replace(/\s+/g, "");
 
+const provider = (process.env.MAILBOX_PROVIDER?.trim() || "ZOHO").toUpperCase();
+const preset = PRESETS[provider] || PRESETS.ZOHO;
 const config = {
-  provider: "SMTP",
+  provider: provider === "GMAIL" ? "GMAIL" : "SMTP",
   email,
   displayName: process.env.MAILBOX_DISPLAY_NAME?.trim() || null,
-  smtpHost: process.env.MAILBOX_SMTP_HOST?.trim() || "smtp.zoho.com",
+  smtpHost: process.env.MAILBOX_SMTP_HOST?.trim() || preset.smtpHost,
   smtpPort: Number(process.env.MAILBOX_SMTP_PORT) || 465,
-  // Zoho's SMTP login is the address itself, so no separate user is stored.
+  // Zoho's and Gmail's SMTP login is the address itself, so no separate user is stored.
   smtpUser: null,
   authPassword: appPassword,
-  imapHost: process.env.MAILBOX_IMAP_HOST?.trim() || "imap.zoho.com",
+  imapHost: process.env.MAILBOX_IMAP_HOST?.trim() || preset.imapHost,
   imapPort: Number(process.env.MAILBOX_IMAP_PORT) || 993,
   imapUser: null,
   // Replies arrive in the same mailbox we send from, so IMAP reuses the password.
@@ -78,19 +97,45 @@ const run = async () => {
         data: { ...config, warmupStartedAt: new Date() },
       });
 
-  await prisma.emailAccount.updateMany({
-    where: { id: { not: account.id } },
-    data: { isDefault: false },
-  });
+  if (!keepDefault) {
+    await prisma.emailAccount.updateMany({
+      where: { id: { not: account.id } },
+      data: { isDefault: false },
+    });
+  }
+  // A signature of its own, so a product mailbox never signs off as the agency.
+  // Optional: MAILBOX_SIGNATURE_FULL_NAME turns it on; the rest fill the block.
+  const signatureName = process.env.MAILBOX_SIGNATURE_FULL_NAME?.trim();
+  let signatureId;
+  if (signatureName) {
+    const sigData = {
+      fullName: signatureName.slice(0, 120),
+      title: process.env.MAILBOX_SIGNATURE_TITLE?.trim().slice(0, 120) || null,
+      company: process.env.MAILBOX_SIGNATURE_COMPANY?.trim().slice(0, 120) || null,
+      website: process.env.MAILBOX_SIGNATURE_WEBSITE?.trim().slice(0, 200) || null,
+      phone: process.env.MAILBOX_SIGNATURE_PHONE?.trim().slice(0, 40) || null,
+      tagline: process.env.MAILBOX_SIGNATURE_TAGLINE?.trim().slice(0, 300) || null,
+    };
+    const sig = await prisma.signature.upsert({
+      where: { name: config.email.slice(0, 80) },
+      create: { name: config.email.slice(0, 80), ...sigData },
+      update: sigData,
+    });
+    signatureId = sig.id;
+  }
   const saved = await prisma.emailAccount.update({
     where: { id: account.id },
-    data: { isDefault: true, status: "CONNECTED", lastError: null },
+    data: {
+      status: "CONNECTED", lastError: null,
+      ...(keepDefault ? {} : { isDefault: true }),
+      ...(signatureId ? { signatureId } : {}),
+    },
   });
 
   const ramp = saved.warmupStartedAt
     ? `warm-up started ${saved.warmupStartedAt.toISOString().slice(0, 10)}`
     : "no warm-up date — this mailbox will open at the full daily cap";
-  console.log(`\n${existing ? "Updated" : "Connected"} ${saved.email} — default sender, ${ramp}.`);
+  console.log(`\n${existing ? "Updated" : "Connected"} ${saved.email} — ${saved.isDefault ? "default sender" : "not the default"}${signatureId ? ", own signature" : ""}, ${ramp}.`);
 };
 
 run()

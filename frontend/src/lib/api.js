@@ -112,6 +112,10 @@ export const api = {
   researchPromotedProduct: (id) => request(`/promoter/products/${id}/research`, { method: "POST" }),
   launchPromoterRun: (id, body) => request(`/promoter/products/${id}/runs`, { method: "POST", body }),
   archivePromotedProduct: (id) => request(`/promoter/products/${id}/archive`, { method: "POST" }),
+  // The product's own autopilot: its mailbox, budget and window.
+  promoterAutopilot: (id) => request(`/promoter/products/${id}/autopilot`),
+  updatePromoterAutopilot: (id, body) => request(`/promoter/products/${id}/autopilot`, { method: "PUT", body }),
+  runPromoterAutopilot: (id) => request(`/promoter/products/${id}/autopilot/run`, { method: "POST" }),
 
   // ─── Outreach: mailbox, sending, reply tracking, follow-ups ────────────────
   // ─── Bulk campaigns & stats ─────────────────────────────────────────────────

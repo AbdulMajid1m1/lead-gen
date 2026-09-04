@@ -63,10 +63,43 @@ model PromotedProduct {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  runs   DiscoveryRun[]
-  drafts LeadEmailDraft[]
+  runs      DiscoveryRun[]
+  drafts    LeadEmailDraft[]
+  campaigns OutreachCampaign[]
+  autopilot PromoterAutopilot?
 
   @@index([status, updatedAt])
+}
+
+/// The standing automation for one promoted product: which mailbox pitches it,
+/// how much a day, and when. One row per product, created on first read.
+/// Everything it sends goes through an ordinary AUTO campaign — the same pacing,
+/// warm-up ramp, bounce guard and legal gate as a hand-launched one.
+model PromoterAutopilot {
+  id        String          @id @default(cuid())
+  productId String          @unique
+  product   PromotedProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  /// The mailbox this product sends from; null falls back to the default sender.
+  accountId String?
+  account   EmailAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+
+  enabled         Boolean @default(false)
+  /// Null = whatever the mailbox's warm-up ramp and daily cap allow.
+  dailyLimit      Int?
+  windowStart     Int     @default(9)
+  windowEnd       Int     @default(13)
+  tzOffsetMinutes Int     @default(0)
+  /// Local weekdays, 0 = Sunday. Monday to Friday by default.
+  sendDays        Json    @default("[1, 2, 3, 4, 5]")
+
+  lastRunAt  DateTime?
+  lastResult Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([enabled])
 }
 
 /// Where a promoted product sits in the two-gate flow.

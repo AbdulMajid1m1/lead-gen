@@ -6,7 +6,7 @@ import {
   AlertTriangle, RefreshCw, Archive, Mail, MessageCircle, PenLine,
   ShieldCheck, ShieldAlert, Sparkles, Users, MapPin, Target, Ban, Swords, Wallet, Coins,
   Quote, ListChecks, Compass, Radar, Clock, Layers, FileSearch, Phone, User,
-  SlidersHorizontal, CheckSquare, Table2,
+  SlidersHorizontal, CheckSquare, Table2, Send,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageBody } from "../App.jsx";
@@ -20,6 +20,7 @@ import {
 import { DiscoveryProgress } from "../components/DiscoveryProgress.jsx";
 import EmailComposer from "../components/EmailComposer.jsx";
 import { BulkSendSheet } from "../components/BulkSendSheet.jsx";
+import PromoterAutopilotPanel from "../components/PromoterAutopilot.jsx";
 import { useAuth } from "../lib/auth.jsx";
 import { ProvenanceDrawer } from "../components/ProvenanceDrawer.jsx";
 import { COUNTRY_OPTIONS, countryLabel } from "../lib/countries.js";
@@ -73,6 +74,7 @@ const runTone = (status) =>
 
 const TABS = [
   { key: "leads", label: "Leads", icon: Table2 },
+  { key: "outreach", label: "Outreach", icon: Send },
   { key: "profile", label: "Profile & ICP", icon: Users },
   { key: "runs", label: "Runs", icon: Radar },
 ];
@@ -635,6 +637,12 @@ function ProductWorkspace({ productId, params, setParams }) {
 
       {tab === "leads" && (
         <LeadsTab productId={productId} product={product} activeRun={activeRun} onOpenTab={setTab} />
+      )}
+
+      {tab === "outreach" && (
+        <PageBody>
+          <PromoterAutopilotPanel productId={productId} product={product} onOpenTab={setTab} />
+        </PageBody>
       )}
 
       {tab === "runs" && (
