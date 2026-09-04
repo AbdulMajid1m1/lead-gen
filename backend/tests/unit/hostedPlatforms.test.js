@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { hostedPlatformFor, isHostedPlatformDomain, emailBelongsToPlatform } from "../../lib/verify/hostedPlatforms.js";
+import { hostedPlatformFor, isHostedPlatformDomain, emailBelongsToPlatform, isOwnDomainEmail, isFreemailDomain } from "../../lib/verify/hostedPlatforms.js";
 import { normalizeElement } from "../../lib/adapters/overpass.js";
 import { extractContacts } from "../../lib/extract/contacts.js";
 import { verifyDomainIdentity } from "../../lib/verify/domainIdentity.js";
@@ -84,3 +84,18 @@ describe("domain identity on a hosted platform", () => {
     expect(verdict.disqualifier).toBe("SHARED_PLATFORM");
   });
 });
+
+describe("own-domain addresses", () => {
+  it("treats a company-domain address as evidence the business has a domain", () => {
+    expect(isOwnDomainEmail("info@modacafe.com")).toBe(true);
+    expect(isOwnDomainEmail("hello@vapiano.eu")).toBe(true);
+  });
+  it("does not read a consumer mailbox or a platform desk that way", () => {
+    expect(isFreemailDomain("gmail.com")).toBe(true);
+    expect(isOwnDomainEmail("goldhawkdentalpractice@gmail.com")).toBe(false);
+    expect(isOwnDomainEmail("someone@hotmail.co.uk")).toBe(false);
+    expect(isOwnDomainEmail("info@menufy.com")).toBe(false);
+    expect(isOwnDomainEmail("not-an-address")).toBe(false);
+  });
+});
+

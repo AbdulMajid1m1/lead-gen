@@ -39,15 +39,23 @@ const hookRank = (fact) => {
 };
 
 /** The quotable facts, strongest observation first; catalogue order breaks ties. */
+/** Facts that say the business has a web presence of its own. */
+const HAS_SITE_RE = /^Its website is |^Its email is on its own domain/;
+export const factsShowWebsite = (facts) => facts.some((f) => HAS_SITE_RE.test(String(f?.text || "")));
+
 const rankedObservations = (facts) => {
   // gatherFacts always puts the identity line first, but a fact list built
   // elsewhere may not — so the first fact is set aside only when it reads as
   // one ("X is a restaurant in Jeddah"), not merely because it is first.
   const first = facts[0];
   const identity = first && / is an? /.test(first.text) && classifyObservation(first.text) === "DEFAULT" ? first : null;
+  // A stale "no website" reason must never open an email to a business whose
+  // own domain is in the same fact list — Vapiano and Moda Cafe both got one.
+  const hasWebsite = factsShowWebsite(facts);
   return facts
-    .filter((f) => f !== identity && !OPENER_BLOCKLIST.test(f.text) && !/^Its website is|^Its address is/.test(f.text))
+    .filter((f) => f !== identity && !OPENER_BLOCKLIST.test(f.text) && !/^Its website is|^Its address is|^Its email is on its own domain/.test(f.text))
     .filter((f) => classifyObservation(f.text) !== "FAST_SITE")
+    .filter((f) => !(hasWebsite && classifyObservation(f.text) === "NO_WEBSITE"))
     .map((f, index) => ({ f, index }))
     .sort((a, b) => hookRank(a.f) - hookRank(b.f) || a.index - b.index)
     .map(({ f }) => f);
@@ -735,7 +743,7 @@ const identityOpener = (company) => {
 export const initialTemplate = ({ company, facts, serviceKey, serviceLabel, recipient = null }) => {
   const copy = PITCH_COPY[serviceKey] || PITCH_COPY.CUSTOM_SOFTWARE;
   const observation = pickObservation(facts);
-  const hasWebsite = facts.some((f) => /^Its website is /.test(f.text));
+  const hasWebsite = factsShowWebsite(facts);
   const said = describeObservation(observation, company);
   let { kind } = said;
   // A lead with a verified website must never get the "can't find you online"

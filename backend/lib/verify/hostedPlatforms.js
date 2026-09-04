@@ -131,3 +131,37 @@ export const emailBelongsToPlatform = (email, companyDomain = null) => {
 /** Every platform domain, for callers that build their own filters. */
 export const HOSTED_PLATFORM_DOMAINS = new Set(byDomain.keys());
 export const __testables = { PLATFORMS, HELPDESK_DOMAINS };
+
+/**
+ * Consumer mailbox providers. An address here says nothing about whether the
+ * business has a website; an address anywhere else is a domain the business
+ * controls, which is the strongest evidence short of a crawl that it does.
+ */
+const FREEMAIL_DOMAINS = new Set([
+  "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.uk", "yahoo.fr", "yahoo.de", "ymail.com",
+  "hotmail.com", "hotmail.co.uk", "hotmail.fr", "hotmail.de", "outlook.com", "outlook.co.uk",
+  "live.com", "live.co.uk", "msn.com", "icloud.com", "me.com", "mac.com", "aol.com",
+  "protonmail.com", "proton.me", "pm.me", "gmx.com", "gmx.de", "gmx.net", "web.de",
+  "mail.com", "yandex.com", "yandex.ru", "zoho.com", "zohomail.com", "btinternet.com",
+  "sky.com", "talktalk.net", "virginmedia.com", "blueyonder.co.uk", "ntlworld.com",
+  "emirates.net.ae", "eim.ae", "hotmail.sa", "yahoo.sa",
+]);
+
+export const isFreemailDomain = (host) => FREEMAIL_DOMAINS.has(String(host || "").toLowerCase().trim());
+
+/** The host of an address, or null when it is not an address. */
+export const emailHost = (email) => {
+  const at = String(email || "").lastIndexOf("@");
+  return at < 0 ? null : String(email).slice(at + 1).toLowerCase().trim() || null;
+};
+
+/**
+ * Whether an address sits on a domain the business itself controls: not a
+ * consumer mailbox and not a hosted platform or help desk.
+ */
+export const isOwnDomainEmail = (email) => {
+  const host = emailHost(email);
+  if (!host) return false;
+  return !isFreemailDomain(host) && emailBelongsToPlatform(email) === null;
+};
+

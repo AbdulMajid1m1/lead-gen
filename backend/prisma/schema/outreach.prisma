@@ -100,6 +100,10 @@ model EmailAccount {
   /// classic way to land in spam on week one, so the daily cap starts small and
   /// climbs from this date instead of applying in full immediately.
   warmupStartedAt DateTime?
+  /// Set when a human resumes a campaign the bounce guard paused. The guard
+  /// counts sends from here on, so a cleaned list gets a fresh sample instead
+  /// of re-tripping on the bounces it was already told about.
+  bounceGuardResetAt DateTime?
 
   lastSyncAt DateTime?
   createdAt  DateTime  @default(now())

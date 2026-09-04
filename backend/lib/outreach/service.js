@@ -60,7 +60,10 @@ const domainOf = (email) => String(email).split("@")[1]?.toLowerCase() || "";
  * goes through here.
  */
 export const sendIsBlocked = async ({ lead, recipientEmail }) => {
-  if (["DO_NOT_CONTACT", "ARCHIVED"].includes(lead.status)) {
+  // The same locked set the campaign builder uses. A follow-up used to check
+  // only the first two, so a lead disqualified after the first email still got
+  // chased three days later.
+  if (["DO_NOT_CONTACT", "ARCHIVED", "DISQUALIFIED", "NOT_INTERESTED", "CONVERTED"].includes(lead.status)) {
     return `Lead status is ${lead.status}.`;
   }
   const suppressed = await prisma.suppressionEntry.findFirst({

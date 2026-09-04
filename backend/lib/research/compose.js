@@ -11,6 +11,7 @@ import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
 import { AI_FAST_MODEL, AI_COMPOSE_MAX_LEADS, PROMOTER_MAX_LEADS_PER_RUN } from "../../configs/envConfig.js";
 import { relativeAge } from "../scoring/decay.js";
 import { emailMatchesName, isGreetableName, looksLikeJobTitle } from "../extract/people.js";
+import { isOwnDomainEmail, emailHost } from "../verify/hostedPlatforms.js";
 import { log } from "../../utils/logger.js";
 
 /** Leads per AI call. The system prompt is paid once per chunk, not per lead. */
@@ -130,6 +131,14 @@ export const gatherFacts = async (leadId, { forProduct = false } = {}) => {
 
   add(`${c.name} is a ${humanIndustry(c.industry)}${c.city ? ` in ${c.city}` : ""}.`, "VERIFIED", c.firstSeenAt);
   if (c.domains[0]) add(`Its website is ${c.domains[0].domain}.`, "VERIFIED", c.lastCrawledAt);
+  // No domain on file, but the address we hold is on one the business owns:
+  // Moda Cafe was told it had "no website at all" at info@modacafe.com. The
+  // fact is never quoted as an opener; it exists so the template knows a
+  // "no website" premise is off the table.
+  const ownDomainEmail = !c.domains[0]
+    ? c.contacts.find((x) => x.kind === "EMAIL" && x.roleHint !== "NON_OUTREACH" && isOwnDomainEmail(x.value))
+    : null;
+  if (ownDomainEmail) add(`Its email is on its own domain, ${emailHost(ownDomainEmail.value)}.`, "VERIFIED", null);
   if (addressIsUsable(c.locations[0]?.addressLine)) add(`Its address is ${c.locations[0].addressLine}.`, "VERIFIED", null);
 
   for (const reason of lead.reasons) {

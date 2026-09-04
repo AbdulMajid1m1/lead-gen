@@ -636,6 +636,19 @@ export const setCampaignStatus = async (campaignId, status) => {
     return { ok: false, error: "This campaign has not started yet — start it now or cancel it instead." };
   }
   const startingEarly = campaign.status === "SCHEDULED" && status === "RUNNING";
+  // Resuming a campaign the bounce guard stopped is the human saying "the
+  // addresses are cleaned". The guard's sample restarts from now on that
+  // mailbox; otherwise the bounces it already reported re-pause the campaign
+  // on the very next tick, for as long as they sit inside the 30-day window.
+  const resumingAfterBounces =
+    campaign.status === "PAUSED" && status === "RUNNING" && /^Paused automatically/.test(campaign.pausedReason || "");
+  if (resumingAfterBounces) {
+    const account = await getAccount(campaign.accountId);
+    if (account) {
+      await prisma.emailAccount.update({ where: { id: account.id }, data: { bounceGuardResetAt: new Date() } });
+      logger.info({ campaignId, accountId: account.id }, "bounce guard sample reset by resume");
+    }
+  }
 
   if (status === "CANCELLED") {
     // Pending rows are closed out so the numbers still add up afterwards.

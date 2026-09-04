@@ -22,6 +22,28 @@ describe("initialTemplate coherence", () => {
     expect(draft.body).toMatch(/no website at all/);
   });
 
+  it("a stale no-website reason never opens an email to a business whose own domain is on file", () => {
+    // Moda Cafe: no CompanyDomain row, but the address was info@modacafe.com —
+    // and the email told them they had "no website at all".
+    const draft = initialTemplate({
+      company,
+      facts: [fact(1, "Bright Dental is a dental clinic in London.", "VERIFIED"),
+        fact(2, "Its email is on its own domain, brightdental.co.uk.", "VERIFIED"),
+        fact(3, "Bright Dental is listed as an operating business with contact details but has no website at all.")],
+      serviceKey: "WEBSITE_DEV", serviceLabel: "website development",
+    });
+    expect(draft.body).not.toMatch(/no website|can't find|own domain/i);
+    // Same with a verified website fact and the stale reason still ranked first.
+    const withSite = initialTemplate({
+      company,
+      facts: [fact(1, "Bright Dental is a dental clinic in London.", "VERIFIED"),
+        fact(2, "Bright Dental is listed as an operating business with contact details but has no website at all."),
+        fact(3, "Its website is brightdental.co.uk.", "VERIFIED")],
+      serviceKey: "WEBSITE_DEV", serviceLabel: "website development",
+    });
+    expect(withSite.body).not.toMatch(/no website|can't find/i);
+  });
+
   it("slow-site lead gets a speed subject and a speed pain, not an invisibility pitch", () => {
     const draft = initialTemplate({
       company,

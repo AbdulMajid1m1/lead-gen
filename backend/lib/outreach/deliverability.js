@@ -222,7 +222,18 @@ export const MIN_SAMPLE_BEFORE_PAUSE = 20;
  *   can refuse to act on too little evidence.
  */
 export const bounceRate = async ({ accountId = null, sinceDays = 30 } = {}) => {
-  const since = new Date(Date.now() - Math.max(1, sinceDays) * DAY_MS);
+  let since = new Date(Date.now() - Math.max(1, sinceDays) * DAY_MS);
+  // A human who resumed after the guard tripped has, by doing so, said the
+  // list was cleaned. Counting the same two bounces again on the next tick
+  // would pause the campaign for a month on a sample nobody can grow — every
+  // send after the reset is the evidence the guard should be reading.
+  if (accountId) {
+    const account = await prisma.emailAccount.findUnique({
+      where: { id: accountId }, select: { bounceGuardResetAt: true },
+    });
+    const reset = account?.bounceGuardResetAt ? new Date(account.bounceGuardResetAt) : null;
+    if (reset && reset > since) since = reset;
+  }
   const thread = accountId ? { channel: "EMAIL", accountId } : { channel: "EMAIL" };
 
   const [sent, bounced] = await Promise.all([
