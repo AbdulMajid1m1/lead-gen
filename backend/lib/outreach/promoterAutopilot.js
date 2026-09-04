@@ -1,6 +1,7 @@
 import prisma from "../../prismaClient.js";
-import { buildRecipientRows, LOCKED_LEAD_STATUSES, DAILY_EMAIL_CAP } from "./campaigns.js";
+import { buildRecipientRows, LOCKED_LEAD_STATUSES, DAILY_EMAIL_CAP, pickEmailContact } from "./campaigns.js";
 import { getAccount } from "./service.js";
+import { sendPolicyFor, isRoleAddress, POLICY } from "./sendPolicy.js";
 import { warmupDailyCap, WARMUP_DAYS } from "./deliverability.js";
 import { log } from "../../utils/logger.js";
 
@@ -70,13 +71,34 @@ export const productBudget = ({ settings, ceiling }) => {
 };
 
 /**
+ * Whether an unattended send to this lead is admissible under the product's
+ * restricted-market policy. The address judged is the one `buildRecipientRows`
+ * will actually pick — the ICP's buyer inbox — so the verdict is about the
+ * mailbox that gets written to. Mirrors the agency autopilot's rule: a
+ * RESTRICTED market (UAE, Saudi) is sendable unattended only where the address
+ * identifies no individual, unless a person chose otherwise.
+ */
+export const productEmailAdmissible = (lead, restrictedPolicy = "ROLE_ONLY") => {
+  const company = lead.company || {};
+  const icp = lead.discoveryRun?.promotedProduct?.icp || null;
+  const contact = pickEmailContact(company.contacts || [], icp, { people: company.people || [], countryCode: company.countryCode });
+  if (!contact) return false;
+  const verdict = sendPolicyFor({ countryCode: company.countryCode, channel: "EMAIL", roleAddress: isRoleAddress(contact) });
+  if (verdict.policy === POLICY.BLOCKED) return false;
+  if (restrictedPolicy === "SEND") return true;
+  if (restrictedPolicy === "ROLE_ONLY") return verdict.policy === POLICY.ALLOWED;
+  // HOLD: only markets that are open regardless of the address.
+  return sendPolicyFor({ countryCode: company.countryCode, channel: "EMAIL", roleAddress: false }).policy === POLICY.ALLOWED;
+};
+
+/**
  * Leads this product could still pitch: sourced by one of its runs, not locked
  * by a human, not already in a conversation, and with an address the legal
  * gate will accept — `buildRecipientRows` makes that last call, through the
  * same code a hand-launched campaign uses.
  */
-export const eligibleProductLeads = async ({ productId, excludeLeadIds = [], take = 300 }) =>
-  prisma.lead.findMany({
+export const eligibleProductLeads = async ({ productId, restrictedPolicy = "ROLE_ONLY", excludeLeadIds = [], take = 300 }) => {
+  const leads = await prisma.lead.findMany({
     where: {
       status: { notIn: LOCKED_LEAD_STATUSES },
       threads: { none: {} },
@@ -91,6 +113,8 @@ export const eligibleProductLeads = async ({ productId, excludeLeadIds = [], tak
     orderBy: [{ score: "desc" }, { createdAt: "asc" }],
     take,
   });
+  return leads.filter((lead) => productEmailAdmissible(lead, restrictedPolicy));
+};
 
 /** The product's standing campaign, whatever state it is in. */
 export const findProductCampaign = (productId) =>
@@ -128,7 +152,7 @@ export const runProductAutopilot = async (productId, now = new Date()) => {
   const existingIds = campaign
     ? (await prisma.campaignRecipient.findMany({ where: { campaignId: campaign.id }, select: { leadId: true } })).map((r) => r.leadId)
     : [];
-  const leads = await eligibleProductLeads({ productId, excludeLeadIds: existingIds });
+  const leads = await eligibleProductLeads({ productId, restrictedPolicy: settings.restrictedPolicy, excludeLeadIds: existingIds });
   const rows = buildRecipientRows(leads, { wantEmail: true, wantWa: false });
   const sendable = rows.filter((r) => r.emailState === "PENDING");
 
@@ -278,6 +302,7 @@ export const promoterAutopilotStatus = async (productId, now = new Date()) => {
     settings: {
       enabled: settings.enabled,
       accountId: settings.accountId,
+      restrictedPolicy: settings.restrictedPolicy,
       dailyLimit: settings.dailyLimit,
       windowStart: settings.windowStart,
       windowEnd: settings.windowEnd,

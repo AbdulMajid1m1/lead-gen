@@ -84,14 +84,18 @@ model PromoterAutopilot {
   accountId String?
   account   EmailAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
 
-  enabled         Boolean @default(false)
+  enabled          Boolean @default(false)
+  /// What to do in consent-based markets (UAE, Saudi, …) where the legal gate
+  /// says RESTRICTED: ROLE_ONLY writes only to mailboxes that identify no
+  /// individual, HOLD skips them, SEND treats them as sendable.
+  restrictedPolicy String  @default("ROLE_ONLY") @db.VarChar(20)
   /// Null = whatever the mailbox's warm-up ramp and daily cap allow.
-  dailyLimit      Int?
-  windowStart     Int     @default(9)
-  windowEnd       Int     @default(13)
-  tzOffsetMinutes Int     @default(0)
+  dailyLimit       Int?
+  windowStart      Int     @default(9)
+  windowEnd        Int     @default(13)
+  tzOffsetMinutes  Int     @default(0)
   /// Local weekdays, 0 = Sunday. Monday to Friday by default.
-  sendDays        Json    @default("[1, 2, 3, 4, 5]")
+  sendDays         Json    @default("[1, 2, 3, 4, 5]")
 
   lastRunAt  DateTime?
   lastResult Json?

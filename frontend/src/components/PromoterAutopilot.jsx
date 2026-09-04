@@ -24,6 +24,12 @@ const TZ_OPTIONS = [
   { value: -300, label: "New York (UTC-5)" },
 ];
 
+const RESTRICTED_COPY = {
+  ROLE_ONLY: "Role mailboxes only in consent-based markets (hr@, careers@, info@) — they identify no individual.",
+  HOLD: "Consent-based markets are skipped entirely. Only the opt-out markets are written to.",
+  SEND: "Consent-based markets are treated as sendable. Highest volume, highest exposure.",
+};
+
 const Labelled = ({ label, hint, help, children }) => (
   <label className="block">
     <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-subtle)]">
@@ -219,6 +225,14 @@ export default function PromoterAutopilotPanel({ productId, product, onOpenTab }
                 {Array.from({ length: 23 }, (_, h) => h + 1).map((h) => <option key={h} value={h}>{pad(h)}:00</option>)}
               </Select>
             </div>
+          </Labelled>
+
+          <Labelled label="Restricted markets" hint="(UAE, Saudi, Gulf)" help={RESTRICTED_COPY[s.restrictedPolicy] || RESTRICTED_COPY.ROLE_ONLY}>
+            <Select value={s.restrictedPolicy || "ROLE_ONLY"} disabled={busy} onChange={(e) => patch({ restrictedPolicy: e.target.value })}>
+              <option value="ROLE_ONLY">Role mailboxes only</option>
+              <option value="HOLD">Skip entirely</option>
+              <option value="SEND">Send to all</option>
+            </Select>
           </Labelled>
 
           <Labelled label="Time zone" help="Where most of this product's leads are.">

@@ -311,6 +311,7 @@ export const autopilotSchema = z.object({
   enabled: z.boolean().optional(),
   // Null hands the mailbox back to the default sender.
   accountId: z.string().trim().min(1).max(64).nullable().optional(),
+  restrictedPolicy: z.enum(["ROLE_ONLY", "HOLD", "SEND"]).optional(),
   // Null clears the override and hands the ceiling back to the warm-up ramp.
   dailyLimit: z.coerce.number().int().min(1).max(DAILY_EMAIL_CAP).nullable().optional(),
   windowStart: z.coerce.number().int().min(0).max(22).optional(),

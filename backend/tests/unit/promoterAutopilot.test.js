@@ -93,3 +93,29 @@ describe("productFollowUpTemplate", () => {
     expect(productFollowUpTemplate({ company, product: { name: "Acme" }, followUpNumber: 2 }).body).toMatch(/ten minutes inside it/);
   });
 });
+
+describe("productEmailAdmissible", () => {
+  const lead = (countryCode, local, roleHint = null, icp = null) => ({
+    company: {
+      countryCode,
+      contacts: [{ kind: "EMAIL", value: `${local}@example.ae`, isSuppressed: false, roleHint, confidenceLevel: "VERIFIED" }],
+      people: [],
+    },
+    discoveryRun: { promotedProduct: { icp } },
+  });
+
+  it("writes to an HR mailbox in the UAE under ROLE_ONLY, but not to a named person", async () => {
+    const { productEmailAdmissible } = await import("../../lib/outreach/promoterAutopilot.js");
+    expect(productEmailAdmissible(lead("AE", "hr", "ROLE"), "ROLE_ONLY")).toBe(true);
+    expect(productEmailAdmissible(lead("AE", "ahmed", "PERSONAL"), "ROLE_ONLY")).toBe(false);
+    expect(productEmailAdmissible(lead("AE", "ahmed", "PERSONAL"), "SEND")).toBe(true);
+    expect(productEmailAdmissible(lead("AE", "hr", "ROLE"), "HOLD")).toBe(false);
+  });
+
+  it("never writes into an opt-in market, and never without an address", async () => {
+    const { productEmailAdmissible } = await import("../../lib/outreach/promoterAutopilot.js");
+    expect(productEmailAdmissible(lead("DE", "hr", "ROLE"), "SEND")).toBe(false);
+    expect(productEmailAdmissible({ company: { countryCode: "GB", contacts: [] } }, "SEND")).toBe(false);
+    expect(productEmailAdmissible(lead("GB", "ahmed", "PERSONAL"), "HOLD")).toBe(true);
+  });
+});
