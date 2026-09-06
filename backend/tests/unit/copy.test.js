@@ -138,6 +138,30 @@ describe("follow-ups add new value", () => {
 });
 
 describe("whatsapp first touch", () => {
+  it("never says the company name twice in one sentence", () => {
+    const { body } = whatsappInitialTemplate({
+      company,
+      facts: [fact(1, "Bright Dental is a dental clinic in London.", "VERIFIED"),
+        fact(2, "Bright Dental is listed as an operating business with contact details but has no website at all.")],
+      serviceLabel: "website development",
+    });
+    expect(body.match(/Bright Dental/g)).toHaveLength(1);
+    expect(body).toMatch(/I noticed you're listed/);
+    // The sentence still has a subject after the name is taken out.
+    expect(body).not.toMatch(/I noticed is /);
+  });
+
+  it("leaves a hook it cannot re-word to the reader alone, name and all", () => {
+    const { body } = whatsappInitialTemplate({
+      company,
+      facts: [fact(1, "Bright Dental is a dental clinic in London.", "VERIFIED"),
+        fact(2, "The home page took 5.5s to respond.")],
+      serviceLabel: "website development",
+    });
+    expect(body).toMatch(/takes 5.5s to load/);
+    expect(body).not.toMatch(/undefined|you run |I noticed is/);
+  });
+
   it("dropped the 'I came across' tell", () => {
     const { body } = whatsappInitialTemplate({ company, facts: [fact(1, "x", "VERIFIED"), fact(2, "The site runs WordPress 7.1.")], serviceLabel: "website development" });
     expect(body).not.toMatch(/I came across/);

@@ -1630,11 +1630,25 @@ export const followUpTemplate = ({ company, serviceLabel, serviceKey, followUpNu
 export const whatsappInitialTemplate = ({ company, facts = [], serviceLabel }) => {
   const observation = pickObservation(facts);
   const said = observation ? describeObservation(observation, company) : { line: null };
-  const hook = said.line
-    ? ` — I noticed ${said.line}`
-    : observation?.text
-      ? ` — I noticed ${lowerFirst(observation.text).replace(/\.$/, "")}`
-      : "";
+  const raw = said.line
+    || (observation?.text ? lowerFirst(observation.text).replace(/\.$/, "") : null);
+
+  // Several observation lines open with the company's own name, and the
+  // greeting has just said it: "Quick note about Bryan & Keegan — I noticed
+  // Bryan & Keegan is listed online…" reads as a mail merge inside one
+  // sentence. Addressing the reader directly fixes it, but only where the
+  // sentence is "<name> is …": every other shape needs a different verb form
+  // ("<name> runs on appointments" → "you run"), and a wrong verb reads worse
+  // to a stranger than a repeated name, so those are left alone.
+  const name = String(company.name || "");
+  const afterName = name && raw && raw.toLowerCase().startsWith(name.toLowerCase())
+    ? raw.slice(name.length).replace(/^[\s,—-]+/, "")
+    : null;
+  const deduped = afterName && /^is\s/i.test(afterName)
+    ? `you're ${afterName.replace(/^is\s+/i, "")}`
+    : raw;
+
+  const hook = deduped ? ` — I noticed ${deduped}` : "";
   return {
     body:
       `Hello! Quick note about ${company.name}${hook}. `
