@@ -256,13 +256,18 @@ model OutreachCampaign {
   accountId   String? // sending mailbox; null = the default account at send time
   waAccountId String? // sending device;  null = the default device at send time
 
-  status      CampaignStatus @default(RUNNING)
-  paceSeconds Int            @default(45)
-  lastSentAt  DateTime?
+  status       CampaignStatus @default(RUNNING)
+  paceSeconds  Int            @default(45)
+  /// Pacing clocks, one per channel, so an email send never delays a WhatsApp.
+  lastSentAt   DateTime?
+  waLastSentAt DateTime?
 
   mode            CampaignMode @default(DIRECT)
   /// AUTO only: max leads reached per local day. Null = the mode's default.
+  /// One budget per channel: the two reach different businesses and must not
+  /// spend each other's quota.
   dailyLimit      Int?
+  waDailyLimit    Int?
   /// AUTO only: local hours window sends are allowed in (start inclusive,
   /// end exclusive), interpreted with tzOffsetMinutes.
   windowStart     Int          @default(9)
@@ -316,6 +321,13 @@ model CampaignRecipient {
   waState     CampaignSendState @default(PENDING)
   waDetail    String?           @db.VarChar(300)
 
+  /// When each channel last acted on this row. `processedAt` is "last touched
+  /// by anything" and drives the UI; the per-channel stamps are what the daily
+  /// quota counts, so a WhatsApp send today cannot make yesterday's email look
+  /// as though it went out today.
+  emailProcessedAt DateTime?
+  waProcessedAt    DateTime?
+
   processedAt DateTime?
 
   @@unique([campaignId, leadId])
@@ -347,17 +359,20 @@ model OutreachAutopilot {
   ///   hand-launched campaign does today.
   restrictedPolicy String @default("ROLE_ONLY") @db.VarChar(20)
 
-  /// Leads per local day across every lane combined. Null = whatever the
-  /// sender's warm-up ramp and daily cap currently allow.
-  dailyLimit  Int?
+  /// Leads per local day across every lane combined, one figure per channel.
+  /// Null = whatever that sender's warm-up ramp and daily cap currently allow.
+  /// Separate because email and WhatsApp reach different businesses: the
+  /// WhatsApp lane works the leads that have a number and no usable address.
+  dailyLimit   Int?
+  waDailyLimit Int?
   /// Local hours each lane may send in. Four hours rather than the classic
   /// two-hour 9–11 peak because the drain sends at most one message per minute:
   /// a 40-a-day quota in a two-hour window has no slack for a slow tick.
-  windowStart Int  @default(9)
-  windowEnd   Int  @default(13)
+  windowStart  Int  @default(9)
+  windowEnd    Int  @default(13)
   /// Local weekdays lanes may send on (0 = Sunday). Tuesday–Thursday by
   /// default — Monday and Friday reply worst on cold B2B email.
-  sendDays    Json @default("[2, 3, 4]")
+  sendDays     Json @default("[2, 3, 4]")
 
   lastRunAt  DateTime?
   /// What the last tick did, for the settings panel to show without needing

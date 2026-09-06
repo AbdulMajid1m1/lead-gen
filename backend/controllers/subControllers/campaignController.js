@@ -299,6 +299,9 @@ export const autopilotSchema = z.object({
   restrictedPolicy: z.enum(["ROLE_ONLY", "HOLD", "SEND"]).optional(),
   // Null clears the override and hands the ceiling back to the warm-up ramp.
   dailyLimit: z.coerce.number().int().min(MIN_DAILY_LIMIT).max(DAILY_EMAIL_CAP).nullable().optional(),
+  // WhatsApp carries its own figure: a banned number is permanent, so it is
+  // held to the device's cap rather than the mailbox's.
+  waDailyLimit: z.coerce.number().int().min(MIN_DAILY_LIMIT).max(DAILY_WA_CAP).nullable().optional(),
   windowStart: z.coerce.number().int().min(0).max(22).optional(),
   windowEnd: z.coerce.number().int().min(1).max(23).optional(),
   sendDays: z.array(z.number().int().min(0).max(6)).min(1, "Pick at least one sending day.").max(7).optional(),

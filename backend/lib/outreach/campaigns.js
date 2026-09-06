@@ -8,7 +8,9 @@ import { buyerInboxes, inboxScore } from "./inboxFit.js";
 import { emailBelongsToPlatform } from "../verify/hostedPlatforms.js";
 import { classifyCompanyExclusion } from "../qualify/excludedCategories.js";
 import { emailMatchesName } from "../extract/people.js";
-import { bounceRate, shouldPauseForBounces, warmupDailyCap, BOUNCE_PAUSE_THRESHOLD } from "./deliverability.js";
+import {
+  bounceRate, shouldPauseForBounces, warmupDailyCap, whatsappWarmupDailyCap, BOUNCE_PAUSE_THRESHOLD,
+} from "./deliverability.js";
 import { composeEmailForLead, gatherFacts, promotedProductForLead } from "../research/compose.js";
 import { toActor } from "./attribution.js";
 import { whatsappInitialTemplate } from "../research/templates.js";
@@ -114,9 +116,14 @@ export const isFutureStart = (startAt, now = new Date()) =>
  * AUTO gap between sends: the day's quota spread evenly across the window,
  * jittered ±25% so the cadence never looks machine-regular to a spam filter.
  */
-export const autoGapSeconds = (campaign, rand = Math.random()) => {
+export const autoGapSeconds = (campaign, channel = "EMAIL", rand = Math.random()) => {
   const windowSeconds = Math.max(1, campaign.windowEnd - campaign.windowStart) * 3600;
-  const base = windowSeconds / Math.max(1, campaign.dailyLimit || AUTO_DEFAULT_DAILY_LIMIT);
+  // Each channel spreads its own quota across the window. Sharing one gap
+  // would pace the busier channel by the quieter one's budget.
+  const limit = channel === "WHATSAPP"
+    ? (campaign.waDailyLimit || campaign.dailyLimit || AUTO_DEFAULT_DAILY_LIMIT)
+    : (campaign.dailyLimit || AUTO_DEFAULT_DAILY_LIMIT);
+  const base = windowSeconds / Math.max(1, limit);
   return Math.max(60, Math.round(base * (0.75 + rand * 0.5)));
 };
 
@@ -127,15 +134,21 @@ export const startOfLocalToday = (tzOffsetMinutes, now = new Date()) => {
   return new Date(shifted.getTime() - tzOffsetMinutes * 60_000);
 };
 
-/** Leads this campaign has actually reached since its local midnight. */
-const campaignSentToday = (campaign, now = new Date()) =>
-  prisma.campaignRecipient.count({
-    where: {
-      campaignId: campaign.id,
-      processedAt: { gte: startOfLocalToday(campaign.tzOffsetMinutes, now) },
-      OR: [{ emailState: "SENT" }, { waState: "SENT" }],
-    },
+/**
+ * Messages this campaign has sent on one channel since its local midnight.
+ *
+ * Counted from that channel's own processed stamp. A shared stamp made the two
+ * channels spend one quota: a WhatsApp message today re-dated an email sent
+ * yesterday, and the day's email budget read as already gone.
+ */
+export const campaignSentToday = (campaign, channel = "EMAIL", now = new Date()) => {
+  const since = { gte: startOfLocalToday(campaign.tzOffsetMinutes, now) };
+  return prisma.campaignRecipient.count({
+    where: channel === "WHATSAPP"
+      ? { campaignId: campaign.id, waState: "SENT", waProcessedAt: since }
+      : { campaignId: campaign.id, emailState: "SENT", emailProcessedAt: since },
   });
+};
 
 /** How many messages an account/device has sent since midnight. */
 export const sentTodayCount = (channel, senderId) =>
@@ -271,7 +284,7 @@ export const buildRecipientRows = (leads, { wantEmail, wantWa }) => leads.map((l
  */
 export const createCampaign = async ({
   name, leadIds, channels, accountId = null, waAccountId = null, paceSeconds = 45,
-  mode = "DIRECT", dailyLimit = null, windowStart = 9, windowEnd = 18, tzOffsetMinutes = 0,
+  mode = "DIRECT", dailyLimit = null, waDailyLimit = null, windowStart = 9, windowEnd = 18, tzOffsetMinutes = 0,
   sendDays = null, startAt = null,
   createdBy = null,
 }) => {
@@ -329,6 +342,9 @@ export const createCampaign = async ({
       paceSeconds: Math.max(20, Math.min(600, paceSeconds)),
       mode,
       dailyLimit: mode === "AUTO" ? (dailyLimit || AUTO_DEFAULT_DAILY_LIMIT) : null,
+      // WhatsApp gets its own budget. Falling back to the email figure keeps a
+      // campaign launched before the split behaving exactly as it did.
+      waDailyLimit: mode === "AUTO" ? (waDailyLimit || dailyLimit || AUTO_DEFAULT_DAILY_LIMIT) : null,
       windowStart, windowEnd, tzOffsetMinutes,
       // "Every day" is left NULL (the column default) so an old row and a new
       // every-day row read the same way. Omitted rather than set to null:
@@ -442,8 +458,15 @@ const attemptWhatsApp = async (campaign, recipient) => {
     const device = await getWhatsAppAccount(campaign.waAccountId);
     if (!device) return ["FAILED", "The sending device is gone or unpaired."];
 
-    if ((await sentTodayCount("WHATSAPP", device.id)) >= DAILY_WA_CAP) {
-      return ["PENDING", `Daily cap of ${DAILY_WA_CAP} reached — resumes tomorrow.`];
+    // A number still in its ramp sends far less than the configured cap, and
+    // the two messages are kept distinct for the same reason as email: an
+    // operator who reads "cap reached" after five messages turns pacing off.
+    const rampCap = whatsappWarmupDailyCap(device);
+    const waCap = Math.min(DAILY_WA_CAP, rampCap);
+    if ((await sentTodayCount("WHATSAPP", device.id)) >= waCap) {
+      return ["PENDING", rampCap < DAILY_WA_CAP
+        ? `Warm-up limit of ${waCap} reached — this number is still ramping up. Resumes tomorrow.`
+        : `Daily cap of ${waCap} reached — resumes tomorrow.`];
     }
 
     const gathered = await gatherFacts(recipient.leadId);
@@ -509,6 +532,107 @@ const pauseIfBouncing = async (campaign) => {
  * send* happens (skips don't count against the pace — a run of dead rows
  * should not stall the queue for an hour).
  */
+/**
+ * The channel table the drain is written against. Everything that differs
+ * between email and WhatsApp is a field name and a send function, so the two
+ * run through one code path and cannot drift apart.
+ */
+const CHANNEL_SPECS = {
+  EMAIL: {
+    key: "EMAIL",
+    stateField: "emailState", detailField: "emailDetail",
+    stampField: "emailProcessedAt", limitField: "dailyLimit", clockField: "lastSentAt",
+    attempt: attemptEmail,
+  },
+  WHATSAPP: {
+    key: "WHATSAPP",
+    stateField: "waState", detailField: "waDetail",
+    stampField: "waProcessedAt", limitField: "waDailyLimit", clockField: "waLastSentAt",
+    attempt: attemptWhatsApp,
+  },
+};
+
+/**
+ * The next lead to reach on one channel.
+ *
+ * Email simply walks the list. WhatsApp deliberately does not: it looks first
+ * for a lead email could not reach at all — no usable address, or a market
+ * where a cold email is unlawful but a business call is not (Germany is the
+ * whole of that second group). Those leads are unreachable any other way, and
+ * taking them first means the day's two channels touch two different sets of
+ * businesses rather than messaging the same ones twice.
+ */
+const nextRecipient = async (campaign, spec) => {
+  const base = { campaignId: campaign.id, [spec.stateField]: "PENDING" };
+  if (spec.key === "EMAIL") {
+    return prisma.campaignRecipient.findFirst({ where: base, orderBy: { id: "asc" } });
+  }
+  const unreachableByEmail = await prisma.campaignRecipient.findFirst({
+    where: { ...base, emailState: { in: ["SKIPPED", "FAILED"] } },
+    orderBy: { id: "asc" },
+  });
+  return unreachableByEmail || prisma.campaignRecipient.findFirst({ where: base, orderBy: { id: "asc" } });
+};
+
+/**
+ * Drain one channel of one campaign. Returns whether a message actually went
+ * out, which is what moves that channel's pacing clock.
+ *
+ * Each channel carries its own quota, its own clock and its own cursor, so a
+ * book of email-only leads can never stall WhatsApp and vice versa.
+ */
+const drainChannel = async (campaign, spec, summary) => {
+  const channels = Array.isArray(campaign.channels) ? campaign.channels : [];
+  if (!channels.includes(spec.key)) return false;
+
+  const limit = campaign[spec.limitField];
+  if (campaign.mode === "AUTO" && limit && (await campaignSentToday(campaign, spec.key)) >= limit) return false;
+
+  const gapSeconds = campaign.mode === "AUTO" ? autoGapSeconds(campaign, spec.key) : campaign.paceSeconds;
+  const lastAt = campaign[spec.clockField];
+  const sinceLast = lastAt ? Date.now() - lastAt.getTime() : Infinity;
+  if (sinceLast < gapSeconds * 1000) return false;
+
+  let sent = false;
+  // Bounded loop: burn through skips quickly, stop after the first real send.
+  for (let i = 0; i < 10 && !sent; i += 1) {
+    const recipient = await nextRecipient(campaign, spec);
+    if (!recipient) break;
+
+    const [state, detail] = await spec.attempt(campaign, recipient);
+    // A cap-hit leaves the row PENDING for tomorrow and stops this channel for
+    // the day; the other channel carries on with its own budget.
+    if (state === "PENDING") {
+      logger.info({ campaignId: campaign.id, channel: spec.key, detail }, "send cap reached");
+      break;
+    }
+
+    await prisma.campaignRecipient.update({
+      where: { id: recipient.id },
+      data: {
+        [spec.stateField]: state,
+        [spec.detailField]: detail,
+        [spec.stampField]: new Date(),
+        processedAt: new Date(),
+      },
+    });
+    if (state === "SENT") sent = true;
+    summary[state === "SENT" ? "sent" : state === "FAILED" ? "failed" : "skipped"] += 1;
+  }
+
+  if (sent) {
+    await prisma.outreachCampaign.update({ where: { id: campaign.id }, data: { [spec.clockField]: new Date() } });
+  }
+  return sent;
+};
+
+/**
+ * Drain step, called by the worker every minute.
+ *
+ * Per campaign: the bounce guard, then the window, then each channel in turn —
+ * each honouring its own pace and quota, and each stopping after one real send
+ * so pacing holds.
+ */
 export const runCampaignTick = async () => {
   const started = await startDueCampaigns();
   const campaigns = await prisma.outreachCampaign.findMany({ where: { status: "RUNNING" }, orderBy: { createdAt: "asc" } });
@@ -522,51 +646,12 @@ export const runCampaignTick = async () => {
     // is asleep for the night still gets stopped rather than resuming at 9am.
     if (await pauseIfBouncing(campaign)) { summary.paused += 1; continue; }
 
-    // AUTO campaigns sleep outside their local working-hours window and stop
-    // for the day once the daily quota is reached; rows simply stay PENDING.
+    // AUTO campaigns sleep outside their local working-hours window; rows
+    // simply stay PENDING.
     if (!isWithinSendWindow(campaign)) continue;
-    if (campaign.mode === "AUTO" && campaign.dailyLimit
-      && (await campaignSentToday(campaign)) >= campaign.dailyLimit) continue;
 
-    const gapSeconds = campaign.mode === "AUTO" ? autoGapSeconds(campaign) : campaign.paceSeconds;
-    const sinceLast = campaign.lastSentAt ? Date.now() - campaign.lastSentAt.getTime() : Infinity;
-    if (sinceLast < gapSeconds * 1000) continue;
-
-    let sentThisTick = false;
-    // Bounded loop: burn through skips quickly, stop after the first real send.
-    for (let i = 0; i < 10 && !sentThisTick; i += 1) {
-      const recipient = await prisma.campaignRecipient.findFirst({
-        where: { campaignId: campaign.id, OR: [{ emailState: "PENDING" }, { waState: "PENDING" }] },
-        orderBy: { id: "asc" },
-      });
-      if (!recipient) break;
-
-      const patch = { processedAt: new Date() };
-
-      if (recipient.emailState === "PENDING") {
-        const [state, detail] = await attemptEmail(campaign, recipient);
-        // A cap-hit leaves the row PENDING for tomorrow and stops this campaign.
-        if (state === "PENDING") { logger.info({ campaignId: campaign.id, detail }, "email cap reached"); break; }
-        patch.emailState = state;
-        patch.emailDetail = detail;
-        if (state === "SENT") sentThisTick = true;
-        summary[state === "SENT" ? "sent" : state === "FAILED" ? "failed" : "skipped"] += 1;
-      }
-
-      if (recipient.waState === "PENDING" && (patch.emailState === undefined || patch.emailState !== "PENDING")) {
-        const [state, detail] = await attemptWhatsApp(campaign, recipient);
-        if (state === "PENDING") { await prisma.campaignRecipient.update({ where: { id: recipient.id }, data: patch }); break; }
-        patch.waState = state;
-        patch.waDetail = detail;
-        if (state === "SENT") sentThisTick = true;
-        summary[state === "SENT" ? "sent" : state === "FAILED" ? "failed" : "skipped"] += 1;
-      }
-
-      await prisma.campaignRecipient.update({ where: { id: recipient.id }, data: patch });
-    }
-
-    if (sentThisTick) {
-      await prisma.outreachCampaign.update({ where: { id: campaign.id }, data: { lastSentAt: new Date() } });
+    for (const spec of [CHANNEL_SPECS.EMAIL, CHANNEL_SPECS.WHATSAPP]) {
+      await drainChannel(campaign, spec, summary);
     }
 
     const remaining = await prisma.campaignRecipient.count({
@@ -597,6 +682,7 @@ export const campaignWithProgress = async (campaignId) => {
 
   return {
     id: campaign.id, name: campaign.name, channels: campaign.channels,
+    dailyLimit: campaign.dailyLimit, waDailyLimit: campaign.waDailyLimit,
     // Carried to the UI so a campaign the bounce guard stopped can say so. A
     // paused campaign with no stated reason invites the one wrong response —
     // pressing Resume, which just trips the guard again on the next tick.

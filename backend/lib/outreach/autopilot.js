@@ -6,7 +6,7 @@ import {
 import { getAccount } from "./service.js";
 import { getWhatsAppAccount } from "./whatsapp.js";
 import { sendPolicyFor, isRoleAddress, POLICY } from "./sendPolicy.js";
-import { warmupDailyCap } from "./deliverability.js";
+import { warmupDailyCap, whatsappWarmupDailyCap, whatsappWarmupDay } from "./deliverability.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("outreach:autopilot");
@@ -207,6 +207,65 @@ export const allocateBudget = ({ total, pendingByLane, minPerLane = 5 }) => {
   return share;
 };
 
+/**
+ * The exact wording `buildRecipientRows` writes when a channel is not part of
+ * the campaign. Matching on it is how a row skipped for that reason alone is
+ * told apart from one skipped because the lead has no number.
+ */
+export const CHANNEL_SKIP_DETAIL = "Channel not in this campaign.";
+
+/**
+ * Re-evaluate rows that were skipped only because their channel was switched
+ * off at the time.
+ *
+ * Turning WhatsApp on would otherwise send nothing: every recipient already in
+ * a lane carries `waState: SKIPPED — channel not in this campaign`, and the
+ * top-up only ever adds leads it has not seen. This re-runs those rows through
+ * the same gate a fresh one passes, so the existing book becomes reachable on
+ * the newly opened channel.
+ */
+export const reopenChannelRows = async (campaign, { wantEmail, wantWa }) => {
+  const rows = await prisma.campaignRecipient.findMany({
+    where: {
+      campaignId: campaign.id,
+      OR: [
+        ...(wantEmail ? [{ emailState: "SKIPPED", emailDetail: CHANNEL_SKIP_DETAIL }] : []),
+        ...(wantWa ? [{ waState: "SKIPPED", waDetail: CHANNEL_SKIP_DETAIL }] : []),
+      ],
+    },
+    select: { id: true, leadId: true, emailState: true, emailDetail: true, waState: true, waDetail: true },
+    take: 500,
+  });
+  if (!rows.length) return 0;
+
+  const leads = await prisma.lead.findMany({
+    where: { id: { in: rows.map((r) => r.leadId) } },
+    include: {
+      company: { include: { contacts: { where: { isSuppressed: false } }, people: true } },
+      threads: { select: { channel: true } },
+      discoveryRun: { select: { promotedProduct: { select: { icp: true } } } },
+    },
+  });
+  const fresh = new Map(buildRecipientRows(leads, { wantEmail, wantWa }).map((r) => [r.leadId, r]));
+
+  let reopened = 0;
+  for (const row of rows) {
+    const next = fresh.get(row.leadId);
+    if (!next) continue;
+    const data = {};
+    if (wantEmail && row.emailState === "SKIPPED" && row.emailDetail === CHANNEL_SKIP_DETAIL) {
+      data.emailState = next.emailState; data.emailDetail = next.emailDetail;
+    }
+    if (wantWa && row.waState === "SKIPPED" && row.waDetail === CHANNEL_SKIP_DETAIL) {
+      data.waState = next.waState; data.waDetail = next.waDetail;
+    }
+    if (!Object.keys(data).length) continue;
+    await prisma.campaignRecipient.update({ where: { id: row.id }, data });
+    if (data.emailState === "PENDING" || data.waState === "PENDING") reopened += 1;
+  }
+  return reopened;
+};
+
 /** The lane's standing campaign, whatever state it is in. */
 const findLaneCampaign = (lane) =>
   prisma.outreachCampaign.findFirst({
@@ -231,15 +290,23 @@ export const runAutopilotTick = async (now = new Date()) => {
 
   const account = wantEmail ? await getAccount(null) : null;
   const device = wantWa ? await getWhatsAppAccount(null) : null;
-  if (wantEmail && !account) return { skipped: "no connected email account" };
-  if (wantWa && !device) return { skipped: "no linked WhatsApp device" };
+  // One missing sender must not stop the other channel: a device that drops off
+  // used to take the whole automation down with it, email included.
+  if (!account && !device) {
+    return { skipped: wantEmail && wantWa ? "no connected sender" : wantEmail ? "no connected email account" : "no linked WhatsApp device" };
+  }
 
-  // The ramp is the real ceiling on a young mailbox, and it moves every few
-  // days — so the budget is recomputed here rather than frozen at setup.
-  const rampCap = account ? warmupDailyCap(account) : Infinity;
-  const emailCeiling = Math.min(DAILY_EMAIL_CAP, rampCap);
-  const ceiling = wantEmail ? emailCeiling : DAILY_WA_CAP;
-  const total = Math.max(1, Math.min(settings.dailyLimit || ceiling, ceiling));
+  // The ramp is the real ceiling on a young sender, and it moves every few
+  // days — so both budgets are recomputed here rather than frozen at setup.
+  // They are separate figures because the channels reach different businesses:
+  // spending one pool would mean a book of email-only leads silently starving
+  // WhatsApp of the day it could have spent on leads email cannot reach.
+  const emailCeiling = account ? Math.min(DAILY_EMAIL_CAP, warmupDailyCap(account)) : 0;
+  const waCeiling = device ? Math.min(DAILY_WA_CAP, whatsappWarmupDailyCap(device)) : 0;
+  const emailTotal = wantEmail && emailCeiling > 0
+    ? Math.max(1, Math.min(settings.dailyLimit || emailCeiling, emailCeiling)) : 0;
+  const waTotal = wantWa && waCeiling > 0
+    ? Math.max(1, Math.min(settings.waDailyLimit || waCeiling, waCeiling)) : 0;
 
   const lanes = [];
   for (const lane of LANES) {
@@ -261,7 +328,7 @@ export const runAutopilotTick = async (now = new Date()) => {
     return { toppedUp: 0, note: "no eligible leads" };
   }
 
-  const result = { lanes: {}, toppedUp: 0, created: 0, budget: total };
+  const result = { lanes: {}, toppedUp: 0, created: 0, budget: emailTotal, waBudget: waTotal };
 
   for (const { lane, campaign, leads } of lanes) {
     const rows = buildRecipientRows(leads, { wantEmail, wantWa });
@@ -277,7 +344,8 @@ export const runAutopilotTick = async (now = new Date()) => {
           waAccountId: wantWa ? device.id : null,
           mode: "AUTO",
           status: "RUNNING",
-          dailyLimit: 1, // re-set from the budget split below
+          dailyLimit: 1, // both re-set from the budget split below
+          waDailyLimit: 1,
           windowStart: settings.windowStart,
           windowEnd: settings.windowEnd,
           tzOffsetMinutes: lane.tzOffsetMinutes,
@@ -289,15 +357,20 @@ export const runAutopilotTick = async (now = new Date()) => {
       });
       result.created += 1;
       result.lanes[lane.key] = { created: true, added: sendable.length };
-    } else if (target && rows.length) {
+    } else if (target) {
       // skipDuplicates guards the race where a lead was added between the
       // eligibility read and this write.
-      const added = await prisma.campaignRecipient.createMany({
-        data: rows.map((r) => ({ ...r, campaignId: target.id })),
-        skipDuplicates: true,
-      });
-      result.toppedUp += added.count;
-      result.lanes[lane.key] = { added: added.count };
+      const added = rows.length
+        ? (await prisma.campaignRecipient.createMany({
+            data: rows.map((r) => ({ ...r, campaignId: target.id })),
+            skipDuplicates: true,
+          })).count
+        : 0;
+      result.toppedUp += added;
+      // The channel set can change after a lane exists, and the rows already in
+      // it were judged under the old one.
+      const reopened = await reopenChannelRows(target, { wantEmail, wantWa });
+      result.lanes[lane.key] = { added, ...(reopened ? { reopened } : {}) };
     } else {
       result.lanes[lane.key] = { added: 0 };
     }
@@ -305,25 +378,36 @@ export const runAutopilotTick = async (now = new Date()) => {
 
   // Re-split the budget over lanes that still have work, then wake any lane
   // that had run dry and has now been topped up.
-  const pendingByLane = {};
+  const emailPendingByLane = {};
+  const waPendingByLane = {};
   const campaignByLane = {};
   for (const lane of LANES) {
     const campaign = await findLaneCampaign(lane);
     if (!campaign) continue;
     campaignByLane[lane.key] = campaign;
-    pendingByLane[lane.key] = await prisma.campaignRecipient.count({
-      where: { campaignId: campaign.id, OR: [{ emailState: "PENDING" }, { waState: "PENDING" }] },
-    });
+    const [emailPending, waPending] = await Promise.all([
+      prisma.campaignRecipient.count({ where: { campaignId: campaign.id, emailState: "PENDING" } }),
+      prisma.campaignRecipient.count({ where: { campaignId: campaign.id, waState: "PENDING" } }),
+    ]);
+    emailPendingByLane[lane.key] = emailPending;
+    waPendingByLane[lane.key] = waPending;
   }
 
-  const split = allocateBudget({ total, pendingByLane });
+  // Each channel's budget is split over the lanes that have work *on that
+  // channel*, so a lane with nothing left to email still gets its WhatsApp share.
+  const emailSplit = allocateBudget({ total: emailTotal, pendingByLane: emailPendingByLane });
+  const waSplit = allocateBudget({ total: waTotal, pendingByLane: waPendingByLane });
+
   for (const [key, campaign] of Object.entries(campaignByLane)) {
-    const limit = split[key] || 0;
-    const pending = pendingByLane[key] || 0;
+    const emailLimit = emailSplit[key] || 0;
+    const waLimit = waSplit[key] || 0;
+    const pending = (emailPendingByLane[key] || 0) + (waPendingByLane[key] || 0);
     await prisma.outreachCampaign.update({
       where: { id: campaign.id },
       data: {
-        dailyLimit: Math.max(1, limit),
+        channels,
+        dailyLimit: Math.max(1, emailLimit),
+        waDailyLimit: Math.max(1, waLimit),
         windowStart: settings.windowStart,
         windowEnd: settings.windowEnd,
         sendDays: settings.sendDays,
@@ -335,7 +419,11 @@ export const runAutopilotTick = async (now = new Date()) => {
           : {}),
       },
     });
-    result.lanes[key] = { ...(result.lanes[key] || {}), dailyLimit: Math.max(1, limit), pending };
+    result.lanes[key] = {
+      ...(result.lanes[key] || {}),
+      dailyLimit: Math.max(1, emailLimit), waDailyLimit: Math.max(1, waLimit),
+      pending, emailPending: emailPendingByLane[key] || 0, waPending: waPendingByLane[key] || 0,
+    };
   }
 
   await updateAutopilot({ lastRunAt: now, lastResult: result });
@@ -376,32 +464,37 @@ export const resumeAllLanes = async () => {
 export const autopilotStatus = async (now = new Date()) => {
   const settings = await getAutopilot();
   const account = await getAccount(null);
+  const device = await getWhatsAppAccount(null);
   const rampCap = account ? warmupDailyCap(account) : Infinity;
   const emailCeiling = Math.min(DAILY_EMAIL_CAP, rampCap);
+  const waRampCap = device ? whatsappWarmupDailyCap(device) : Infinity;
+  const waCeiling = Math.min(DAILY_WA_CAP, waRampCap);
 
   const lanes = [];
   for (const lane of LANES) {
     const campaign = await findLaneCampaign(lane);
     if (!campaign) {
-      lanes.push({ key: lane.key, label: lane.label, status: null, pending: 0, sentToday: 0, dailyLimit: 0 });
+      lanes.push({
+        key: lane.key, label: lane.label, status: null,
+        pending: 0, emailPending: 0, waPending: 0,
+        sentToday: 0, emailSentToday: 0, waSentToday: 0,
+        dailyLimit: 0, waDailyLimit: 0,
+      });
       continue;
     }
-    const [pending, sentToday] = await Promise.all([
-      prisma.campaignRecipient.count({
-        where: { campaignId: campaign.id, OR: [{ emailState: "PENDING" }, { waState: "PENDING" }] },
-      }),
-      prisma.campaignRecipient.count({
-        where: {
-          campaignId: campaign.id,
-          processedAt: { gte: new Date(now.getTime() - 86_400_000) },
-          OR: [{ emailState: "SENT" }, { waState: "SENT" }],
-        },
-      }),
+    const since = { gte: new Date(now.getTime() - 86_400_000) };
+    const [emailPending, waPending, emailSentToday, waSentToday] = await Promise.all([
+      prisma.campaignRecipient.count({ where: { campaignId: campaign.id, emailState: "PENDING" } }),
+      prisma.campaignRecipient.count({ where: { campaignId: campaign.id, waState: "PENDING" } }),
+      prisma.campaignRecipient.count({ where: { campaignId: campaign.id, emailState: "SENT", emailProcessedAt: since } }),
+      prisma.campaignRecipient.count({ where: { campaignId: campaign.id, waState: "SENT", waProcessedAt: since } }),
     ]);
     lanes.push({
       key: lane.key, label: lane.label, campaignId: campaign.id,
       status: campaign.status, pausedReason: campaign.pausedReason,
-      dailyLimit: campaign.dailyLimit, pending, sentToday,
+      dailyLimit: campaign.dailyLimit, waDailyLimit: campaign.waDailyLimit,
+      pending: emailPending + waPending, emailPending, waPending,
+      sentToday: emailSentToday + waSentToday, emailSentToday, waSentToday,
       windowStart: campaign.windowStart, windowEnd: campaign.windowEnd,
       tzOffsetMinutes: campaign.tzOffsetMinutes,
     });
@@ -411,7 +504,16 @@ export const autopilotStatus = async (now = new Date()) => {
     settings,
     emailCeiling: Number.isFinite(emailCeiling) ? emailCeiling : null,
     warmupCap: Number.isFinite(rampCap) ? rampCap : null,
+    waCeiling: Number.isFinite(waCeiling) ? waCeiling : null,
+    waWarmupCap: Number.isFinite(waRampCap) ? waRampCap : null,
     account: account ? { email: account.email, warmupStartedAt: account.warmupStartedAt } : null,
+    device: device
+      ? {
+          id: device.id, label: device.label, phoneNumber: device.phoneNumber,
+          status: device.status, warmupStartedAt: device.warmupStartedAt,
+          warmupDay: whatsappWarmupDay(device, { now }),
+        }
+      : null,
     lanes,
   };
 };

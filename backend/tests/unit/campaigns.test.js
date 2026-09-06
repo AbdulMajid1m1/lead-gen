@@ -120,10 +120,10 @@ describe("auto-mode scheduling", () => {
   it("autoGapSeconds spreads the daily quota across the window with bounded jitter", () => {
     // 9h window / 40 per day = 810s base; jitter keeps it within 75%-125%.
     const c = auto();
-    expect(autoGapSeconds(c, 0)).toBe(Math.round(810 * 0.75));
-    expect(autoGapSeconds(c, 1)).toBe(Math.round(810 * 1.25));
+    expect(autoGapSeconds(c, "EMAIL", 0)).toBe(Math.round(810 * 0.75));
+    expect(autoGapSeconds(c, "EMAIL", 1)).toBe(Math.round(810 * 1.25));
     // Never faster than a minute, whatever the inputs.
-    expect(autoGapSeconds(auto({ dailyLimit: 150, windowStart: 9, windowEnd: 10 }), 0)).toBeGreaterThanOrEqual(60);
+    expect(autoGapSeconds(auto({ dailyLimit: 150, windowStart: 9, windowEnd: 10 }), "EMAIL", 0)).toBeGreaterThanOrEqual(60);
   });
 
   it("startOfLocalToday is the local midnight expressed as a UTC instant", () => {
@@ -214,5 +214,27 @@ describe("sender budget", () => {
     expect(warmupStage(started(7), now)).toEqual({ day: 8, cap: 20, daysLeft: 13 });
     expect(warmupStage(started(30), now)).toBeNull();
     expect(warmupStage({ warmupStartedAt: null }, now)).toBeNull();
+  });
+});
+
+describe("per-channel pacing", () => {
+  const campaign = { windowStart: 9, windowEnd: 13, dailyLimit: 10, waDailyLimit: 20 };
+
+  it("paces each channel by its own budget, not by the other's", () => {
+    // Same window, twice the WhatsApp quota, so half the gap between messages.
+    const emailGap = autoGapSeconds(campaign, "EMAIL", 0.5);
+    const waGap = autoGapSeconds(campaign, "WHATSAPP", 0.5);
+    expect(waGap).toBeLessThan(emailGap);
+    expect(emailGap).toBe(Math.round((4 * 3600 / 10) * 1.0));
+    expect(waGap).toBe(Math.round((4 * 3600 / 20) * 1.0));
+  });
+
+  it("falls back to the email budget for a campaign created before the split", () => {
+    expect(autoGapSeconds({ ...campaign, waDailyLimit: null }, "WHATSAPP", 0.5))
+      .toBe(autoGapSeconds(campaign, "EMAIL", 0.5));
+  });
+
+  it("never paces faster than one a minute", () => {
+    expect(autoGapSeconds({ windowStart: 9, windowEnd: 10, dailyLimit: 999 }, "EMAIL", 0.5)).toBe(60);
   });
 });

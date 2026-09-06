@@ -60,6 +60,10 @@ model WhatsAppAccount {
   followUpDays Json    @default("[3, 7]")
   maxFollowUps Int     @default(2)
 
+  /// First day this device sent outreach. A number that opens at full volume is
+  /// the classic way to be banned, and a WhatsApp ban is permanent.
+  warmupStartedAt DateTime?
+
   lastConnectedAt DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt

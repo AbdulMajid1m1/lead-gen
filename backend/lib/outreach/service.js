@@ -127,6 +127,15 @@ export const sendWhatsAppForLead = async ({
   const sent = await sendWhatsAppText({ accountId: device.id, phone, text });
   if (!sent.ok) return { ok: false, error: sent.error };
 
+  // Day one of the ramp is the first day this number actually sent outreach,
+  // not the day it was paired: a device can sit linked for weeks before anyone
+  // uses it, and starting the clock at pairing would hand a cold number its
+  // full daily cap on the first real send.
+  if (!device.warmupStartedAt) {
+    await prisma.whatsAppAccount.update({ where: { id: device.id }, data: { warmupStartedAt: new Date() } })
+      .catch(() => {});
+  }
+
   const digits = String(phone).replace(/\D/g, "");
   // Scoped to the device: the same lead may be in conversation on two phones.
   const existing = await prisma.outreachThread.findFirst({

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Radar, Play, Pause, RefreshCw, AlertTriangle } from "lucide-react";
+import { Radar, Play, Pause, RefreshCw, AlertTriangle, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../lib/api.js";
 import { Badge, Button, Select, Skeleton, Spinner, Surface, SectionHeading } from "./ui.jsx";
@@ -102,6 +102,7 @@ export default function AutopilotSection() {
   const totalPending = data.lanes.reduce((sum, l) => sum + (l.pending || 0), 0);
   const sentToday = data.lanes.reduce((sum, l) => sum + (l.sentToday || 0), 0);
   const ramping = data.warmupCap != null && data.emailCeiling != null && data.warmupCap < data.emailCeiling;
+  const waRamping = channels.includes("WHATSAPP") && data.waWarmupCap != null && data.device?.warmupDay != null;
 
   const patch = (next) => save.mutate(next);
   const toggleDay = (d) => {
@@ -143,7 +144,20 @@ export default function AutopilotSection() {
           : <Badge tone="warning">No mailbox connected</Badge>}
         {ramping && (
           <Badge tone="warning">
-            Warming up — {data.warmupCap}/day today, not {data.emailCeiling}
+            Mailbox warming up — {data.warmupCap}/day today, not {data.emailCeiling}
+          </Badge>
+        )}
+        {channels.includes("WHATSAPP") && (data.device
+          ? (
+            <span className="inline-flex items-center gap-1 text-xs text-[var(--text-subtle)]">
+              <MessageCircle size={12} /> WhatsApp via {data.device.label}
+              {data.device.phoneNumber ? ` (+${data.device.phoneNumber})` : ""}
+            </span>
+          )
+          : <Badge tone="warning">No WhatsApp device linked</Badge>)}
+        {waRamping && (
+          <Badge tone="warning">
+            Number warming up — day {data.device?.warmupDay ?? "?"} of 21, {data.waWarmupCap}/day today
           </Badge>
         )}
       </div>
@@ -215,17 +229,32 @@ export default function AutopilotSection() {
           </p>
         </Labelled>
 
-        <Labelled label="Daily total" hint="(across all regions)">
+        <Labelled label="Emails a day" hint="(across all regions)">
           <Select
             value={s.dailyLimit ?? ""}
-            disabled={busy}
+            disabled={busy || !channels.includes("EMAIL")}
             onChange={(e) => patch({ dailyLimit: e.target.value === "" ? null : Number(e.target.value) })}
           >
             <option value="">Whatever the warm-up allows{data.emailCeiling ? ` (${data.emailCeiling})` : ""}</option>
             {[5, 10, 20, 30, 40, 60, 80, 100].map((n) => <option key={n} value={n}>{n} a day</option>)}
           </Select>
           <p className="mt-1 text-[11px] leading-snug text-[var(--text-subtle)]">
-            Split between regions in proportion to how many leads each has left.
+            Split between regions in proportion to how many leads each has left to email.
+          </p>
+        </Labelled>
+
+        <Labelled label="WhatsApp messages a day" hint="(across all regions)">
+          <Select
+            value={s.waDailyLimit ?? ""}
+            disabled={busy || !channels.includes("WHATSAPP")}
+            onChange={(e) => patch({ waDailyLimit: e.target.value === "" ? null : Number(e.target.value) })}
+          >
+            <option value="">Whatever the warm-up allows{data.waCeiling ? ` (${data.waCeiling})` : ""}</option>
+            {[5, 10, 15, 20, 25, 30, 40].map((n) => <option key={n} value={n}>{n} a day</option>)}
+          </Select>
+          <p className="mt-1 text-[11px] leading-snug text-[var(--text-subtle)]">
+            A separate budget from email, spent on the leads that have a number.
+            WhatsApp goes first to the businesses email cannot reach at all.
           </p>
         </Labelled>
       </div>
@@ -254,14 +283,16 @@ export default function AutopilotSection() {
       </div>
 
       <div className="mt-5 overflow-x-auto">
-        <table className="w-full min-w-[520px] text-left text-xs">
+        <table className="w-full min-w-[680px] text-left text-xs">
           <thead className="text-[var(--text-subtle)]">
             <tr className="border-b border-[var(--border)]">
               <th className="py-1.5 font-medium">Region</th>
               <th className="py-1.5 font-medium">Local hours</th>
-              <th className="py-1.5 font-medium text-right">Per day</th>
+              <th className="py-1.5 font-medium text-right">Email/day</th>
+              <th className="py-1.5 font-medium text-right">WA/day</th>
               <th className="py-1.5 font-medium text-right">Sent 24h</th>
-              <th className="py-1.5 font-medium text-right">Queued</th>
+              <th className="py-1.5 font-medium text-right">Email queued</th>
+              <th className="py-1.5 font-medium text-right">WA queued</th>
               <th className="py-1.5 font-medium">State</th>
             </tr>
           </thead>
@@ -274,9 +305,13 @@ export default function AutopilotSection() {
                     ? `${String(lane.windowStart).padStart(2, "0")}:00–${String(lane.windowEnd).padStart(2, "0")}:00 ${tzLabel(lane.tzOffsetMinutes)}`
                     : "—"}
                 </td>
-                <td className="py-1.5 text-right tabular-nums">{lane.dailyLimit || "—"}</td>
-                <td className="py-1.5 text-right tabular-nums">{lane.sentToday || 0}</td>
-                <td className="py-1.5 text-right tabular-nums">{lane.pending || 0}</td>
+                <td className="py-1.5 text-right tabular-nums">{channels.includes("EMAIL") ? (lane.dailyLimit || "—") : "—"}</td>
+                <td className="py-1.5 text-right tabular-nums">{channels.includes("WHATSAPP") ? (lane.waDailyLimit || "—") : "—"}</td>
+                <td className="py-1.5 text-right tabular-nums" title={`${lane.emailSentToday || 0} email · ${lane.waSentToday || 0} WhatsApp`}>
+                  {lane.sentToday || 0}
+                </td>
+                <td className="py-1.5 text-right tabular-nums">{lane.emailPending ?? lane.pending ?? 0}</td>
+                <td className="py-1.5 text-right tabular-nums">{lane.waPending || 0}</td>
                 <td className="py-1.5">
                   {lane.status
                     ? <Badge tone={laneTone(lane)}>{lane.status}</Badge>

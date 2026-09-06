@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   classifyBounce, shouldPauseForBounces, warmupDailyCap,
+  whatsappWarmupDailyCap, whatsappWarmupDay,
   BOUNCE_PAUSE_THRESHOLD, MIN_SAMPLE_BEFORE_PAUSE, NO_WARMUP_LIMIT,
 } from "../../lib/outreach/deliverability.js";
 
@@ -257,5 +258,34 @@ describe("shouldPauseForBounces", () => {
     expect(shouldPauseForBounces({ rate: NaN, sample: 100 })).toBe(false);
     expect(shouldPauseForBounces({})).toBe(false);
     expect(shouldPauseForBounces()).toBe(false);
+  });
+});
+
+describe("whatsappWarmupDailyCap", () => {
+  const now = new Date("2026-09-06T09:00:00Z");
+  const daysAgo = (n) => new Date(now.getTime() - n * 86_400_000);
+
+  it("opens a new number at five a day and climbs more slowly than email", () => {
+    expect(whatsappWarmupDailyCap({ warmupStartedAt: daysAgo(0) }, { now })).toBe(5);
+    expect(whatsappWarmupDailyCap({ warmupStartedAt: daysAgo(3) }, { now })).toBe(10);
+    expect(whatsappWarmupDailyCap({ warmupStartedAt: daysAgo(8) }, { now })).toBe(15);
+    expect(whatsappWarmupDailyCap({ warmupStartedAt: daysAgo(13) }, { now })).toBe(20);
+    expect(whatsappWarmupDailyCap({ warmupStartedAt: daysAgo(19) }, { now })).toBe(25);
+    // Every step stays under the email ramp at the same age: a WhatsApp ban is
+    // permanent where a throttled mailbox recovers.
+    expect(whatsappWarmupDailyCap({ warmupStartedAt: daysAgo(13) }, { now }))
+      .toBeLessThan(warmupDailyCap({ warmupStartedAt: daysAgo(13) }, { now }));
+  });
+
+  it("hands the number its configured cap once the ramp is done", () => {
+    expect(whatsappWarmupDailyCap({ warmupStartedAt: daysAgo(30) }, { now })).toBe(NO_WARMUP_LIMIT);
+    expect(whatsappWarmupDay({ warmupStartedAt: daysAgo(30) }, { now })).toBeNull();
+    expect(whatsappWarmupDay({ warmupStartedAt: daysAgo(0) }, { now })).toBe(1);
+  });
+
+  it("treats a device with no warm-up date as already ramped", () => {
+    expect(whatsappWarmupDailyCap({}, { now })).toBe(NO_WARMUP_LIMIT);
+    expect(whatsappWarmupDailyCap(null, { now })).toBe(NO_WARMUP_LIMIT);
+    expect(whatsappWarmupDay(null, { now })).toBeNull();
   });
 });

@@ -303,6 +303,50 @@ export const warmupDailyCap = (account, { now = new Date() } = {}) => {
   return WARMUP_RAMP.find((step) => day <= step.throughDay)?.cap ?? NO_WARMUP_LIMIT;
 };
 
+/**
+ * The WhatsApp ramp, which is a different animal from the email one.
+ *
+ * An email provider throttles or filters a mailbox that opens too fast; the
+ * mailbox recovers. WhatsApp bans a number, the ban is permanent, and it takes
+ * the whole conversation history with it — so the ceiling here is lower than
+ * the email ramp and climbs more slowly, and the steady-state figure a person
+ * should choose is nearer 25–30 a day than the 40+ email tolerates.
+ *
+ * The trigger is not volume alone: messaging people who never messaged you is
+ * what gets reported, so pacing and relevance carry as much weight as the cap.
+ */
+const WA_WARMUP_RAMP = [
+  { throughDay: 2, cap: 5 },
+  { throughDay: 5, cap: 10 },
+  { throughDay: 9, cap: 15 },
+  { throughDay: 14, cap: 20 },
+  { throughDay: 20, cap: 25 },
+];
+
+/** Day 21 onwards the device sends at its configured cap. */
+export const WA_WARMUP_DAYS = 21;
+
+/**
+ * Today's ceiling for one device. A device with no warm-up date is treated as
+ * already ramped, exactly as an email account is — callers wrap this in
+ * `Math.min(cap, …)` and get the normal cap back untouched.
+ */
+export const whatsappWarmupDailyCap = (device, { now = new Date() } = {}) => {
+  const started = device?.warmupStartedAt ? new Date(device.warmupStartedAt) : null;
+  if (!started || Number.isNaN(started.getTime())) return NO_WARMUP_LIMIT;
+  const day = Math.max(1, Math.floor((now.getTime() - started.getTime()) / DAY_MS) + 1);
+  if (day >= WA_WARMUP_DAYS) return NO_WARMUP_LIMIT;
+  return WA_WARMUP_RAMP.find((step) => day <= step.throughDay)?.cap ?? NO_WARMUP_LIMIT;
+};
+
+/** Which day of the ramp a device is on, or null once it has finished. */
+export const whatsappWarmupDay = (device, { now = new Date() } = {}) => {
+  const started = device?.warmupStartedAt ? new Date(device.warmupStartedAt) : null;
+  if (!started || Number.isNaN(started.getTime())) return null;
+  const day = Math.max(1, Math.floor((now.getTime() - started.getTime()) / DAY_MS) + 1);
+  return day >= WA_WARMUP_DAYS ? null : day;
+};
+
 // ─── Recording one ──────────────────────────────────────────────────────────
 
 /**
