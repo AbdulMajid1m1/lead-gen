@@ -859,12 +859,29 @@ const BUCKET_ORDER = ["replied", "due", "waiting", "silent", "closed"];
  * then by lead score. A 500-thread ceiling keeps this a single fast read — this
  * is a working queue, not an archive, and anything past that is in All leads.
  */
-export const outreachInbox = async ({ channel = null, bucket = null } = {}) => {
+/**
+ * The whole conversation, newest first — what a product's Outreach tab shows
+ * under each contacted lead. The inbox itself only needs the latest message.
+ */
+const CONVERSATION_MESSAGES = {
+  orderBy: { createdAt: "desc" },
+  select: {
+    id: true, direction: true, kind: true, subject: true, body: true,
+    sentAt: true, receivedAt: true, createdAt: true, fromAddress: true,
+    sentByName: true, sentBy: { select: { id: true, name: true, email: true } },
+  },
+};
+
+export const outreachInbox = async ({ channel = null, bucket = null, productId = null, withMessages = false } = {}) => {
   const threads = await prisma.outreachThread.findMany({
-    where: channel ? { channel } : {},
+    where: {
+      ...(channel ? { channel } : {}),
+      // A product's own conversations: every thread on a lead one of its runs found.
+      ...(productId ? { lead: { discoveryRun: { promotedProductId: productId } } } : {}),
+    },
     orderBy: { updatedAt: "desc" },
     take: 500,
-    select: INBOX_SELECT,
+    select: withMessages ? { ...INBOX_SELECT, messages: CONVERSATION_MESSAGES } : INBOX_SELECT,
   });
 
   const now = new Date();

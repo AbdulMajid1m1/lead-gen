@@ -12,7 +12,7 @@ import {
   getPromoterAutopilot, updatePromoterAutopilot, promoterAutopilotStatus, runProductAutopilot,
   pauseProductCampaign, resumeProductCampaign,
 } from "../../lib/outreach/promoterAutopilot.js";
-import { getAccount } from "../../lib/outreach/service.js";
+import { getAccount, outreachInbox } from "../../lib/outreach/service.js";
 import { DAILY_EMAIL_CAP } from "../../lib/outreach/campaigns.js";
 
 const logger = log("promoter");
@@ -373,5 +373,26 @@ export const runAutopilot = asyncHandler(async (req, res) => {
   await requireProduct(req.params.id);
   const result = await runProductAutopilot(req.params.id);
   res.json({ success: true, data: { ...(await promoterAutopilotStatus(req.params.id)), result } });
+});
+
+// ─── Product conversations ───────────────────────────────────────────────────
+
+export const productThreadsQuerySchema = z.object({
+  channel: z.enum(["EMAIL", "WHATSAPP"]).optional(),
+  bucket: z.enum(["replied", "due", "waiting", "silent", "closed"]).optional(),
+});
+
+/**
+ * GET /api/promoter/products/:id/threads — every lead this product has written
+ * to, with the whole conversation: what went out, what came back, and where
+ * each one stands. Same buckets as the Inbox, scoped to one product.
+ */
+export const listProductThreads = asyncHandler(async (req, res) => {
+  await requireProduct(req.params.id);
+  const { channel, bucket } = req.validatedQuery || {};
+  const data = await outreachInbox({
+    productId: req.params.id, channel: channel || null, bucket: bucket || null, withMessages: true,
+  });
+  res.json({ success: true, data: { counts: data.counts, threads: data.threads } });
 });
 

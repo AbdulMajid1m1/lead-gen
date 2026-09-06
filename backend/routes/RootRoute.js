@@ -117,6 +117,7 @@ router.post("/promoter/products/:id/archive", canPromote, writeLimiter, validate
 router.get("/promoter/products/:id/autopilot", canPromote, validate({ params: idParam }), promoter.getAutopilot);
 router.put("/promoter/products/:id/autopilot", canPromote, writeLimiter, validate({ params: idParam, body: promoter.autopilotSchema }), promoter.updateAutopilot);
 router.post("/promoter/products/:id/autopilot/run", canPromote, writeLimiter, validate({ params: idParam }), promoter.runAutopilot);
+router.get("/promoter/products/:id/threads", canPromote, validate({ params: idParam, query: promoter.productThreadsQuerySchema }), promoter.listProductThreads);
 
 // ─── Leads ────────────────────────────────────────────────────────────────────
 router.get("/leads", canListLeads, validate({ query: leads.listSchema }), leads.listLeads);

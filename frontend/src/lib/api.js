@@ -116,6 +116,8 @@ export const api = {
   promoterAutopilot: (id) => request(`/promoter/products/${id}/autopilot`),
   updatePromoterAutopilot: (id, body) => request(`/promoter/products/${id}/autopilot`, { method: "PUT", body }),
   runPromoterAutopilot: (id) => request(`/promoter/products/${id}/autopilot/run`, { method: "POST" }),
+  // Every lead the product has written to, with the full conversation.
+  promoterThreads: (id, params) => request(`/promoter/products/${id}/threads${qs(params)}`),
 
   // ─── Outreach: mailbox, sending, reply tracking, follow-ups ────────────────
   // ─── Bulk campaigns & stats ─────────────────────────────────────────────────

@@ -3,6 +3,7 @@ import { Send, Play, Pause, RefreshCw, AlertTriangle, Mail, Inbox } from "lucide
 import { toast } from "sonner";
 import { api } from "../lib/api.js";
 import { Badge, Button, Select, Skeleton, Spinner, Surface, SectionHeading } from "./ui.jsx";
+import PromoterConversations from "./PromoterConversations.jsx";
 
 /**
  * A product's standing outreach: which mailbox pitches it, how much a day, and
@@ -289,6 +290,8 @@ export default function PromoterAutopilotPanel({ productId, product, onOpenTab }
           {s.lastRunAt ? `Last checked ${new Date(s.lastRunAt).toLocaleString()}.` : "Not run yet."}
         </p>
       </Surface>
+
+      <PromoterConversations productId={productId} />
     </div>
   );
 }
