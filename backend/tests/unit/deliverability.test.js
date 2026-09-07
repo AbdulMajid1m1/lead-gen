@@ -289,3 +289,51 @@ describe("whatsappWarmupDailyCap", () => {
     expect(whatsappWarmupDay(null, { now })).toBeNull();
   });
 });
+
+describe("classifyBounce — an automatic answer is not a bounce", () => {
+  it("does not condemn an out-of-office that sets the same null return path a bounce does", () => {
+    // RFC 3834 tells an auto-responder to use an empty return path for the very
+    // reason a bounce does. The Arbor School's reply was filed as a bounce on
+    // that alone: the lead went BOUNCED and the campaign's guard counted it.
+    const result = classifyBounce({
+      from: "recruitment@thearborschool.ae",
+      subject: "Automatic reply: term-time hiring",
+      headers: "Return-Path: <>\nAuto-Submitted: auto-replied",
+      body: "Dear Applicant,\n\nThank you for your interest in becoming part of the Arbor School community.",
+    });
+    expect(result.isBounce).toBe(false);
+  });
+
+  it("does not condemn a business acknowledgement in another language", () => {
+    const result = classifyBounce({
+      from: "info@carambar.de",
+      subject: "Carambar Restaurant",
+      headers: "Return-Path: <>",
+      body: "Vielen Dank für Ihre Email. Mit dieser Antwort bestätigen wir den Eingang Ihrer E-Mail.",
+    });
+    expect(result.isBounce).toBe(false);
+  });
+
+  it("still catches every real report, which never arrives on the null path alone", () => {
+    // The daemon's address, the report content type, the subject and the DSN
+    // status field each stand on their own.
+    expect(classifyBounce({
+      from: "mailer-daemon@googlemail.com", subject: "Delivery Status Notification (Failure)",
+      headers: "Return-Path: <>", body: "Status: 5.1.1\nThe email account that you tried to reach does not exist.",
+    })).toMatchObject({ isBounce: true, type: "HARD", code: "5.1.1" });
+
+    expect(classifyBounce({
+      from: "noreply@corp.example", subject: "Undeliverable: your online presence",
+      headers: "Content-Type: multipart/report; report-type=delivery-status\nReturn-Path: <>",
+      body: "Final-Recipient: rfc822; gone@corp.example\nStatus: 5.1.1",
+    }).isBounce).toBe(true);
+
+    // A DSN marks itself auto-generated, never auto-replied, so the guard above
+    // cannot swallow one.
+    expect(classifyBounce({
+      from: "mailer-daemon@mail.zoho.com", subject: "Undelivered Mail Returned to Sender",
+      headers: "Return-Path: <>\nAuto-Submitted: auto-generated",
+      body: "Status: 5.1.1\nNo such user here.",
+    }).isBounce).toBe(true);
+  });
+});

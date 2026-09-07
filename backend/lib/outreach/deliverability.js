@@ -33,10 +33,20 @@ const REPORT_CONTENT_TYPE_RE = /multipart\/report[\s\S]{0,200}?report-type\s*=\s
 const DAEMON_FROM_RE = /^(?:mailer-daemon|mail-daemon|postmaster)@/i;
 
 /**
- * An empty return path is how a report says "do not reply to me" — it is set on
- * bounces precisely so a bounce can never bounce and start a loop.
+ * An empty return path says "do not reply to me". A bounce sets it so that a
+ * bounce can never bounce and start a loop — and RFC 3834 tells an *automatic
+ * responder* to set it for exactly the same reason. So it proves nothing on its
+ * own: an out-of-office and a dead mailbox are identical by this header alone,
+ * and treating it as sufficient filed live prospects' auto-replies as bounces.
+ * It now corroborates the stronger signals rather than standing in for them.
  */
 const NULL_RETURN_PATH_RE = /^return-path:\s*<>\s*$/im;
+
+/**
+ * RFC 3834's own marker for "a machine wrote this back at you". A DSN uses
+ * `auto-generated`, so only `auto-replied` is evidence *against* a bounce.
+ */
+const AUTO_REPLIED_RE = /^auto-submitted:\s*auto-replied/im;
 
 /** The subjects the major providers put on a non-delivery report. */
 const BOUNCE_SUBJECT_RE =
@@ -168,7 +178,17 @@ export const classifyBounce = ({ from = "", subject = "", body = "", headers = "
   // A human reply is never any of these. The status code alone does not qualify
   // unless it is in its DSN field form, because a person can write "4.1.2" in a
   // sentence and must not be mistaken for a dead mailbox.
-  if (!isReport && !isDaemon && !isNullReturnPath && !subjectSaysSo && !dsnStatus) return none;
+  //
+  // The null return path is deliberately absent from this list: it is the one
+  // signal an automatic responder shares with a bounce, and on its own it
+  // condemned The Arbor School's "Automatic reply" and a German restaurant's
+  // acknowledgement — both live prospects, both marked BOUNCED, both counted
+  // against the guard that pauses campaigns.
+  if (!isReport && !isDaemon && !subjectSaysSo && !dsnStatus) return none;
+
+  // An explicit "this is an automatic answer" outranks everything except the
+  // mail system speaking for itself: a report body, or the daemon's own address.
+  if (AUTO_REPLIED_RE.test(headerBlock) && !isReport && !isDaemon) return none;
 
   const code = dsnStatus || firstMatch(bodyText, LOOSE_STATUS_RE) || firstMatch(bodyText, SMTP_REPLY_RE);
   const reason = bounceReason(bodyText);
