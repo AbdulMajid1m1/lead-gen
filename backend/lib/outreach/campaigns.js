@@ -386,8 +386,13 @@ export const startDueCampaigns = async (now = new Date()) => {
  * it. Null for campaigns created before attribution existed, which then read as
  * system sends rather than being misattributed to someone.
  */
-const campaignActor = (campaign) =>
-  campaign.createdById ? { id: campaign.createdById, name: campaign.createdByName } : null;
+const campaignActor = (campaign) => ({
+  // A campaign nobody launched by hand is the automation, and it says so by
+  // name — the lane or product it belongs to. Without this every automated
+  // send landed in the history as blank, indistinguishable from a gap.
+  id: campaign.createdById || null,
+  name: campaign.createdByName || campaign.name || "Autopilot",
+});
 
 /** One send attempt for one recipient on one channel. Never throws. */
 const attemptEmail = async (campaign, recipient) => {

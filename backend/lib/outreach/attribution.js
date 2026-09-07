@@ -23,7 +23,13 @@ const MAX_NAME = 160;
  * @returns {{ id: string, name: string|null }|null}
  */
 export const toActor = (user) => {
-  if (!user?.id) return null;
+  if (!user) return null;
   const name = (user.name || user.email || "").trim().slice(0, MAX_NAME);
+  // A name with no id is the automation identifying itself — "Autopilot · Gulf"
+  // rather than an anonymous blank. The id stays null because no console
+  // account did this, which is exactly what the history needs to be able to
+  // say. Callers already read `actor?.id ?? null` and `actor?.name ?? null`,
+  // so both halves land correctly without a second branch.
+  if (!user.id) return name ? { id: null, name } : null;
   return { id: user.id, name: name || null };
 };

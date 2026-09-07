@@ -7,6 +7,7 @@ import { verifyImap, canReceive } from "../../lib/outreach/inbox.js";
 import {
   getAccount, listAccounts, sendInitialEmail, sendFollowUp, sendReply, syncReplies, processDueFollowUps,
   sendWhatsAppForLead, sendWhatsAppFollowUp, processDueWhatsAppFollowUps, outreachInbox,
+  messageHistory, sendWhatsAppReply,
 } from "../../lib/outreach/service.js";
 import {
   checkSession, logoutWhatsApp, whatsappStatusAll, whatsappAccountStatus,
@@ -441,7 +442,14 @@ export const replyToThread = asyncHandler(async (req, res) => {
     select: { accountId: true, channel: true },
   });
   if (!thread) throw createError(404, "Thread not found.");
-  if (thread.channel !== "EMAIL") throw createError(400, "This is a WhatsApp thread — reply on that channel.");
+
+  // Both channels answer here. Splitting them across two endpoints only pushed
+  // the same branch into every caller.
+  if (thread.channel === "WHATSAPP") {
+    const wa = await sendWhatsAppReply({ threadId: req.params.id, body: req.body.body, sentBy: req.auth.user });
+    if (!wa.ok) throw createError(400, wa.error);
+    return res.json({ success: true, message: "Reply sent.", data: { thread: wa.thread } });
+  }
 
   const account = await getAccount(thread.accountId || null);
   if (!account) throw createError(400, "The mailbox this thread was sent from is no longer connected.");
@@ -629,3 +637,48 @@ export const composeBatch = asyncHandler(async (req, res) => {
     data: { ...result, aiUsage: tracker.toJSON() },
   });
 });
+
+// ─── History ─────────────────────────────────────────────────────────────────
+
+export const historyQuerySchema = z.object({
+  channel: z.enum(["EMAIL", "WHATSAPP"]).optional(),
+  direction: z.enum(["OUTBOUND", "INBOUND"]).optional(),
+  kind: z.enum(["INITIAL", "FOLLOW_UP", "REPLY", "BOUNCE", "AUTO_REPLY"]).optional(),
+  sentBy: z.enum(["PERSON", "AUTOMATION"]).optional(),
+  accountId: z.string().max(64).optional(),
+  leadId: z.string().max(64).optional(),
+  productId: z.string().max(64).optional(),
+  search: z.string().trim().max(120).optional(),
+  days: z.coerce.number().int().min(1).max(365).optional(),
+  page: z.coerce.number().int().min(1).max(10_000).optional(),
+  perPage: z.coerce.number().int().min(1).max(200).optional(),
+  // The viewer's own UTC offset, so "today" means their today rather than the
+  // server's. Sent by the browser; absent falls back to UTC.
+  tzOffsetMinutes: z.coerce.number().int().min(-720).max(840).optional(),
+});
+
+/**
+ * GET /api/outreach/history — every message sent and received, newest first,
+ * with the day-by-day totals the header charts.
+ */
+export const history = asyncHandler(async (req, res) => {
+  const q = req.validatedQuery || {};
+  res.json({
+    success: true,
+    data: await messageHistory({
+      channel: q.channel || null,
+      direction: q.direction || null,
+      kind: q.kind || null,
+      sentBy: q.sentBy || null,
+      accountId: q.accountId || null,
+      leadId: q.leadId || null,
+      productId: q.productId || null,
+      search: q.search || null,
+      days: q.days || null,
+      page: q.page || 1,
+      perPage: q.perPage || 50,
+      tzOffsetMinutes: q.tzOffsetMinutes || 0,
+    }),
+  });
+});
+

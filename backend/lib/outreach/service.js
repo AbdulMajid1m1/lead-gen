@@ -415,6 +415,51 @@ export const sendReply = async ({ account, threadId, body, subject = null, signa
 };
 
 /**
+ * Reply by hand on a WhatsApp thread — the twin of `sendReply` above.
+ *
+ * Goes out from the device the conversation was opened with, for the same
+ * reason the email twin keeps its mailbox: a message arriving from a second
+ * number is a stranger joining the chat, not a reply.
+ */
+export const sendWhatsAppReply = async ({ threadId, body, sentBy = null }) => {
+  const actor = toActor(sentBy);
+  const text = String(body || "").trim();
+  if (!text) return { ok: false, error: "Write something to send." };
+
+  const thread = await prisma.outreachThread.findUnique({
+    where: { id: threadId },
+    include: { lead: { include: { company: true } } },
+  });
+  if (!thread) return { ok: false, error: "Thread not found." };
+  if (thread.channel !== "WHATSAPP") return { ok: false, error: "This is an email thread — reply on that channel." };
+
+  const device = await getWhatsAppAccount(thread.waAccountId || null);
+  if (!device) return { ok: false, error: "The device this chat was opened from is no longer linked." };
+
+  const blocked = await phoneSendIsBlocked({ lead: thread.lead, phone: thread.recipientEmail });
+  if (blocked) return { ok: false, error: blocked };
+
+  const sent = await sendWhatsAppText({ accountId: device.id, phone: thread.recipientEmail, text });
+  if (!sent.ok) return { ok: false, error: `Sending failed: ${sent.error}` };
+
+  await prisma.outreachMessage.create({
+    data: {
+      threadId, direction: "OUTBOUND", kind: "REPLY",
+      subject: "WhatsApp reply", body: text.slice(0, 8000),
+      messageId: sent.messageId, generatedBy: "RULE", sentAt: new Date(),
+      sentById: actor?.id ?? null, sentByName: actor?.name ?? null,
+    },
+  });
+  // Answering by hand takes the thread out of the chase sequence: whatever the
+  // automation would have said next, a person has now said something better.
+  const updated = await prisma.outreachThread.update({
+    where: { id: threadId },
+    data: { lastOutboundAt: new Date(), nextFollowUpAt: null },
+  });
+  return { ok: true, thread: updated };
+};
+
+/**
  * Send one WhatsApp follow-up on a thread. The email twin above, minus the
  * reply-chain headers WhatsApp has no equivalent of — continuity there comes
  * from the chat itself, so the message just has to be short and human.
@@ -797,6 +842,194 @@ export const runOutreachMaintenance = async () => {
  * A thread carries just enough of its lead to render a row without a second
  * round-trip: who it is, how hot, and the last thing either side said.
  */
+// ─── History ────────────────────────────────────────────────────────────────
+
+/**
+ * Every message, both channels, both directions, newest first.
+ *
+ * The Inbox answers "what needs me now" and collapses a conversation to its
+ * latest line. This is the other question — "what went out, and who sent it" —
+ * and so it is a log of individual messages rather than of threads: a lane that
+ * sent forty emails yesterday is forty rows here and one row there.
+ *
+ * `sentById` present means a person clicked send; absent with a name means the
+ * automation, which names the lane or product it belongs to.
+ */
+const HISTORY_SELECT = {
+  id: true, threadId: true, direction: true, kind: true,
+  subject: true, body: true, sentAt: true, receivedAt: true, createdAt: true,
+  fromAddress: true, bounceType: true, bounceCode: true,
+  sentById: true, sentByName: true,
+  sentBy: { select: { id: true, name: true, email: true } },
+  thread: {
+    select: {
+      id: true, channel: true, recipientEmail: true, subject: true, status: true,
+      followUpsSent: true, nextFollowUpAt: true, repliedAt: true, lastOutboundAt: true,
+      account: { select: { id: true, email: true, displayName: true } },
+      waAccount: { select: { id: true, label: true, phoneNumber: true } },
+      lead: {
+        select: {
+          id: true, score: true, status: true, primaryOpportunity: true,
+          company: { select: { name: true, city: true, countryCode: true } },
+          discoveryRun: { select: { promotedProduct: { select: { id: true, name: true } } } },
+        },
+      },
+    },
+  },
+};
+
+/** The instant a message happened, whichever direction it went. */
+const messageAt = (m) => m.sentAt || m.receivedAt || m.createdAt;
+
+/**
+ * One row as the history renders it: who, what, when, and enough of the thread
+ * to open the conversation without a second request.
+ */
+export const toHistoryRow = (m) => ({
+  id: m.id,
+  threadId: m.threadId,
+  channel: m.thread?.channel || "EMAIL",
+  direction: m.direction,
+  kind: m.kind,
+  subject: m.subject,
+  body: m.body,
+  at: messageAt(m),
+  fromAddress: m.fromAddress,
+  bounce: m.bounceCode ? { type: m.bounceType, code: m.bounceCode } : null,
+  // Outbound only. An inbound message came from the lead, and saying "sent by
+  // nobody" about their reply would be nonsense.
+  sentBy: m.direction === "OUTBOUND"
+    ? {
+        type: m.sentById ? "PERSON" : "AUTOMATION",
+        name: m.sentBy?.name || m.sentBy?.email || m.sentByName || "Automated",
+        id: m.sentById || null,
+      }
+    : null,
+  sender: m.thread?.account
+    ? { kind: "EMAIL", label: m.thread.account.email }
+    : m.thread?.waAccount
+      ? { kind: "WHATSAPP", label: m.thread.waAccount.label, phoneNumber: m.thread.waAccount.phoneNumber }
+      : null,
+  recipient: m.thread?.recipientEmail || null,
+  lead: m.thread?.lead
+    ? {
+        id: m.thread.lead.id, score: m.thread.lead.score, status: m.thread.lead.status,
+        company: m.thread.lead.company?.name || "Unknown company",
+        city: m.thread.lead.company?.city || null,
+        countryCode: m.thread.lead.company?.countryCode || null,
+        product: m.thread.lead.discoveryRun?.promotedProduct?.name || null,
+      }
+    : null,
+  thread: m.thread
+    ? {
+        id: m.thread.id, status: m.thread.status, subject: m.thread.subject,
+        followUpsSent: m.thread.followUpsSent, repliedAt: m.thread.repliedAt,
+      }
+    : null,
+});
+
+/**
+ * How many messages went each way, per local day.
+ *
+ * Grouped in SQL rather than in JS because the whole point is to cover a long
+ * window cheaply — a month of history is three hundred rows to the database and
+ * would be thirty thousand objects here. The day boundary follows the viewer's
+ * own offset, so "today" means their today.
+ */
+export const dailyMessageCounts = async ({ days = 14, tzOffsetMinutes = 0 } = {}) => {
+  const span = Math.max(1, Math.min(90, Math.round(days)));
+  const offset = Math.max(-720, Math.min(840, Math.round(tzOffsetMinutes)));
+  const since = new Date(Date.now() - span * 86_400_000);
+
+  const rows = await prisma.$queryRaw`
+    SELECT to_char(
+             date_trunc('day', COALESCE(m."sentAt", m."receivedAt", m."createdAt") + make_interval(mins => ${offset})),
+             'YYYY-MM-DD') AS day,
+           t."channel"::text AS channel,
+           m."direction"::text AS direction,
+           COUNT(*)::int AS count
+    FROM "OutreachMessage" m
+    JOIN "OutreachThread" t ON t."id" = m."threadId"
+    WHERE COALESCE(m."sentAt", m."receivedAt", m."createdAt") >= ${since}
+    GROUP BY 1, 2, 3
+    ORDER BY 1 DESC`;
+
+  // Every day in the window appears, including the quiet ones — a gap in a bar
+  // chart has to mean "nothing sent", not "no row for that date".
+  const byDay = new Map();
+  for (let i = 0; i < span; i += 1) {
+    const d = new Date(Date.now() + offset * 60_000 - i * 86_400_000);
+    const key = d.toISOString().slice(0, 10);
+    byDay.set(key, { day: key, emailSent: 0, whatsappSent: 0, replies: 0, total: 0 });
+  }
+  for (const r of rows) {
+    const bucket = byDay.get(r.day) || { day: r.day, emailSent: 0, whatsappSent: 0, replies: 0, total: 0 };
+    if (r.direction === "OUTBOUND") {
+      if (r.channel === "WHATSAPP") bucket.whatsappSent += r.count;
+      else bucket.emailSent += r.count;
+      bucket.total += r.count;
+    } else {
+      bucket.replies += r.count;
+    }
+    byDay.set(r.day, bucket);
+  }
+  return [...byDay.values()].sort((a, b) => (a.day < b.day ? 1 : -1));
+};
+
+/**
+ * The history page: a filtered page of messages, the totals for the filter, and
+ * the daily series the header charts.
+ */
+export const messageHistory = async ({
+  channel = null, direction = null, kind = null, sentBy = null,
+  accountId = null, leadId = null, productId = null, search = null,
+  days = null, page = 1, perPage = 50, tzOffsetMinutes = 0,
+} = {}) => {
+  const take = Math.max(1, Math.min(200, Math.round(perPage)));
+  const skip = Math.max(0, (Math.max(1, Math.round(page)) - 1) * take);
+  const term = String(search || "").trim();
+
+  const where = {
+    ...(direction ? { direction } : {}),
+    ...(kind ? { kind } : {}),
+    // "Who" is a property of the row, not of the mailbox: two people share one
+    // inbox, and the automation shares it with them.
+    ...(sentBy === "PERSON" ? { direction: "OUTBOUND", sentById: { not: null } } : {}),
+    ...(sentBy === "AUTOMATION" ? { direction: "OUTBOUND", sentById: null } : {}),
+    ...(days ? { createdAt: { gte: new Date(Date.now() - Math.max(1, days) * 86_400_000) } } : {}),
+    thread: {
+      ...(channel ? { channel } : {}),
+      ...(accountId ? { OR: [{ accountId }, { waAccountId: accountId }] } : {}),
+      ...(leadId ? { leadId } : {}),
+      ...(productId ? { lead: { discoveryRun: { promotedProductId: productId } } } : {}),
+      ...(term
+        ? {
+            OR: [
+              { recipientEmail: { contains: term, mode: "insensitive" } },
+              { lead: { company: { name: { contains: term, mode: "insensitive" } } } },
+            ],
+          }
+        : {}),
+    },
+  };
+
+  const [messages, total, daily] = await Promise.all([
+    prisma.outreachMessage.findMany({
+      where, orderBy: [{ createdAt: "desc" }], skip, take, select: HISTORY_SELECT,
+    }),
+    prisma.outreachMessage.count({ where }),
+    dailyMessageCounts({ days: 14, tzOffsetMinutes }),
+  ]);
+
+  return {
+    messages: messages.map(toHistoryRow),
+    page: Math.max(1, Math.round(page)), perPage: take, total,
+    hasMore: skip + messages.length < total,
+    daily,
+    today: daily[0] || { day: null, emailSent: 0, whatsappSent: 0, replies: 0, total: 0 },
+  };
+};
+
 const INBOX_SELECT = {
   id: true,
   leadId: true,

@@ -152,6 +152,8 @@ export const api = {
   replyToThread: (threadId, body) => request(`/outreach/threads/${threadId}/reply`, { method: "POST", body }),
   // The working queue: who replied, what chase is due, what is still in flight.
   outreachInbox: (params) => request(`/outreach/inbox${qs(params)}`),
+  // Every message both channels have carried, with the day-by-day totals.
+  outreachHistory: (params) => request(`/outreach/history${qs(params)}`),
   sendFollowUpNow: (threadId) => request(`/outreach/threads/${threadId}/follow-up`, { method: "POST" }),
   composeBatch: (body) => request("/outreach/compose-batch", { method: "POST", body }),
 

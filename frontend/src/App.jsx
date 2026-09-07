@@ -16,6 +16,7 @@ import LeadDetailPage from "./pages/LeadDetailPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import DiscoveryPage from "./pages/DiscoveryPage.jsx";
 import InboxPage from "./pages/InboxPage.jsx";
+import HistoryPage from "./pages/HistoryPage.jsx";
 import ClientsPage from "./pages/ClientsPage.jsx";
 import ClientDetailPage from "./pages/ClientDetailPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
@@ -238,6 +239,7 @@ export default function App() {
           <Route path="/leads/:id" element={guard("leads", <LeadDetailPage />)} />
           <Route path="/outreach" element={guard("outreach", <OutreachPage />)} />
           <Route path="/inbox" element={guard("inbox", <InboxPage />)} />
+          <Route path="/history" element={guard("outreach", <HistoryPage />)} />
           <Route path="/clients" element={guard("clients", <ClientsPage />)} />
           <Route path="/clients/:id" element={guard("clients", <ClientDetailPage />)} />
           <Route path="/discovery" element={guard("discovery", <DiscoveryPage />)} />

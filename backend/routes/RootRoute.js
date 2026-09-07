@@ -170,6 +170,8 @@ router.post("/outreach/contacts/hygiene", canOutreach, writeLimiter, campaigns.h
 router.post("/outreach/send", canOutreach, writeLimiter, validate({ body: outreach.sendSchema }), outreach.send);
 router.post("/outreach/sync", canSyncMailboxes, writeLimiter, validate({ body: outreach.syncQuerySchema }), outreach.syncNow);
 router.get("/outreach/inbox", canInbox, validate({ query: outreach.inboxQuerySchema }), outreach.inbox);
+// Every message either channel has carried, and the daily totals over them.
+router.get("/outreach/history", canReadThreads, validate({ query: outreach.historyQuerySchema }), outreach.history);
 router.get("/outreach/threads", canReadThreads, validate({ query: outreach.threadsQuerySchema }), outreach.listThreads);
 router.post("/outreach/threads/:id/follow-up", canFollowUp, writeLimiter, validate({ params: idParam }), outreach.followUpNow);
 // Writing back by hand. Same permission as a follow-up — both put a message in

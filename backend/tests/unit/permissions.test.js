@@ -168,7 +168,16 @@ describe("send attribution", () => {
   it("treats a missing user as a system send rather than guessing", () => {
     expect(toActor(null)).toBeNull();
     expect(toActor(undefined)).toBeNull();
-    expect(toActor({ name: "No id" })).toBeNull();
+    expect(toActor({})).toBeNull();
+    expect(toActor({ name: "" })).toBeNull();
+  });
+
+  it("lets the automation name itself, with no console account behind it", () => {
+    // The history has to tell "the Gulf autopilot sent this" apart from a
+    // blank, and no user id exists for either.
+    expect(toActor({ name: "Autopilot · Gulf" })).toEqual({ id: null, name: "Autopilot · Gulf" });
+    expect(toActor({ id: null, name: "Promoter · TracefyHR" }))
+      .toEqual({ id: null, name: "Promoter · TracefyHR" });
   });
 
   it("keeps the snapshot inside the column width", () => {

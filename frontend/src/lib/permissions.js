@@ -12,7 +12,7 @@
  */
 import {
   LayoutDashboard, Search, Users, Radar, Settings, Sparkles,
-  Inbox, SendHorizonal, Handshake, Megaphone, ShieldCheck,
+  Inbox, SendHorizonal, Handshake, Megaphone, ShieldCheck, History,
 } from "lucide-react";
 
 /**
@@ -39,6 +39,9 @@ export const NAV_ITEMS = [
   // lead-finding screens because it is where a lead goes after you contact it.
   { permission: "outreach", to: "/outreach", label: "Outreach", icon: SendHorizonal },
   { permission: "inbox", to: "/inbox", label: "Inbox", icon: Inbox, badge: true },
+  // The log beside the queue: what has already gone out, on both channels, and
+  // who sent it. Sits under Inbox because it answers the opposite question.
+  { permission: "outreach", to: "/history", label: "History", icon: History },
   // The post-sale half of the pipeline: everyone the outreach above already won.
   { permission: "clients", to: "/clients", label: "Clients", icon: Handshake },
   { permission: "discovery", to: "/discovery", label: "Discovery runs", icon: Radar },
