@@ -938,12 +938,14 @@ export const toHistoryRow = (m) => ({
  */
 export const dailyMessageCounts = async ({ days = 14, tzOffsetMinutes = 0 } = {}) => {
   const span = Math.max(1, Math.min(90, Math.round(days)));
+  // Cast to int explicitly below: the driver binds a JS number as bigint, and
+  // `make_interval(mins => bigint)` is not a function Postgres has.
   const offset = Math.max(-720, Math.min(840, Math.round(tzOffsetMinutes)));
   const since = new Date(Date.now() - span * 86_400_000);
 
   const rows = await prisma.$queryRaw`
     SELECT to_char(
-             date_trunc('day', COALESCE(m."sentAt", m."receivedAt", m."createdAt") + make_interval(mins => ${offset})),
+             date_trunc('day', COALESCE(m."sentAt", m."receivedAt", m."createdAt") + make_interval(mins => (${offset})::int)),
              'YYYY-MM-DD') AS day,
            t."channel"::text AS channel,
            m."direction"::text AS direction,
