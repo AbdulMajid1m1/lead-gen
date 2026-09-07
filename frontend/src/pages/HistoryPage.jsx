@@ -38,12 +38,20 @@ const DAY_FILTERS = [
   { value: "", label: "All time" },
 ];
 
+/**
+ * The calendar day an instant falls on *where the viewer is*. The server groups
+ * its totals the same way, so the header figures and the rows below them agree
+ * — a message at 22:00 UTC belongs to the next day in Dubai, and counting it
+ * under the UTC day would leave the strip and the list disagreeing by one.
+ */
+const localDay = (value) => {
+  const d = new Date(value);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+};
+
 const dayLabel = (iso) => {
-  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
-  if (iso === today) return "Today";
-  const yesterday = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000 - 86_400_000)
-    .toISOString().slice(0, 10);
-  if (iso === yesterday) return "Yesterday";
+  if (iso === localDay(Date.now())) return "Today";
+  if (iso === localDay(Date.now() - 86_400_000)) return "Yesterday";
   return new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
 };
 
@@ -338,7 +346,7 @@ export default function HistoryPage() {
     const out = [];
     let last = null;
     for (const m of messages) {
-      const day = new Date(m.at).toISOString().slice(0, 10);
+      const day = localDay(m.at);
       if (day !== last) { out.push({ type: "day", day }); last = day; }
       out.push({ type: "message", row: m });
     }
