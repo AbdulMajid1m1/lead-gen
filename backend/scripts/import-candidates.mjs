@@ -122,13 +122,20 @@ const main = async () => {
     },
   });
 
-  // The plan is the ordinary research plan with the AI_DISCOVER steps removed —
-  // this script has already done that step's job — and the ordinals closed up.
+  // The plan is the ordinary research plan with every discovery step removed —
+  // this file *is* the run's discovery — and the ordinals closed up. The same
+  // rule promoter-assist import-leads follows: DB_MATCH re-scored up to fifty
+  // unrelated leads that merely shared the query's location, and AGGREGATOR
+  // refilled the run with up to sixty job-board employers (the "Technology
+  // employer" rows in the agency queues). ATS_PROBE stays: it reads the
+  // researched companies' own job boards, which is corroboration.
+  const DISCOVERY_STEPS = new Set(["AI_DISCOVER", "AI_COMPOSE", "DB_MATCH", "AGGREGATOR", "OVERPASS", "COMPETITOR_USERS"]);
   const full = buildResearchPlan(parsed, brief);
   const steps = full.steps
-    .filter((s) => s.kind !== "AI_DISCOVER" && s.kind !== "AI_COMPOSE")
+    .filter((s) => !DISCOVERY_STEPS.has(s.kind))
     .map((s, i) => ({ ...s, ordinal: i }));
   const plan = { ...full, steps };
+  console.log(`plan     : ${steps.map((s) => s.kind).join(" → ")}`);
 
   const run = await createDiscoveryRun({ plan, trigger: "NL_QUERY", searchQueryId: searchQuery.id });
   await saveBrief({ runId: run.id, searchQueryId: searchQuery.id, brief, producedBy, model });
