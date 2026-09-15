@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  LANES, laneFor, laneCampaignName, allocateBudget, emailAdmissible, whatsappAdmissible,
+  LANES, laneFor, laneCampaignName, allocateBudget, emailAdmissible, whatsappAdmissible, tradeFit,
 } from "../../lib/outreach/autopilot.js";
 
 /** A lead shaped just enough for the admissibility helpers. */
@@ -161,5 +161,27 @@ describe("WhatsApp admissibility", () => {
   it("HOLD keeps WhatsApp to the opt-out markets", () => {
     expect(whatsappAdmissible(leadIn("GB"), "HOLD")).toBe(true);
     expect(whatsappAdmissible(leadIn("SA"), "HOLD")).toBe(false);
+  });
+});
+
+describe("trade fit", () => {
+  const withTrade = (industry, cc = "GB") => ({ company: { ...leadIn(cc).company, industry } });
+
+  it("keeps walk-in trades off cold email but on WhatsApp", () => {
+    for (const trade of ["Restaurant", "Café", "Hair & beauty salon", "Clothing store"]) {
+      expect(tradeFit(withTrade(trade))).toBe("WHATSAPP");
+      expect(emailAdmissible(withTrade(trade), "SEND")).toBe(false);
+      expect(whatsappAdmissible(withTrade(trade), "SEND")).toBe(true);
+    }
+  });
+
+  it("does not pitch software to companies that build it", () => {
+    expect(emailAdmissible(withTrade("Technology employer"), "SEND")).toBe(false);
+    expect(whatsappAdmissible(withTrade("Technology employer"), "SEND")).toBe(false);
+  });
+
+  it("leaves professional services and unlabelled companies alone", () => {
+    expect(emailAdmissible(withTrade("Law firm"), "SEND")).toBe(true);
+    expect(emailAdmissible(withTrade(null), "SEND")).toBe(true);
   });
 });

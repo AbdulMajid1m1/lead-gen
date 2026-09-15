@@ -83,6 +83,37 @@ export const updateAutopilot = async (patch) => {
 };
 
 /**
+ * Walk-in trades are worked on WhatsApp, not cold email.
+ *
+ * Measured on the live book (Sept 2026): the first twenty cold emails went
+ * mostly to restaurants' and cafés' info@ inboxes and earned no reply at all —
+ * those inboxes are read by nobody who buys software, while the owner does
+ * answer the phone the business advertises. Salons and clothing shops are the
+ * same kind of counter trade.
+ */
+export const WALK_IN_TRADES = new Set(["Restaurant", "Café", "Hair & beauty salon", "Clothing store"]);
+
+/**
+ * Companies that build software themselves are not buyers of it. They entered
+ * the book through the job-board aggregators as "Technology employer" and sat
+ * in the UK queue as a sixth of its pending emails.
+ */
+export const NOT_A_BUYER_TRADES = new Set(["Technology employer", "Software"]);
+
+/** "ANY" channel, "WHATSAPP" only, or "NONE" — decided by the company's trade alone. */
+export const tradeFit = (lead) => {
+  const industry = lead?.company?.industry || null;
+  if (NOT_A_BUYER_TRADES.has(industry)) return "NONE";
+  if (WALK_IN_TRADES.has(industry)) return "WHATSAPP";
+  return "ANY";
+};
+
+export const TRADE_SKIP_DETAIL = {
+  WHATSAPP: "Walk-in trade: worked on WhatsApp, not cold email.",
+  NONE: "Builds software itself: not a buyer.",
+};
+
+/**
  * Whether this lead may be emailed automatically under the chosen policy.
  *
  * BLOCKED is never sendable by anyone. The three settings differ only over
@@ -97,6 +128,7 @@ export const updateAutopilot = async (patch) => {
  *               lift, which leaves only the opt-out markets.
  */
 export const emailAdmissible = (lead, restrictedPolicy) => {
+  if (tradeFit(lead) !== "ANY") return false;
   const countryCode = lead.company?.countryCode;
   // The same pick buildRecipientRows will make, so the admissibility verdict
   // is about the address that actually gets used.
@@ -114,6 +146,7 @@ export const emailAdmissible = (lead, restrictedPolicy) => {
 
 /** WhatsApp has no role-mailbox equivalent, so only BLOCKED and HOLD apply. */
 export const whatsappAdmissible = (lead, restrictedPolicy) => {
+  if (tradeFit(lead) === "NONE") return false;
   const verdict = sendPolicyFor({ countryCode: lead.company?.countryCode, channel: "WHATSAPP" });
   if (verdict.policy === POLICY.BLOCKED) return false;
   if (restrictedPolicy === "HOLD") return verdict.policy === POLICY.ALLOWED;
@@ -266,6 +299,34 @@ export const reopenChannelRows = async (campaign, { wantEmail, wantWa }) => {
   return reopened;
 };
 
+/**
+ * Retire queued rows whose trade the channel does not suit.
+ *
+ * `buildRecipientRows` judges law and reachability, not trade, so a restaurant
+ * admitted for WhatsApp still arrives with a PENDING email — and the rows queued
+ * before the trade rule existed are all still waiting. This re-judges every
+ * unsent row on each tick, which also covers a lead whose industry is filled in
+ * later.
+ */
+export const retireUnfitRows = async (campaign) => {
+  const rows = await prisma.campaignRecipient.findMany({
+    where: { campaignId: campaign.id, OR: [{ emailState: "PENDING" }, { waState: "PENDING" }] },
+    select: { id: true, emailState: true, waState: true, lead: { select: { company: { select: { industry: true } } } } },
+  });
+  let retired = 0;
+  for (const row of rows) {
+    const fit = tradeFit(row.lead);
+    if (fit === "ANY") continue;
+    const data = {};
+    if (row.emailState === "PENDING") Object.assign(data, { emailState: "SKIPPED", emailDetail: TRADE_SKIP_DETAIL[fit] });
+    if (fit === "NONE" && row.waState === "PENDING") Object.assign(data, { waState: "SKIPPED", waDetail: TRADE_SKIP_DETAIL.NONE });
+    if (!Object.keys(data).length) continue;
+    await prisma.campaignRecipient.update({ where: { id: row.id }, data });
+    retired += 1;
+  }
+  return retired;
+};
+
 /** The lane's standing campaign, whatever state it is in. */
 const findLaneCampaign = (lane) =>
   prisma.outreachCampaign.findFirst({
@@ -370,7 +431,8 @@ export const runAutopilotTick = async (now = new Date()) => {
       // The channel set can change after a lane exists, and the rows already in
       // it were judged under the old one.
       const reopened = await reopenChannelRows(target, { wantEmail, wantWa });
-      result.lanes[lane.key] = { added, ...(reopened ? { reopened } : {}) };
+      const retired = await retireUnfitRows(target);
+      result.lanes[lane.key] = { added, ...(reopened ? { reopened } : {}), ...(retired ? { retired } : {}) };
     } else {
       result.lanes[lane.key] = { added: 0 };
     }
