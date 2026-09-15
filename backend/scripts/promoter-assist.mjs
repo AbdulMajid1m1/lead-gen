@@ -471,7 +471,9 @@ const importLeads = async () => {
   // ruling out. A file of researched candidates *is* this run's discovery; the
   // steps that remain exist to verify it, not to add to it. ATS_PROBE stays:
   // it checks the researched companies' own job boards, which is corroboration.
-  const DISCOVERY_STEPS = new Set(["AI_DISCOVER", "COMPETITOR_USERS", "OVERPASS", "AGGREGATOR", "AI_COMPOSE"]);
+  // DB_MATCH goes too: it pulled up to fifty existing leads in the ICP's
+  // categories into the run and re-scored them for the product, researched or not.
+  const DISCOVERY_STEPS = new Set(["AI_DISCOVER", "COMPETITOR_USERS", "OVERPASS", "AGGREGATOR", "AI_COMPOSE", "DB_MATCH"]);
   const full = buildPromotePlan(product);
   const steps = full.steps
     .filter((s) => !DISCOVERY_STEPS.has(s.kind))
