@@ -52,7 +52,13 @@ export const looksLikePublishedAddress = (email) => {
 // error-tracking DSNs that Wix and Sentry embed in every page, and both were
 // being stored as business contacts because "sentry" was not the label after
 // the "@".
-const EMAIL_BLOCKLIST_RE = /(?:^|@)(?:example|test|domain|yourdomain|email|placeholder|localhost)(?![\w-])|@(?:[\w-]+\.)*(?:sentry|wixpress|godaddy|squarespace|shopify|domainster|domainmarket|hugedomains|brandbucket|sedo|afternic|dan|undeveloped|namecheap|dynadot|sav|epik|escrow)\.|\.(?:png|jpe?g|gif|webp|svg|css|js|woff2?|ico)$|^(?:user|name|your|someone)@/i;
+const EMAIL_BLOCKLIST_RE = /(?:^|@)(?:example|test|domain|yourdomain|yoursite|yourwebsite|yourcompany|mysite|email|placeholder|localhost)(?![\w-])|@(?:[\w-]+\.)*(?:lorem|ipsum|dolor|volutpat|consectetur|adipiscing)\.|@(?:[\w-]+\.)*(?:sentry|wixpress|godaddy|squarespace|shopify|domainster|domainmarket|hugedomains|brandbucket|sedo|afternic|dan|undeveloped|namecheap|dynadot|sav|epik|escrow)\.|\.(?:png|jpe?g|gif|webp|svg|css|js|woff2?|ico)$|^(?:user|name|your|someone)@/i;
+
+// Theme demo copy survives on live sites: support@yoursite.com in a footer,
+// er@volutpat.in in a lorem-ipsum contact block. Both reached the lead book in
+// September 2026 because only extraction checked this list; hygiene now asks
+// the same question of addresses already stored.
+export const isPlaceholderEmail = (email) => EMAIL_BLOCKLIST_RE.test(String(email || ""));
 
 /**
  * Methods where the page is *declaring* an address rather than mentioning one.

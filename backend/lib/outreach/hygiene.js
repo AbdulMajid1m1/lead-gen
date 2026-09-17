@@ -2,6 +2,7 @@ import dns from "node:dns/promises";
 import prisma from "../../prismaClient.js";
 import { probeMailbox, isSmtpProbeAvailable } from "../verify/smtpProbe.js";
 import { emailBelongsToPlatform } from "../verify/hostedPlatforms.js";
+import { isPlaceholderEmail } from "../extract/contacts.js";
 import { SMTP_PROBE_MAX_PER_RUN } from "../../configs/envConfig.js";
 import { log } from "../../utils/logger.js";
 
@@ -129,7 +130,7 @@ export const runContactHygiene = async ({ checkMx = true } = {}) => {
     select: { id: true, value: true },
   });
 
-  const summary = { checked: contacts.length, suppressed: 0, broker: 0, platform: 0, mangled: 0, noMx: 0, smtpRejected: 0, smtpProbed: 0 };
+  const summary = { checked: contacts.length, suppressed: 0, placeholder: 0, broker: 0, platform: 0, mangled: 0, noMx: 0, smtpRejected: 0, smtpProbed: 0 };
   let probesLeft = isSmtpProbeAvailable() ? SMTP_PROBE_MAX_PER_RUN : 0;
 
   for (const contact of contacts) {
@@ -137,7 +138,8 @@ export const runContactHygiene = async ({ checkMx = true } = {}) => {
 
     let reason = null;
     const platform = emailBelongsToPlatform(contact.value);
-    if (BROKER_DOMAIN_RE.test(domain)) { reason = "Domain broker / parking service — never a business contact."; summary.broker += 1; }
+    if (isPlaceholderEmail(contact.value)) { reason = "Placeholder or demo text from a site template — not a real inbox."; summary.placeholder += 1; }
+    else if (BROKER_DOMAIN_RE.test(domain)) { reason = "Domain broker / parking service — never a business contact."; summary.broker += 1; }
     // A third party's inbox: the ordering platform, booking service or help
     // desk whose page the address was read from. Deliverable — to the wrong
     // company entirely, whose ticket system will politely acknowledge it.

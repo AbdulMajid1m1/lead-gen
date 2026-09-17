@@ -99,3 +99,19 @@ describe("own-domain addresses", () => {
   });
 });
 
+
+import { isPlaceholderEmail } from "../../lib/extract/contacts.js";
+
+describe("placeholder addresses", () => {
+  it("catches theme demo copy stored as a contact", () => {
+    expect(isPlaceholderEmail("support@yoursite.com")).toBe(true);
+    expect(isPlaceholderEmail("er@volutpat.in")).toBe(true);
+    expect(isPlaceholderEmail("info@example.com")).toBe(true);
+  });
+
+  it("leaves real business addresses alone", () => {
+    for (const real of ["info@elegaci.sa", "hello@styro3d.com", "sales@test-labor.de", "info@hlca.co.uk"]) {
+      expect(isPlaceholderEmail(real)).toBe(false);
+    }
+  });
+});
