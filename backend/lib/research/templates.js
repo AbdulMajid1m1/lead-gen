@@ -574,48 +574,42 @@ const ARABIC_MARKETS = new Set(["SA", "AE", "KW", "QA", "BH", "OM"]);
  * plain statement of what was built, with no invented metrics — an
  * unsubstantiated "300% more leads" costs more trust than it buys.
  *
- * deventiatech.com is deliberately absent: it already appears in the signature
- * block on every message, so repeating it in the body spends a second link for
- * nothing. Links carry real deliverability cost, so each one has to earn itself.
+ * Described in words, never linked (Abdul's rule, Sept 2026). A client's URL
+ * in a cold chase sends the reader off to judge a site built for someone else's
+ * problem, spends a link against deliverability, and names a client who never
+ * agreed to be a reference. What earns the reply is the reader recognising
+ * their own problem in the description, plus an offer that asks nothing of them.
  */
 const PORTFOLIO = {
   HR_SOFTWARE: {
-    url: "tracefyhr.com",
     what: "our own cloud HR system — employees, attendance, leave and payroll in one place, with live numbers for whoever is managing it",
     whatAr: "نظام موارد بشرية سحابي من تطويرنا — الموظفون والحضور والإجازات والرواتب في مكان واحد مع أرقام لحظية للإدارة",
   },
   CRM_DEV: {
-    url: "isaconsulting.com",
     what: "a staffing and IT firm's site, plus the live admin dashboard our team still builds and runs for them",
     whatAr: "موقع شركة توظيف وتقنية معلومات، إضافة إلى لوحة التحكم التشغيلية التي يطوّرها فريقنا ويشغّلها لهم",
   },
   SAAS_DEV: {
-    url: "isaworkbridge.com",
     what: "a recruitment and job placement platform, built end to end",
     whatAr: "منصة توظيف وتوطين وظائف، بُنيت من الصفر حتى التشغيل",
   },
   CUSTOM_SOFTWARE: {
-    url: "isaworkbridge.com",
     what: "a recruitment and job placement platform we built end to end, then kept developing as they grew",
     whatAr: "منصة توظيف وتوظيف وظائف بنيناها بالكامل وواصلنا تطويرها مع نموّهم",
   },
   WEBSITE_DEV: {
-    url: "isaconsulting.com",
     what: "a staffing and IT company's site, built so that being found and loading fast mattered more than anything decorative",
     whatAr: "موقع شركة توظيف وتقنية معلومات — بناء يهمّ فيه الظهور والسرعة أكثر من أي شيء شكلي",
   },
   MOBILE_APP: {
-    url: "mynime.com",
     what: "a streaming and discovery platform that has to feel the same on a phone as it does on a desktop",
     whatAr: "منصة بث واستكشاف يجب أن تعمل على الجوال بنفس سلاسة الكمبيوتر",
   },
   ECOMMERCE_DEV: {
-    url: "mynime.com",
     what: "a discovery platform where browsing a large catalogue has to stay fast on any screen — the same problem an online shop has",
     whatAr: "منصة استكشاف يبقى فيها تصفّح كتالوج كبير سريعاً على أي شاشة — وهي نفس مشكلة المتجر الإلكتروني",
   },
   AI_AUTOMATION: {
-    url: "tracefyhr.com",
     what: "a cloud HR system where the attendance, leave and payroll reporting updates itself instead of being compiled by hand each month",
     whatAr: "نظام موارد بشرية سحابي تتحدّث فيه تقارير الحضور والإجازات والرواتب تلقائياً بدل تجميعها يدوياً كل شهر",
   },
@@ -1436,8 +1430,8 @@ export const whatsappFollowUpTemplate = ({ company, serviceLabel, serviceKey, fo
     const work = portfolioFor(serviceKey);
     return {
       body:
-        `Closest thing we've built to what ${company.name} needs: ${work.url} — ${work.what}. `
-        + `Happy to explain how the same approach would apply here, if that's useful.`,
+        `The closest thing we've built to what ${company.name} needs is ${work.what}. `
+        + `If it helps, I'll write a one-page plan for ${company.name}: what I'd change first, how long it takes and a rough cost. Free, and no call needed.`,
     };
   }
   if (followUpNumber <= 1) {
@@ -1576,23 +1570,20 @@ export const followUpTemplate = ({ company, serviceLabel, serviceKey, followUpNu
     };
   }
 
-  // ── Chase 2: proof ──
-  // The first message in the sequence that may carry a link. Cold first-touch
-  // links measurably hurt deliverability, so the proof waits until the address
-  // has taken two messages without bouncing or complaining — by which point a
-  // link costs little and is the one thing that answers "who are you?".
-  //
-  // One matched example, not the full portfolio: the reader should recognise
-  // their own problem in it. Still no meeting request — the ask stays a
-  // one-word reply until they have shown interest.
+  // ── Chase 2: proof, in words ──
+  // No link, ever (see PORTFOLIO). The reader gets the one piece of our work
+  // that resembles their problem, described plainly, and an offer that costs
+  // nothing to accept: a written plan with a timeline and a rough cost, which
+  // they can forward to whoever decides. Still no meeting request — the ask
+  // stays a one-word reply until they have shown interest.
   if (followUpNumber === 2) {
     const work = portfolioFor(serviceKey);
 
     const english = [
       "Hello,",
-      `Rather than describe what we do, here is the closest thing we have built to what ${company.name} needs:`,
-      `${work.url} — ${work.what}.`,
-      `If that shape is useful, I'll map the same approach to ${company.name} in a few lines. A one-word reply is enough.`,
+      `The closest thing we have built to what ${company.name} needs is ${work.what}.`,
+      `If it would help, I'll write a one-page plan for ${company.name}: what I would change first, how long it would take and a rough cost. It's free, there's no call involved, and you can forward it to whoever decides.`,
+      "Shall I send it over? A one-word reply is enough.",
       "Best regards",
     ].join("\n\n");
 
@@ -1600,9 +1591,9 @@ export const followUpTemplate = ({ company, serviceLabel, serviceKey, followUpNu
 
     const arabic = [
       "مرحباً،",
-      `بدل الحديث عن خدماتنا، هذا أقرب مشروع بنيناه لما يحتاجه ${company.name}:`,
-      `${work.url} — ${work.whatAr}.`,
-      `إن كانت الفكرة مناسبة، سأرسل كيف نطبّق نفس الأسلوب على ${company.name} في أسطر قليلة. يكفي رد بكلمة واحدة.`,
+      `أقرب ما بنيناه لما يحتاجه ${company.name} هو ${work.whatAr}.`,
+      `إن كان ذلك مفيداً، سأكتب خطة من صفحة واحدة لـ ${company.name}: ما سأغيّره أولاً، والمدة، وتكلفة تقريبية. مجاناً ودون مكالمة، ويمكن تحويلها لصاحب القرار.`,
+      "هل أرسلها؟ يكفي رد بكلمة واحدة.",
       "مع التحية",
     ].join("\n\n");
 

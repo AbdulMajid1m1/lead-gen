@@ -341,8 +341,8 @@ Hard rules:
   portfolio piece, not a calendar. Links in cold first contact measurably hurt
   deliverability, and Gmail now rejects rather than filters what it distrusts.
   Our website already appears in the signature block appended below your text,
-  so the body never needs it. Proof and links belong in the later follow-up
-  the sequence sends once the address has proven deliverable.
+  so the body never needs it. Never name or link a client project either, in
+  this email or any later one: describe relevant work in words instead.
 - Never list our services. One angle, the one the facts point at. A reader who
   is told we do web, mobile, AI, cloud and marketing learns only that we are a
   general agency, which is the opposite of the specific relevance that earns

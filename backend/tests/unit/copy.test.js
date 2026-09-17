@@ -319,23 +319,21 @@ describe("proof follow-up", () => {
     serviceKey, followUpNumber: 2, facts: bookingLead.facts,
   }).body;
 
-  it("is the first message in the sequence allowed to carry a link", () => {
-    const chase1 = followUpTemplate({ ...bookingLead, serviceLabel: "x", serviceKey: "WEBSITE_DEV", followUpNumber: 1 }).body;
-    expect(URL_RE.test(chase1)).toBe(false);
-    expect(URL_RE.test(proof("WEBSITE_DEV"))).toBe(true);
+  it("never carries a link or a client's domain, in any chase", () => {
+    for (const key of ["WEBSITE_DEV", "HR_SOFTWARE", "MOBILE_APP", "SAAS_DEV", "CRM_DEV"]) {
+      expect(URL_RE.test(proof(key))).toBe(false);
+      expect(proof(key)).not.toMatch(/tracefyhr\.com|mynime\.com|isaconsulting\.com|isaworkbridge\.com/);
+    }
   });
 
-  it("shows exactly one piece of work, not the whole portfolio", () => {
-    const body = proof("WEBSITE_DEV");
-    const shown = ["tracefyhr.com", "mynime.com", "isaconsulting.com", "isaworkbridge.com"]
-      .filter((u) => body.includes(u));
-    expect(shown).toHaveLength(1);
+  it("describes the work that matches the service being pitched", () => {
+    expect(proof("HR_SOFTWARE")).toMatch(/cloud HR system/);
+    expect(proof("MOBILE_APP")).toMatch(/on a phone/);
+    expect(proof("SAAS_DEV")).toMatch(/recruitment and job placement platform/);
   });
 
-  it("matches the example to the service being pitched", () => {
-    expect(proof("HR_SOFTWARE")).toContain("tracefyhr.com");
-    expect(proof("MOBILE_APP")).toContain("mynime.com");
-    expect(proof("SAAS_DEV")).toContain("isaworkbridge.com");
+  it("offers a free written plan instead of a link", () => {
+    expect(proof("WEBSITE_DEV")).toMatch(/one-page plan/);
   });
 
   it("still does not ask for a meeting", () => {
@@ -355,11 +353,12 @@ describe("proof follow-up", () => {
     expect(proof("WEBSITE_DEV")).not.toMatch(/Last note from me/);
   });
 
-  it("sends no link in a first WhatsApp touch but does in the proof chase", () => {
+  it("sends no link in any WhatsApp touch", () => {
     const first = whatsappInitialTemplate({ company: bookingLead.company, facts: bookingLead.facts, serviceLabel: "website development" }).body;
     expect(URL_RE.test(first)).toBe(false);
     const wa = whatsappFollowUpTemplate({ company: bookingLead.company, serviceLabel: "x", serviceKey: "HR_SOFTWARE", followUpNumber: 2, facts: [] }).body;
-    expect(wa).toContain("tracefyhr.com");
+    expect(URL_RE.test(wa)).toBe(false);
+    expect(wa).toMatch(/one-page plan/);
   });
 });
 
