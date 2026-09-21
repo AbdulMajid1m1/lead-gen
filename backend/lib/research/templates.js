@@ -314,7 +314,12 @@ const describeObservation = (fact, company) => {
       line = "your site asks customers to phone or email for things that could happen on the page";
       break;
     case "NO_APP":
-      line = "you sell online but have no app for repeat customers";
+      // Only something that sells online can lack an app for repeat customers.
+      // Reza Solicitors, a law firm, was told it "sells online" by this line.
+      line = /store|shop|woocommerce|shopify|magento|sells? online|checkout|e-?commerce/i
+        .test(`${company?.industry || ""} ${text}`)
+        ? "you sell online but have no app for repeat customers"
+        : null;
       break;
     case "NEW_DOMAIN": {
       const sub = /"([^"]+)" subdomain/.exec(text)?.[1];
@@ -1411,21 +1416,58 @@ export const productInitialTemplate = ({ company, facts = [], product, recipient
  * a follow-up needs. "Just checking in" chases measurably depress replies;
  * a fresh concrete detail gives the reader a reason to answer this time.
  */
-const secondObservation = (facts = [], company = {}) => {
+const secondObservation = (facts = [], company = {}, alreadySaid = "") => {
   const first = pickObservation(facts);
   const firstKind = first ? classifyObservation(first.text) : "DEFAULT";
+  const saidKinds = kindsAlreadySaid(alreadySaid);
+  const saidNumbers = numbersIn(alreadySaid);
   for (const f of rankedObservations(facts)) {
     if (f === first) continue;
     const said = describeObservation(f, company);
     // Same rules as the opener's supporting line: a new kind of thing, said in
     // plain words, or nothing — a chase that quotes analyst prose is worse
     // than a chase with no new detail.
-    if (said.line && said.kind !== firstKind && said.kind !== "DEFAULT") return { fact: f, line: said.line };
+    if (!said.line || said.kind === firstKind || said.kind === "DEFAULT") continue;
+    // `first` is only the fact the template would have led with. An authored
+    // opener may have led with another, and then the chase "noticed" what the
+    // first email already said — Rajjak Associates was told its 8.4s load time
+    // twice. What the thread actually said is the authority.
+    if (saidKinds.has(said.kind) || [...numbersIn(said.line)].some((n) => saidNumbers.has(n))) continue;
+    return { fact: f, line: said.line };
   }
   return null;
 };
 
-export const whatsappFollowUpTemplate = ({ company, serviceLabel, serviceKey, followUpNumber, facts = [] }) => {
+/**
+ * How a sent email talks about each kind of observation. The fact patterns
+ * above are written against the signal catalogue's wording, which a person
+ * writing the opener does not use: "takes 8.4 seconds to open" never says
+ * "took 8.4s".
+ */
+const PROSE_KINDS = [
+  { kind: "SLOW_SITE", re: /\bseconds?\b[^.]{0,40}\b(?:open|load)|\bslow\b|page speed/i },
+  { kind: "OLD_COPYRIGHT", re: /\bfooter\b|copyright/i },
+  { kind: "NO_BOOKING", re: /\bbook(?:ing|ed)?\b[^.]{0,60}\bphone\b|pick a (?:slot|time)|online booking/i },
+  { kind: "NO_ORDERING", re: /order(?:ing)? (?:from you )?online|online ordering|walk-in or (?:phone|call)|buy from [^.]{1,40} online/i },
+  { kind: "NO_MOBILE", re: /zoomed-out|pinch and zoom|shrunken desktop|breaks on a phone/i },
+  { kind: "NO_WEBSITE", re: /no website/i },
+  { kind: "NO_SCHEMA", re: /reviews (?:and|or) hours|structured data/i },
+  { kind: "EXPANSION", re: /new (?:location|opening|branch|site)\b/i },
+  { kind: "HIRING", re: /\bhiring\b|open (?:roles|positions)|careers page|vacanc/i },
+];
+
+/** Every observation kind a thread's own words have already made. */
+const kindsAlreadySaid = (text) => {
+  const s = String(text || "");
+  if (!s.trim()) return new Set();
+  return new Set([...OBSERVATION_KINDS, ...PROSE_KINDS].filter((k) => k.re.test(s)).map((k) => k.kind));
+};
+
+/** The figures a text quotes — load times, years — of two characters or more. */
+const numbersIn = (text) =>
+  new Set((String(text || "").match(/\d+(?:\.\d+)?/g) || []).filter((n) => n.length >= 2));
+
+export const whatsappFollowUpTemplate = ({ company, serviceLabel, serviceKey, followUpNumber, facts = [], alreadySaid = "" }) => {
   if (followUpNumber === 2) {
     const work = portfolioFor(serviceKey);
     return {
@@ -1435,7 +1477,7 @@ export const whatsappFollowUpTemplate = ({ company, serviceLabel, serviceKey, fo
     };
   }
   if (followUpNumber <= 1) {
-    const second = secondObservation(facts, company);
+    const second = secondObservation(facts, company, alreadySaid);
     const extra = second
       ? `One more thing I spotted: ${second.line}. `
       : `I've noted a couple of quick wins specific to ${company.name}. `;
@@ -1463,23 +1505,52 @@ const productProof = (product) => {
     .map((p) => stripLinks(typeof p === "string" ? p : p?.value))
     .filter(Boolean);
   const pick = (re) => points.find((p) => re.test(p)) || null;
+  // No "saving" any more. The profile records a pricing page's comparison the
+  // way research read it ("States most customers save over $20,000/year…"),
+  // and the chase printed it as "here is what it has meant for others: states
+  // most customers save…" — a broken sentence that also passed a list-price
+  // comparison off as a customer's result. A saving goes in an email when a
+  // named customer says it, not before.
   return {
-    saving: pick(/save|saving|cheaper/i),
     trial: pick(/free trial|no credit card|cancel anytime/i),
-    pedigree: pick(/built by|shipped to|customers/i),
+    // Only a claim that reads as a sentence about the product after "It is".
+    built: pick(/^built by\b/i),
     founders: pick(/founding|founder pricing|lifetime/i),
   };
 };
 
-/** The cheapest plan's price and reach, as one clause: "$20 a month for up to 50 staff". */
-const productEntryPrice = (product) => {
-  const plans = Array.isArray(product?.pricing) ? product.pricing : [];
-  const entry = plans.find((p) => p?.price && /\d/.test(String(p.price))) || null;
+/**
+ * The self-serve tiers — price and headcount — in the order they are listed.
+ * A tier without an "up to N" is the custom one and is left out: it has no
+ * price to quote.
+ */
+const productTiers = (product) =>
+  (Array.isArray(product?.pricing) ? product.pricing : [])
+    .map((p) => ({
+      amount: /(?:[$€£]\s?|\b[A-Z]{3}\s)?\d[\d,.]*/.exec(String(p?.price || ""))?.[0]?.trim() || null,
+      reach: /up to (\d[\d,]*)/i.exec(String(p?.capacity || ""))?.[1] || null,
+    }))
+    .filter((t) => t.amount && t.reach);
+
+/**
+ * The price, said once and the same way in every chase: "It's a flat $20 a
+ * month for up to 50 staff, or $49 up to 250, not per employee."
+ *
+ * Both tiers, because the opener may have quoted either: a 250-staff school
+ * was told "$49 a month up to 250 staff" and then, three days later, "It stays
+ * at $20 a month for up to 50 staff however the headcount moves" — two prices
+ * in one thread, and a promise the second tier contradicts.
+ */
+const productPriceLine = (product) => {
+  const [entry, next] = productTiers(product);
   if (!entry) return null;
-  const price = String(entry.price).replace(/\/\s*month/i, " a month").replace(/\/mo\b/i, " a month");
-  const reach = /up to (\d+)/i.exec(String(entry.capacity || ""))?.[1];
-  return reach ? `${price} for up to ${reach} staff` : price;
+  return next
+    ? `It's a flat ${entry.amount} a month for up to ${entry.reach} staff, or ${next.amount} up to ${next.reach}, not per employee.`
+    : `It's a flat ${entry.amount} a month for up to ${entry.reach} staff, not per employee.`;
 };
+
+/** An ICP answer that is itself the price, which the price line already says. */
+const PRICE_ANSWER_RE = /[$€£]\s?\d|\bflat (?:rate|price|fee)\b|per (?:month|employee|seat)/i;
 
 /**
  * Follow-ups for a promoted product. The agency chase below talks about
@@ -1499,10 +1570,11 @@ export const productFollowUpTemplate = ({ company, product, followUpNumber, fact
   const pains = (Array.isArray(product?.icp?.painPoints) ? product.icp.painPoints : []).filter((p) => p?.pain);
   const first = choosePain(product, shape);
   // A different pain from the one the first email led with, so the chase says
-  // something new rather than repeating the pitch in other words.
-  const second = pains.find((p) => p !== first && p.productAnswer) || null;
+  // something new rather than repeating the pitch in other words — and not one
+  // whose answer is the price, which the price line below already carries.
+  const second = pains.find((p) => p !== first && p.productAnswer && !PRICE_ANSWER_RE.test(p.productAnswer)) || null;
   const proof = productProof(product);
-  const price = productEntryPrice(product);
+  const priceLine = productPriceLine(product);
   const who = company?.name || "your team";
 
   // ── Chase 1: the outcome, not the feature ──
@@ -1512,12 +1584,16 @@ export const productFollowUpTemplate = ({ company, product, followUpNumber, fact
     return {
       body: [
         "Hello,",
+        // ICP pains are written as whole clauses ("payroll is run in
+        // spreadsheets"), gerunds ("paying staff across…") and bare nouns
+        // ("five separate tools…") alike, so each goes after a colon, the one
+        // place all three read as English. Spliced mid-sentence the old way it
+        // produced "usually that payroll is run in spreadsheets and re-keyed
+        // every month stops being anyone's job".
         pain && answer
-          ? `One thing I didn't mention: for a team like ${who}, the part people notice first is usually that ${pain} stops being anyone's job — ${name} gives you ${answer}.`
+          ? `Something else that tends to eat hours at ${shape.plural}: ${pain}. ${name} covers that too: ${answer}.`
           : `One thing I didn't mention: the part people notice first with ${name} is the hours that come back each week — the same team, without the re-keying.`,
-        price
-          ? `It stays at ${price} however the headcount moves.`
-          : null,
+        priceLine,
         `Would a two-minute walkthrough of that be worth your time? "Yes" is enough and I'll send it.`,
         "Best regards",
       ].filter(Boolean).join("\n\n"),
@@ -1528,9 +1604,9 @@ export const productFollowUpTemplate = ({ company, product, followUpNumber, fact
   // The first message in the sequence that may point at the product itself.
   if (followUpNumber === 2) {
     const lines = ["Hello,"];
-    if (proof.saving) lines.push(`Rather than describe ${name}, here is what it has meant for others: ${lowerFirst(proof.saving)}.`);
-    else if (proof.pedigree) lines.push(`Rather than describe ${name} further: ${lowerFirst(proof.pedigree)}.`);
-    else lines.push(`Rather than describe ${name} further, the fastest judge is ten minutes inside it.`);
+    lines.push(proof.built
+      ? `The quickest way to judge ${name} is ten minutes inside it. It is ${lowerFirst(proof.built.replace(/\.$/, ""))}.`
+      : `The quickest way to judge ${name} is ten minutes inside it.`);
     if (proof.trial) lines.push(`There is nothing to commit to — ${lowerFirst(proof.trial)}.`);
     if (proof.founders) lines.push(`${proof.founders.replace(/\.$/, "")}, which is why I'm writing now rather than later.`);
     if (product?.proofLink || product?.url) lines.push(`Have a look here: ${product.proofLink || product.url}`);
@@ -1550,19 +1626,22 @@ export const productFollowUpTemplate = ({ company, product, followUpNumber, fact
   };
 };
 
-export const followUpTemplate = ({ company, serviceLabel, serviceKey, followUpNumber, facts = [] }) => {
+export const followUpTemplate = ({ company, serviceLabel, serviceKey, followUpNumber, facts = [], alreadySaid = "" }) => {
   const bilingual = ARABIC.test(company.name) || ARABIC_MARKETS.has(company.countryCode);
 
   // ── Chase 1: a second observation ──
   // A new concrete detail, never "just checking in" — that phrase measurably
   // depresses replies because it gives the reader no reason to answer.
   if (followUpNumber <= 1) {
-    const second = secondObservation(facts, company);
+    const second = secondObservation(facts, company, alreadySaid);
     return {
       body: [
         "Hello,",
+        // The offer below is "the short list", so the observation branch has to
+        // introduce one: every chase that led with a second observation used to
+        // offer to send a list nobody had mentioned.
         second
-          ? `One more thing I noticed while looking at ${company.name}: ${second.line}.`
+          ? `One more thing I noticed while looking at ${company.name}: ${second.line}. It is on the short list of things I would change first.`
           : `Since my last note I've written down the two or three things I would change first at ${company.name} — specific ones, not a generic checklist.`,
         `Happy to send the short list over — a one-word reply is enough. And if the timing is wrong, "not now" is a completely fine answer.`,
         "Best regards",

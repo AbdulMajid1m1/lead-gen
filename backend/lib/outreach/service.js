@@ -250,6 +250,12 @@ export const sendInitialEmail = async ({
   return { ok: true, thread };
 };
 
+/** Everything we have sent on a thread so far, subject included, as one text. */
+const alreadySaidIn = (thread) =>
+  [thread.subject, ...(thread.messages || []).filter((m) => m.direction === "OUTBOUND").map((m) => m.body)]
+    .filter(Boolean)
+    .join("\n\n");
+
 /**
  * Send one follow-up on a thread (manual click or the scheduler).
  *
@@ -275,6 +281,9 @@ export const sendFollowUp = async ({ account, threadId, sentBy = null }) => {
   // Facts give the chase something new to say; a lead that vanished mid-thread
   // still gets the factless variant rather than an error.
   const gathered = await gatherFacts(thread.lead.id).catch(() => null);
+  // What this thread has already told them. The opener is often hand-written,
+  // so only its own words say which observation it led with.
+  const alreadySaid = alreadySaidIn(thread);
   // A promoter lead is chased about the product it was pitched, not about the
   // agency's services — the thread has to read as one conversation.
   const product = await promotedProductForLead(thread.lead.id).catch(() => null);
@@ -288,6 +297,7 @@ export const sendFollowUp = async ({ account, threadId, sentBy = null }) => {
         serviceKey: thread.lead.primaryOpportunity,
         followUpNumber,
         facts: gathered?.facts || [],
+        alreadySaid,
       });
 
   const lastOutbound = [...thread.messages].reverse().find((m) => m.direction === "OUTBOUND");
@@ -468,7 +478,7 @@ export const sendWhatsAppFollowUp = async ({ device, threadId, sentBy = null }) 
   const actor = toActor(sentBy);
   const thread = await prisma.outreachThread.findUnique({
     where: { id: threadId },
-    include: { lead: { include: { company: true } } },
+    include: { lead: { include: { company: true } }, messages: { orderBy: { createdAt: "asc" } } },
   });
   if (!thread) return { ok: false, error: "Thread not found." };
   if (thread.channel !== "WHATSAPP") return { ok: false, error: "Not a WhatsApp thread." };
@@ -487,6 +497,7 @@ export const sendWhatsAppFollowUp = async ({ device, threadId, sentBy = null }) 
     serviceKey: thread.lead.primaryOpportunity,
     followUpNumber,
     facts: gathered?.facts || [],
+    alreadySaid: alreadySaidIn(thread),
   });
 
   // The same sign-off the first message used, so the chat reads as one person.

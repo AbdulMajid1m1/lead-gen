@@ -64,20 +64,75 @@ describe("productFollowUpTemplate", () => {
 
   it("chase 1 names an outcome from the ICP, the flat price, and asks for one word", () => {
     const { body } = productFollowUpTemplate({ company, product, followUpNumber: 1 });
-    expect(body).toMatch(/TracefyHR gives you/);
+    expect(body).toMatch(/TracefyHR covers that too: employee self-service leave requests/);
     expect(body).toMatch(/\$20 a month for up to 50 staff/);
     expect(body).toMatch(/"Yes" is enough/);
     expect(body).not.toMatch(/website|portfolio|software development/i);
     expect(body).not.toMatch(/https?:\/\//); // no link before the second chase
   });
 
-  it("chase 2 carries proof, removes the risk, and is the first with a link", () => {
+  it("chase 1 puts a clause-shaped pain after a colon instead of splicing it mid-sentence", () => {
+    // What went out to 38 leads: "usually that payroll is run in spreadsheets
+    // and re-keyed every month stops being anyone's job".
+    const clauseFirst = {
+      ...product,
+      icp: { painPoints: [product.icp.painPoints[1], product.icp.painPoints[0]] },
+    };
+    const { body } = productFollowUpTemplate({ company, product: clauseFirst, followUpNumber: 1 });
+    expect(body).toMatch(/at nurseries: payroll is run in spreadsheets and re-keyed every month\./);
+    expect(body).not.toMatch(/stops being anyone's job|the part people notice first is usually/);
+  });
+
+  it("chase 1 quotes both tiers, so it cannot contradict an opener that quoted the second", () => {
+    const tiered = {
+      ...product,
+      pricing: [
+        { plan: "Starter", price: "$20/month", capacity: "Up to 50 employees — includes payroll" },
+        { plan: "Professional", price: "$49/month", capacity: "Up to 250 employees — adds more" },
+        { plan: "Enterprise", price: "Custom, from $199/mo", capacity: "250+ employees" },
+      ],
+    };
+    const { body } = productFollowUpTemplate({ company, product: tiered, followUpNumber: 1 });
+    expect(body).toMatch(/It's a flat \$20 a month for up to 50 staff, or \$49 up to 250, not per employee\./);
+    expect(body).not.toMatch(/however the headcount moves|\$199/);
+  });
+
+  it("chase 1 never leads with a pain whose answer is the price the next line states", () => {
+    const priced = {
+      ...product,
+      icp: { painPoints: [
+        product.icp.painPoints[0],
+        { pain: "Per-seat HR software gets punitive as headcount grows", productAnswer: "Flat rate: $20/month to 50 staff, $49/month to 250" },
+        product.icp.painPoints[1],
+      ] },
+    };
+    const { body } = productFollowUpTemplate({ company, product: priced, followUpNumber: 1 });
+    expect(body).not.toMatch(/per-seat|Flat rate:/i);
+    expect(body).toMatch(/leave requests and approvals live in WhatsApp and email/);
+  });
+
+  it("chase 2 removes the risk and is the first with a link, without passing a pricing claim off as a result", () => {
     const { body } = productFollowUpTemplate({ company, product, followUpNumber: 2 });
-    expect(body).toMatch(/save over \$20,000\/year/);
+    // "here is what it has meant for others: states most customers save…"
+    expect(body).not.toMatch(/states most|meant for others|save over/i);
+    expect(body).toMatch(/ten minutes inside it/);
     expect(body).toMatch(/no credit card/);
     expect(body).toMatch(/lifetime founder pricing/);
     expect(body).toMatch(/https:\/\/tracefyhr\.com/);
     expect(body).toMatch(/one-word "no"/);
+  });
+
+  it("chase 2 names who built it only when the claim reads as a sentence", () => {
+    const built = {
+      ...product,
+      proofPoints: [
+        { value: "Named customers shown: SS Support Network, DevEntia Tech" },
+        { value: "Built by payroll and HR engineers who have shipped to 10,000+ employees" },
+      ],
+    };
+    const { body } = productFollowUpTemplate({ company, product: built, followUpNumber: 2 });
+    expect(body).toMatch(/It is built by payroll and HR engineers who have shipped to 10,000\+ employees\./);
+    expect(body).not.toMatch(/named customers shown/i);
   });
 
   it("chase 3 is the breakup and promises to stop", () => {

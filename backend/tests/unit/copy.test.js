@@ -135,6 +135,41 @@ describe("follow-ups add new value", () => {
     const { body } = followUpTemplate({ company, serviceLabel: "website development", followUpNumber: 1, facts: [] });
     expect(body).toMatch(/things I would change first/);
   });
+
+  it("introduces the short list before offering to send it", () => {
+    const { body } = followUpTemplate({
+      company, serviceLabel: "website development", followUpNumber: 1,
+      facts: [fact(1, "Bright Dental is a dental clinic in London.", "VERIFIED"),
+        fact(2, "The home page took 5.5s to respond."),
+        fact(3, "The site publishes no schema.org data, so it cannot appear in rich search results.")],
+    });
+    const introduced = body.indexOf("short list of things I would change first");
+    expect(introduced).toBeGreaterThan(-1);
+    expect(body.indexOf("send the short list over")).toBeGreaterThan(introduced);
+  });
+
+  it("does not notice again what the first email already said", () => {
+    // Rajjak Associates: opened on its 8.4-second load time, then chased with
+    // "your home page takes 8.4s to load".
+    const facts = [fact(1, "Rajjak Associates is an accounting firm in London.", "VERIFIED"),
+      fact(2, "The site publishes no schema.org data, so it cannot appear in rich search results."),
+      fact(3, "The home page took 8.4s to respond.")];
+    const alreadySaid = "Rajjak Associates page speed\n\nI noticed the Rajjak Associates home page takes 8.4 seconds to open, and Google isn't showing your reviews and hours.";
+    const { body } = followUpTemplate({ company, serviceLabel: "website development", followUpNumber: 1, facts, alreadySaid });
+    expect(body).not.toMatch(/8\.4|structured data/);
+    expect(body).toMatch(/things I would change first/);
+  });
+
+  it("never tells a firm that does not sell online that it lacks a shopping app", () => {
+    const { body } = followUpTemplate({
+      company: { name: "Reza Solicitors", industry: "Law firm", countryCode: "GB" },
+      serviceLabel: "website development", followUpNumber: 1,
+      facts: [fact(1, "Reza Solicitors is a law firm in London.", "VERIFIED"),
+        fact(2, "Consultations are booked by phone — no online booking."),
+        fact(3, "The business has no mobile app presence.")],
+    });
+    expect(body).not.toMatch(/sell online|app for repeat customers/);
+  });
 });
 
 describe("whatsapp first touch", () => {
