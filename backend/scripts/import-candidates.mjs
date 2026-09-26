@@ -48,6 +48,7 @@ import { createDiscoveryRun, startDiscoveryRun } from "../lib/discovery/runner.j
 import { ensureSource, recordSourceRecord } from "../lib/provenance/recorder.js";
 import { normalizeCompanyName } from "../utils/normalize.js";
 import { normaliseCountryCode } from "../utils/countries.js";
+import { DISCOVERY_MAX_CRAWL_HOSTS } from "../configs/envConfig.js";
 import { CostTracker } from "../lib/llm/responses.js";
 
 const CLAIM_FIELDS = [
@@ -135,8 +136,22 @@ const main = async () => {
   const steps = full.steps
     .filter((s) => !DISCOVERY_STEPS.has(s.kind))
     .map((s, i) => ({ ...s, ordinal: i }));
+  // The crawl budget follows the file, the way promoter-assist's does. A plan
+  // built for an ordinary search carries a host cap sized for a search, and a
+  // researched file longer than that silently loses its tail: a 35-practice
+  // batch crawled 30 and left 9 companies with no website, no contacts and so
+  // no lead at all — they were in the database looking imported, and were not.
+  for (const step of steps) {
+    if (step.kind !== "CRAWL") continue;
+    step.params = {
+      ...step.params,
+      maxHosts: Math.min(doc.candidates.length + 10, DISCOVERY_MAX_CRAWL_HOSTS),
+      maxResolve: Math.min(doc.candidates.length, 25),
+    };
+  }
   const plan = { ...full, steps };
-  console.log(`plan     : ${steps.map((s) => s.kind).join(" → ")}`);
+  const crawlStep = steps.find((s) => s.kind === "CRAWL");
+  console.log(`plan     : ${steps.map((s) => s.kind).join(" → ")}${crawlStep ? ` (crawl up to ${crawlStep.params.maxHosts} hosts)` : ""}`);
 
   const run = await createDiscoveryRun({ plan, trigger: "NL_QUERY", searchQueryId: searchQuery.id });
   await saveBrief({ runId: run.id, searchQueryId: searchQuery.id, brief, producedBy, model });
