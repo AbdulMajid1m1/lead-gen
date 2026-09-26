@@ -91,7 +91,7 @@ import { buildProductBlock, PROMPT_VERSION } from "../lib/research/prompts.js";
 import { buildPromotePlan } from "../lib/nlquery/planner.js";
 import { createDiscoveryRun, startDiscoveryRun } from "../lib/discovery/runner.js";
 import { ensureSource, recordSourceRecord } from "../lib/provenance/recorder.js";
-import { normalizeCompanyName } from "../utils/normalize.js";
+import { normalizeCompanyName, normalizeCityLabel } from "../utils/normalize.js";
 import { normaliseCountryCode } from "../utils/countries.js";
 import { DISCOVERY_MAX_CRAWL_HOSTS } from "../configs/envConfig.js";
 
@@ -535,7 +535,7 @@ const importLeads = async () => {
           name: c.name.slice(0, 160),
           nameLocal: c.nameLocal?.slice(0, 160) ?? null,
           claimedWebsite: c.website?.slice(0, 300) ?? null,
-          claimedCity: c.city?.slice(0, 80) ?? null,
+          claimedCity: normalizeCityLabel(c.city)?.slice(0, 80) ?? null,
           claimedCountry: normaliseCountryCode(c.countryCode),
           industryGuess: c.industryGuess?.slice(0, 60) ?? null,
           whyMatch: (c.whyMatch || "").slice(0, 300),

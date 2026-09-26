@@ -148,3 +148,38 @@ export const atsSlugCandidates = (name) => {
   ]);
   return [...candidates].filter((c) => c && c.length >= 2 && c.length <= 60);
 };
+
+/**
+ * A city as it may be printed in a sentence. Unlike the identity helpers above
+ * this keeps the original casing — the value ends up inside copy ("based in
+ * Cedar Rapids, IA"), so what matters is that it reads like a person wrote it.
+ *
+ * Researchers hand back disambiguated labels, which read as a database dump
+ * the moment they are dropped into a sentence:
+ *   "Brentwood (St. Louis), MO"   → "Brentwood, MO"
+ *   "Kaukauna / Green Bay, WI"    → "Kaukauna, WI"
+ * A trailing region code is kept, because "City, ST" is how the US rows are
+ * written throughout and stripping it would make two lanes disagree.
+ */
+export const normalizeCityLabel = (input) => {
+  if (!input) return null;
+  let s = String(input).replace(/\s+/g, " ").trim();
+  if (!s) return null;
+
+  // Hold back a trailing state/province code before touching the rest, so the
+  // alternatives split below sees "Kaukauna / Green Bay" and not the comma.
+  let tail = "";
+  const region = s.match(/,\s*([A-Za-z]{2,3})\.?$/);
+  if (region) {
+    tail = `, ${region[1].toUpperCase()}`;
+    s = s.slice(0, region.index).trim();
+  }
+
+  s = s.replace(/\([^)]*\)/g, " ");
+  // First of an either/or pair. Split on "/" and "|" only: a hyphen belongs to
+  // the name itself (Stratford-upon-Avon, Saint-Denis).
+  s = s.split(/[/|]/)[0];
+  s = s.replace(/\s+/g, " ").replace(/^[\s,;·-]+|[\s,;·-]+$/g, "").trim();
+
+  return s ? `${s}${tail}` : null;
+};

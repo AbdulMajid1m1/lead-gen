@@ -2,7 +2,7 @@ import prisma from "../../prismaClient.js";
 import { searchAndParse, citationsAreGrounded, isResearchAvailable } from "../llm/responses.js";
 import { DISCOVER_SYSTEM, buildDiscoverUser, DISCOVER_SCHEMA } from "./prompts.js";
 import { ensureSource, recordSourceRecord, resolveCompany } from "../provenance/recorder.js";
-import { normalizeDomain, normalizeCompanyName } from "../../utils/normalize.js";
+import { normalizeDomain, normalizeCompanyName, normalizeCityLabel } from "../../utils/normalize.js";
 import { classifyExcludedBusiness, exclusionNote } from "../qualify/excludedCategories.js";
 import { AI_MAX_CANDIDATES, AI_SEARCH_MODEL } from "../../configs/envConfig.js";
 import { log } from "../../utils/logger.js";
@@ -82,7 +82,7 @@ export const discoverViaWebSearch = async ({ runId, strategy, brief, tracker, ma
           name: company.name.slice(0, 160),
           nameLocal: company.nameLocal?.slice(0, 160) ?? null,
           claimedWebsite: company.website?.slice(0, 300) ?? null,
-          claimedCity: company.city?.slice(0, 80) ?? null,
+          claimedCity: normalizeCityLabel(company.city)?.slice(0, 80) ?? null,
           industryGuess: company.industryGuess?.slice(0, 60) ?? null,
           whyMatch: (company.whyMatch || "").slice(0, 300),
           matchConfidence: grounded ? (company.matchConfidence || "MEDIUM") : "LOW",
@@ -198,7 +198,7 @@ export const resolveCandidates = async (runId, { exclusions = [], countryCode = 
       name: candidate.name,
       domain: normalizeDomain(candidate.claimedWebsite),
       phone: phoneClaim?.value || null,
-      city: candidate.claimedCity,
+      city: normalizeCityLabel(candidate.claimedCity),
       // Where the researcher says this one trades, falling back to the market
       // the run was aimed at. The fallback matters: without any country a
       // candidate-born company reads as an unknown market to sendPolicyFor(),
