@@ -21,6 +21,14 @@ describe("normalizeCityLabel", () => {
     expect(normalizeCityLabel("  Dublin  ")).toBe("Dublin");
   });
 
+  it("treats a non-place as no place at all", () => {
+    // A job board's "Remote (Germany)" reduces to "Remote", and "based in
+    // Remote" reads worse than a sentence with no location in it.
+    for (const v of ["Remote (Germany)", "Remote", "remote work", "Worldwide", "Various", "N/A", "Multiple Locations"]) {
+      expect(normalizeCityLabel(v)).toBeNull();
+    }
+  });
+
   it("returns null when nothing printable is left", () => {
     // The copy templates omit the clause entirely on a null, which is the
     // right outcome — better no location than a parenthetical on its own.

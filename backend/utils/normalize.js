@@ -161,10 +161,15 @@ export const atsSlugCandidates = (name) => {
  * A trailing region code is kept, because "City, ST" is how the US rows are
  * written throughout and stripping it would make two lanes disagree.
  */
+const NON_PLACES = new Set([
+  "remote", "remote work", "worldwide", "global", "various", "multiple",
+  "multiple locations", "anywhere", "n/a", "na", "none", "unknown", "tbc", "tbd",
+]);
+
 export const normalizeCityLabel = (input) => {
   if (!input) return null;
   let s = String(input).replace(/\s+/g, " ").trim();
-  if (!s) return null;
+  if (!s || NON_PLACES.has(s.toLowerCase())) return null;
 
   // Hold back a trailing state/province code before touching the rest, so the
   // alternatives split below sees "Kaukauna / Green Bay" and not the comma.
@@ -181,5 +186,9 @@ export const normalizeCityLabel = (input) => {
   s = s.split(/[/|]/)[0];
   s = s.replace(/\s+/g, " ").replace(/^[\s,;·-]+|[\s,;·-]+$/g, "").trim();
 
-  return s ? `${s}${tail}` : null;
+  // "Remote (Germany)" reduces to "Remote", and "based in Remote" is worse than
+  // saying nothing — the templates omit the clause on a null, which is the
+  // honest outcome when no place was ever recorded.
+  if (!s || NON_PLACES.has(s.toLowerCase())) return null;
+  return `${s}${tail}`;
 };
