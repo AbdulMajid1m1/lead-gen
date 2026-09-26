@@ -30,6 +30,20 @@ export const COUNTRY_NAMES = {
 export const countryName = (code) => (code ? COUNTRY_NAMES[code.toUpperCase()] || code.toUpperCase() : null);
 
 /**
+ * A researcher-supplied country, or null when it is not one.
+ *
+ * Two letters or nothing, deliberately: a caller uses this to decide whether
+ * to override the market a run was aimed at, and a half-parsed value there is
+ * worse than no value at all — it would be written onto the company and then
+ * read back by the send gate as the law that applies to it. Unlisted codes
+ * still pass, because the table above is a display map, not a registry.
+ */
+export const normaliseCountryCode = (value) => {
+  const code = String(value ?? "").trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(code) ? code : null;
+};
+
+/**
  * ISO 3166-1 alpha-2 → E.164 country calling code.
  *
  * Kept beside COUNTRY_NAMES because both answer "what do we know about this

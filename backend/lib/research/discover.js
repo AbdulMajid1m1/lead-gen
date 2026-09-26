@@ -199,11 +199,14 @@ export const resolveCandidates = async (runId, { exclusions = [], countryCode = 
       domain: normalizeDomain(candidate.claimedWebsite),
       phone: phoneClaim?.value || null,
       city: candidate.claimedCity,
-      // The market the run was aimed at. Without it a candidate-born company
-      // has no countryCode, and sendPolicyFor() then reads it as an unknown
-      // market and answers RESTRICTED — which silently withholds every lead
-      // this path produces, however clearly it is legal to contact.
-      countryCode,
+      // Where the researcher says this one trades, falling back to the market
+      // the run was aimed at. The fallback matters: without any country a
+      // candidate-born company reads as an unknown market to sendPolicyFor(),
+      // which answers RESTRICTED and silently withholds every lead this path
+      // produces. The per-candidate value matters just as much once a run
+      // spans two countries — a Dublin charity on a UK-first profile was
+      // stamped GB, and judged under the wrong country's law.
+      countryCode: candidate.claimedCountry || countryCode,
       industry: candidate.industryGuess && candidate.industryGuess !== "OTHER" ? candidate.industryGuess : null,
       discoveredVia: "AI_WEB_SEARCH",
     });

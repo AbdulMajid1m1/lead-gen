@@ -254,6 +254,22 @@ describe("shouldPauseForBounces", () => {
     expect(shouldPauseForBounces({ rate: 0.2, sample: MIN_SAMPLE_BEFORE_PAUSE })).toBe(true);
   });
 
+  it("does not stop a market over a couple of mistyped addresses", () => {
+    // Both real pauses, replayed. The agency lanes stopped on 2 of 20 and the
+    // TracefyHR campaign on 2 of 47; between them that cost three weeks of
+    // sending, and neither pair of bounces said anything about the sender.
+    expect(shouldPauseForBounces({ rate: 2 / 20, sample: 20, bounced: 2 })).toBe(false);
+    expect(shouldPauseForBounces({ rate: 2 / 47, sample: 47, bounced: 2 })).toBe(false);
+    // Two dead addresses in a full sample is still clerical; three is a trend.
+    expect(shouldPauseForBounces({ rate: 2 / 60, sample: 60, bounced: 2 })).toBe(false);
+    expect(shouldPauseForBounces({ rate: 3 / 60, sample: 60, bounced: 3 })).toBe(true);
+  });
+
+  it("reads the bounce count back out of the rate when a caller omits it", () => {
+    expect(shouldPauseForBounces({ rate: 0.04, sample: 50 })).toBe(false); // 2 bounces
+    expect(shouldPauseForBounces({ rate: 0.06, sample: 50 })).toBe(true); // 3 bounces
+  });
+
   it("never pauses on a rate it cannot read", () => {
     expect(shouldPauseForBounces({ rate: NaN, sample: 100 })).toBe(false);
     expect(shouldPauseForBounces({})).toBe(false);

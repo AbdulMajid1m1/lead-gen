@@ -227,8 +227,22 @@ export const BOUNCE_PAUSE_THRESHOLD = 0.03;
  * Below this many sends the rate is noise, not a trend: one bounce in five
  * reads as 20% and would pause a perfectly healthy campaign on its first
  * mistyped address.
+ *
+ * Raised from 20 to 50 on 2026-09-26. At 20, a 3% threshold is tripped by the
+ * *first* bad address, and that is exactly what happened: every lane stopped on
+ * 2 of 20, the TracefyHR campaign on 2 of 47, and between them they cost three
+ * weeks of sending. 50 is the smallest sample where one bounce (2%) still sits
+ * under the threshold.
  */
-export const MIN_SAMPLE_BEFORE_PAUSE = 20;
+export const MIN_SAMPLE_BEFORE_PAUSE = 50;
+
+/**
+ * And a floor in whole bounces, because a rate alone cannot tell a reputation
+ * problem from a typo. Both real pauses were two dead addresses — a
+ * `reaervations@` misspelling and a person who had left — which say nothing
+ * about the sending domain. Three is the point where it stops being clerical.
+ */
+export const MIN_BOUNCES_BEFORE_PAUSE = 3;
 
 /**
  * The rolling bounce rate for a mailbox (or for all of them).
@@ -268,10 +282,19 @@ export const bounceRate = async ({ accountId = null, sinceDays = 30 } = {}) => {
   return { sent, bounced, rate: sent > 0 ? bounced / sent : 0, sample: sent };
 };
 
-/** Whether this rate, on this much evidence, is worth stopping a campaign for. */
-export const shouldPauseForBounces = ({ rate, sample } = {}) => {
+/**
+ * Whether this rate, on this much evidence, is worth stopping a campaign for.
+ *
+ * Three gates, all of which must agree: enough sends to read a trend, enough
+ * whole bounces that it is not clerical, and a rate above what a sending
+ * domain absorbs. `bounced` is optional — callers that pass a `bounceRate()`
+ * result supply it, and anything older is read back out of the rate.
+ */
+export const shouldPauseForBounces = ({ rate, sample, bounced } = {}) => {
   if (!Number.isFinite(rate) || !Number.isFinite(sample)) return false;
   if (sample < MIN_SAMPLE_BEFORE_PAUSE) return false;
+  const bounces = Number.isFinite(bounced) ? bounced : Math.round(rate * sample);
+  if (bounces < MIN_BOUNCES_BEFORE_PAUSE) return false;
   return rate >= BOUNCE_PAUSE_THRESHOLD;
 };
 

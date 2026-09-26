@@ -47,6 +47,7 @@ import { buildBrief, saveBrief } from "../lib/research/brief.js";
 import { createDiscoveryRun, startDiscoveryRun } from "../lib/discovery/runner.js";
 import { ensureSource, recordSourceRecord } from "../lib/provenance/recorder.js";
 import { normalizeCompanyName } from "../utils/normalize.js";
+import { normaliseCountryCode } from "../utils/countries.js";
 import { CostTracker } from "../lib/llm/responses.js";
 
 const CLAIM_FIELDS = [
@@ -169,6 +170,7 @@ const main = async () => {
           nameLocal: c.nameLocal?.slice(0, 160) ?? null,
           claimedWebsite: c.website?.slice(0, 300) ?? null,
           claimedCity: c.city?.slice(0, 80) ?? null,
+          claimedCountry: normaliseCountryCode(c.countryCode),
           industryGuess: c.industryGuess?.slice(0, 60) ?? null,
           whyMatch: (c.whyMatch || "").slice(0, 300),
           matchConfidence: ok ? (c.matchConfidence || "MEDIUM") : "LOW",

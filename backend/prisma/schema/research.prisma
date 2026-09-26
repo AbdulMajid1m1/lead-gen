@@ -37,6 +37,12 @@ model AiCandidate {
   nameLocal       String? @db.VarChar(160) // e.g. the Arabic name, when shown
   claimedWebsite  String? @db.VarChar(300)
   claimedCity     String? @db.VarChar(80)
+  /// ISO alpha-2 of where this candidate actually trades, when the researcher
+  /// knows it. Without this every company a run creates was stamped with the
+  /// brief's (or the ICP's) primary country, so a Dublin charity imported on a
+  /// UK-first profile was recorded as British — and `sendPolicyFor()` then
+  /// applied the wrong country's law to it.
+  claimedCountry  String? @db.VarChar(2)
   industryGuess   String? @db.VarChar(60)
   whyMatch        String  @db.VarChar(300)
   matchConfidence String  @db.VarChar(10) // HIGH | MEDIUM | LOW
