@@ -231,6 +231,36 @@ export const sendInitialEmail = async ({
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { company: true } });
   if (!lead) return { ok: false, error: "Lead not found." };
 
+  // Has someone already made this exact approach?
+  //
+  // The campaign builder records "Already in an email conversation" as a skip,
+  // but it decides that when the queue is *built* and never looks again — and a
+  // lead can sit in two queues at once. 113 of 114 practices queued for the
+  // dental batch were also pending in the paused UK autopilot lane, one resume
+  // away from a second, different first-contact from the same sender. That is
+  // the worst thing this system can do to a prospect, so it is rechecked here,
+  // where the send actually happens.
+  //
+  // Bounded to 30 days rather than forever: pitching a business a genuinely
+  // different offer months later is legitimate outreach, and a thread that was
+  // never answered stays AWAITING_REPLY indefinitely, so status alone would
+  // lock the whole book out permanently.
+  const recentThread = await prisma.outreachThread.findFirst({
+    where: {
+      leadId, channel: "EMAIL",
+      lastOutboundAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+    },
+    orderBy: { lastOutboundAt: "desc" },
+    select: { lastOutboundAt: true, recipientEmail: true },
+  });
+  if (recentThread) {
+    const days = Math.round((Date.now() - recentThread.lastOutboundAt.getTime()) / 86400000);
+    return {
+      ok: false,
+      error: `Already emailed ${days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`} at ${recentThread.recipientEmail} — not sending a second first-contact.`,
+    };
+  }
+
   // Resolved before the gate, not after: in the US and Canada what the footer
   // carries is part of whether the send is lawful at all.
   const signature = await resolveSignature({ signatureId, account });
