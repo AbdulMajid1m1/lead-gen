@@ -363,7 +363,9 @@ describe("proof follow-up", () => {
 
   it("describes the work that matches the service being pitched", () => {
     expect(proof("HR_SOFTWARE")).toMatch(/cloud HR system/);
-    expect(proof("MOBILE_APP")).toMatch(/on a phone/);
+    // Named, and named as ours: a mobile pitch is proved with the app we built
+    // and shipped to both stores, not with a general claim about phones.
+    expect(proof("MOBILE_APP")).toMatch(/HealthiPlate.*iOS and Android/s);
     expect(proof("SAAS_DEV")).toMatch(/recruitment and job placement platform/);
   });
 
