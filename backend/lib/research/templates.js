@@ -603,12 +603,16 @@ const PORTFOLIO = {
     whatAr: "منصة توظيف وتوظيف وظائف بنيناها بالكامل وواصلنا تطويرها مع نموّهم",
   },
   WEBSITE_DEV: {
-    what: "a staffing and IT company's site, built so that being found and loading fast mattered more than anything decorative",
-    whatAr: "موقع شركة توظيف وتقنية معلومات — بناء يهمّ فيه الظهور والسرعة أكثر من أي شيء شكلي",
+    // HealthiPlate: ours end to end, live on both app stores, and the closest
+    // thing we have to "a stranger has to do one thing on a phone, quickly" —
+    // which is the whole of a booking page. The case study's result figures are
+    // still placeholders, so nothing here claims an outcome.
+    what: "HealthiPlate, a nutrition app we built end to end for iOS and Android, where the whole job was letting someone do one thing on a phone in seconds",
+    whatAr: "تطبيق HealthiPlate للتغذية، بنيناه بالكامل لنظامي iOS وأندرويد، وكان جوهر العمل أن ينجز المستخدم مهمة واحدة من جواله خلال ثوانٍ",
   },
   MOBILE_APP: {
-    what: "a streaming and discovery platform that has to feel the same on a phone as it does on a desktop",
-    whatAr: "منصة بث واستكشاف يجب أن تعمل على الجوال بنفس سلاسة الكمبيوتر",
+    what: "HealthiPlate, a nutrition app we built end to end for iOS and Android, from the photo-based analysis to the progress tracking",
+    whatAr: "تطبيق HealthiPlate للتغذية، بنيناه بالكامل لنظامي iOS وأندرويد، من تحليل الصور إلى متابعة التقدّم",
   },
   ECOMMERCE_DEV: {
     what: "a discovery platform where browsing a large catalogue has to stay fast on any screen — the same problem an online shop has",
