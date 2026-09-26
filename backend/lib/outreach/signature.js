@@ -53,6 +53,9 @@ export const renderSignatureText = (sig) => {
     site ? site.href : null,
     sig.email,
     sig.phone,
+    // A multi-line address pasted into the form would break the one-line-per-
+    // field shape, so it is flattened to the single line a footer wants.
+    sig.postalAddress ? String(sig.postalAddress).replace(/\s*\n\s*/g, ", ").trim() : null,
     sig.tagline,
   ].filter(Boolean);
   return lines.join("\n");
@@ -98,6 +101,9 @@ export const renderSignatureHtml = (sig) => {
       : "",
     contactBits.length
       ? `<div style="font-size:13px;line-height:1.6;margin-top:6px;">${contactBits.join(` <span style="color:#c3c7d1;">|</span> `)}</div>`
+      : "",
+    sig.postalAddress
+      ? `<div style="font-size:12px;color:#5b6170;line-height:1.5;margin-top:8px;">${esc(String(sig.postalAddress).replace(/\s*\n\s*/g, ", ").trim())}</div>`
       : "",
     sig.tagline
       ? `<div style="font-size:12px;color:#9aa0ac;line-height:1.5;margin-top:8px;">${esc(sig.tagline)}</div>`

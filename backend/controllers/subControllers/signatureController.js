@@ -26,6 +26,7 @@ const withPreview = (s) => ({
   email: s.email,
   phone: s.phone,
   tagline: s.tagline,
+  postalAddress: s.postalAddress,
   accentColor: s.accentColor,
   createdAt: s.createdAt,
   preview: {
@@ -47,6 +48,9 @@ export const signatureSchema = z.object({
   email: z.union([z.string().trim().email().max(255), z.literal("")]).nullable().optional(),
   phone: optionalText(40),
   tagline: optionalText(300),
+  // Required by CAN-SPAM and CASL in the message itself; the send gate
+  // withholds those markets while it is empty.
+  postalAddress: optionalText(300),
   // Anything else would end up interpolated into a style attribute.
   accentColor: z.string().regex(/^#[0-9a-fA-F]{3,8}$/, "Use a hex colour like #d97757").optional(),
   isDefault: z.boolean().optional(),
@@ -67,6 +71,7 @@ const clean = (input) => {
     email: email ? email.toLowerCase() : email,
     phone: nullify(input.phone),
     tagline: nullify(input.tagline),
+    postalAddress: nullify(input.postalAddress),
     ...(input.accentColor ? { accentColor: input.accentColor.toLowerCase() } : {}),
   };
 };

@@ -98,6 +98,33 @@ const DEFAULT_RULE = {
 };
 
 /**
+ * Markets that require the sender's own postal address inside the message.
+ *
+ * This is a separate axis from the policy tables above, and it has to be: the
+ * US is ALLOWED — cold business email there is perfectly lawful — but only in a
+ * message that carries a valid physical address for the sender. A permissive
+ * country verdict is therefore not enough on its own, and reading one as
+ * permission is how an otherwise-legal lane sends unlawfully.
+ *
+ * Kept deliberately short. A country belongs here only where the address is a
+ * statutory element of the message itself, not merely good practice.
+ */
+const POSTAL_ADDRESS_LAWS = {
+  US: "CAN-SPAM 15 U.S.C. § 7704(a)(5)(A)(iii)",
+  CA: "CASL s. 6(2)(a) and SOR/2013-221 s. 2",
+};
+
+/**
+ * The postal-address requirement for one market.
+ *
+ * @returns {{law: string}|null} null when this market has no such requirement.
+ */
+export const postalAddressRequiredFor = (countryCode) => {
+  const law = POSTAL_ADDRESS_LAWS[String(countryCode || "").toUpperCase()];
+  return law ? { law } : null;
+};
+
+/**
  * Does this address identify a person, or just a company?
  *
  * The distinction carries real legal weight — a role mailbox is not personal

@@ -22,6 +22,13 @@ model Signature {
   phone       String? @db.VarChar(40)
   /// One free line under the block — a tagline, a booking link, a disclaimer.
   tagline     String? @db.VarChar(300)
+  /// The sender's real postal address, printed under the block.
+  ///
+  /// Not decoration: CAN-SPAM § 7704(a)(5)(A)(iii) requires a valid physical
+  /// address in every commercial email, and CASL s. 6(2)(a) the same. The send
+  /// gate refuses a US or Canadian recipient when this is empty, so leaving it
+  /// blank closes those markets rather than sending unlawfully into them.
+  postalAddress String? @db.VarChar(300)
   /// Accent for the rule and the name in the HTML rendering.
   accentColor String  @default("#d97757") @db.VarChar(9)
 

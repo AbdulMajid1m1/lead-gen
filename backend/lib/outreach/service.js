@@ -5,6 +5,7 @@ import { recordBounce } from "./deliverability.js";
 import { classifyAutoReply } from "./autoReply.js";
 import { sendWhatsAppText, getWhatsAppAccount, listWhatsAppAccounts } from "./whatsapp.js";
 import { resolveSignature, signatureSuffix } from "./signature.js";
+import { postalAddressRequiredFor } from "./sendPolicy.js";
 import { toActor } from "./attribution.js";
 import { followUpTemplate, productFollowUpTemplate, whatsappFollowUpTemplate } from "../research/templates.js";
 import { gatherFacts, promotedProductForLead } from "../research/compose.js";
@@ -58,8 +59,12 @@ const domainOf = (email) => String(email).split("@")[1]?.toLowerCase() || "";
 /**
  * The compliance gate. Every send — initial, follow-up, manual or automated —
  * goes through here.
+ *
+ * `signature` is the sign-off this message will actually carry, which the gate
+ * needs because in two markets the legality of the send depends on what is in
+ * the footer, not only on where the recipient is.
  */
-export const sendIsBlocked = async ({ lead, recipientEmail }) => {
+export const sendIsBlocked = async ({ lead, recipientEmail, signature = undefined }) => {
   // The same locked set the campaign builder uses. A follow-up used to check
   // only the first two, so a lead disqualified after the first email still got
   // chased three days later.
@@ -79,6 +84,20 @@ export const sendIsBlocked = async ({ lead, recipientEmail }) => {
     where: { companyId: lead.companyId, kind: "EMAIL", value: { equals: recipientEmail, mode: "insensitive" } },
   });
   if (contact?.isSuppressed) return "This contact is suppressed.";
+
+  // The US is an ALLOWED market — but only for a message carrying the sender's
+  // real postal address, and the same goes for Canada. The country verdict on
+  // its own is not permission, so this is checked here rather than alongside
+  // it: without the footer the send is unlawful however good the lead is.
+  //
+  // `undefined` means the caller did not resolve a sign-off, which is the one
+  // case this cannot judge and must not silently wave through.
+  const postal = postalAddressRequiredFor(lead.company?.countryCode);
+  if (postal && !String(signature?.postalAddress || "").trim()) {
+    return signature === undefined
+      ? `No sign-off was resolved for this send, and ${postal.law} requires the sender's postal address in the message.`
+      : `${postal.law} requires the sender's postal address in every commercial email. Add one to the "${signature?.name || "default"}" sign-off in Settings before writing to this market.`;
+  }
   return null;
 };
 
@@ -212,10 +231,12 @@ export const sendInitialEmail = async ({
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { company: true } });
   if (!lead) return { ok: false, error: "Lead not found." };
 
-  const blocked = await sendIsBlocked({ lead, recipientEmail: to });
+  // Resolved before the gate, not after: in the US and Canada what the footer
+  // carries is part of whether the send is lawful at all.
+  const signature = await resolveSignature({ signatureId, account });
+  const blocked = await sendIsBlocked({ lead, recipientEmail: to, signature });
   if (blocked) return { ok: false, error: blocked };
 
-  const signature = await resolveSignature({ signatureId, account });
   const sent = await sendMail({ account, to, subject, body, signature });
   if (!sent.ok) return { ok: false, error: `Sending failed: ${sent.error}` };
 
@@ -273,7 +294,8 @@ export const sendFollowUp = async ({ account, threadId, sentBy = null }) => {
   if (thread.status !== "AWAITING_REPLY") return { ok: false, error: `Thread is ${thread.status.toLowerCase()} — no follow-up needed.` };
   if (thread.followUpsSent >= account.maxFollowUps) return { ok: false, error: "Follow-up limit reached for this thread." };
 
-  const blocked = await sendIsBlocked({ lead: thread.lead, recipientEmail: thread.recipientEmail });
+  const signature = await resolveSignature({ account });
+  const blocked = await sendIsBlocked({ lead: thread.lead, recipientEmail: thread.recipientEmail, signature });
   if (blocked) return { ok: false, error: blocked };
 
   const followUpNumber = thread.followUpsSent + 1;
@@ -305,7 +327,6 @@ export const sendFollowUp = async ({ account, threadId, sentBy = null }) => {
 
   // A follow-up signs off the same way the initial email did, so the thread
   // reads as one person rather than two.
-  const signature = await resolveSignature({ account });
   const sent = await sendMail({
     account, to: thread.recipientEmail, subject, body, signature,
     inReplyTo: lastOutbound?.messageId || null,
@@ -373,7 +394,8 @@ export const sendReply = async ({ account, threadId, body, subject = null, signa
     return { ok: false, error: "The last message to this address bounced — fix or replace the address first." };
   }
 
-  const blocked = await sendIsBlocked({ lead: thread.lead, recipientEmail: thread.recipientEmail });
+  const signature = await resolveSignature({ signatureId, account });
+  const blocked = await sendIsBlocked({ lead: thread.lead, recipientEmail: thread.recipientEmail, signature });
   if (blocked) return { ok: false, error: blocked };
 
   // Thread against the newest message in the conversation whichever way it
@@ -383,7 +405,6 @@ export const sendReply = async ({ account, threadId, body, subject = null, signa
   const references = thread.messages.map((m) => m.messageId).filter(Boolean);
 
   const finalSubject = (subject?.trim() || (thread.subject.startsWith("Re:") ? thread.subject : `Re: ${thread.subject}`)).slice(0, 255);
-  const signature = await resolveSignature({ signatureId, account });
 
   const sent = await sendMail({
     account, to: thread.recipientEmail, subject: finalSubject, body: text, signature,

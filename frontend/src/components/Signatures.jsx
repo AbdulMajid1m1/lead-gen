@@ -24,6 +24,7 @@ const emptyForm = () => ({
   email: "",
   phone: "",
   tagline: "",
+  postalAddress: "",
   accentColor: "#d97757",
   isDefault: false,
 });
@@ -37,6 +38,7 @@ const formFrom = (s) => ({
   email: s.email || "",
   phone: s.phone || "",
   tagline: s.tagline || "",
+  postalAddress: s.postalAddress || "",
   accentColor: s.accentColor || "#d97757",
   isDefault: s.isDefault,
 });
@@ -81,6 +83,7 @@ const SignatureEditor = ({ signature, onDone }) => {
         email: form.email.trim(),
         phone: form.phone.trim(),
         tagline: form.tagline.trim(),
+        postalAddress: form.postalAddress.trim(),
         accentColor: form.accentColor,
         isDefault: form.isDefault,
       };
@@ -134,6 +137,15 @@ const SignatureEditor = ({ signature, onDone }) => {
           </div>
         </Labelled>
       </div>
+
+      <Labelled label="Postal address" hint="required to email the US or Canada">
+        <Input
+          className="w-full"
+          value={form.postalAddress}
+          onChange={(e) => set("postalAddress")(e.target.value)}
+          placeholder="Office 12, King Fahd Road, Riyadh 12345, Saudi Arabia"
+        />
+      </Labelled>
 
       <Labelled label="Tagline" hint="optional — one line under the block">
         <Input className="w-full" value={form.tagline} onChange={(e) => set("tagline")(e.target.value)} placeholder="Custom software, shipped." />
