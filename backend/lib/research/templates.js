@@ -1277,7 +1277,11 @@ const SHORT_PAIN_FRAMES = [
 const CLOSE_FRAMES = [
   (shape, topic) => `How are you handling ${topic} across ${shape.close} at the moment?`,
   (shape, topic) => `Who picks up ${topic} across ${shape.close} right now?`,
-  (shape, topic) => `Out of interest, how does ${topic} work across ${shape.close} today?`,
+  // Deliberately agreement-free. The topic is lifted verbatim out of the
+  // approved ICP and is as often plural as singular, so "how does <topic>
+  // work" produced "how does leave requests and approvals work" — the exact
+  // kind of sentence that tells a reader a machine wrote to them.
+  (shape, topic) => `Out of interest, what happens with ${topic} across ${shape.close} today?`,
 ];
 
 /** The same question when the pain does not reduce to a nameable topic. */
