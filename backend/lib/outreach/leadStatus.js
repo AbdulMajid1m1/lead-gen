@@ -19,7 +19,9 @@ const logger = log("outreach:lead-status");
  *   they answered             → REPLIED
  *
  * Everything past REPLIED is a human judgement (INTERESTED, CONVERTED,
- * NOT_INTERESTED) and automation never makes it.
+ * NOT_INTERESTED) and automation never makes it — with one exception: when
+ * the reply itself says "unsubscribe" or "no thank you", the judgement is the
+ * recipient's, not ours, and `onOptOut` records it.
  */
 
 /**
@@ -90,6 +92,40 @@ export const onReplyReceived = async ({ leadId, channel, from, snippet }) => {
   const label = channel === "WHATSAPP" ? "WhatsApp reply" : "Reply";
   const quoted = snippet ? `: "${String(snippet).replace(/\s+/g, " ").trim().slice(0, 120)}"` : "";
   return advance(leadId, "REPLIED", `${label} received from ${from}${quoted}`);
+};
+
+/**
+ * The reply was a "no" (see lib/outreach/optOut.js). Every email we send
+ * promises that a "no" ends it, so the address goes on the suppression list —
+ * that row is what `sendIsBlocked` and `phoneSendIsBlocked` check on every
+ * send, whatever the lead's status. The status move is the record of why:
+ * UNSUBSCRIBE → DO_NOT_CONTACT, DECLINE → NOT_INTERESTED.
+ *
+ * @param {{leadId:string, channel:"EMAIL"|"WHATSAPP", address:string,
+ *   verdict:{kind:"UNSUBSCRIBE"|"DECLINE", phrase:string}}} input
+ */
+export const onOptOut = async ({ leadId, channel, address, verdict }) => {
+  const kind = channel === "WHATSAPP" ? "PHONE" : "EMAIL";
+  const value = kind === "EMAIL" ? String(address).trim().toLowerCase() : String(address).trim();
+  const said = verdict.kind === "UNSUBSCRIBE" ? "asked not to be contacted" : "declined";
+  const reason = `Replied "${verdict.phrase}" — ${said} (${new Date().toISOString().slice(0, 10)}).`;
+  try {
+    await prisma.suppressionEntry.upsert({
+      where: { kind_value: { kind, value } },
+      create: { kind, value, reason },
+      update: { reason },
+    });
+    if (kind === "EMAIL") {
+      await prisma.contact.updateMany({
+        where: { kind: "EMAIL", value: { equals: value, mode: "insensitive" } },
+        data: { isSuppressed: true },
+      });
+    }
+  } catch (err) {
+    logger.error({ leadId, kind, msg: err.message }, "opt-out could not be written to the suppression list");
+  }
+  const toStatus = verdict.kind === "UNSUBSCRIBE" ? "DO_NOT_CONTACT" : "NOT_INTERESTED";
+  return advance(leadId, toStatus, `${reason} ${value} suppressed.`);
 };
 
 /**

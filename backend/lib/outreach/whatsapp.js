@@ -265,8 +265,17 @@ const handleIncoming = async (accountId, messages, sock) => {
       // Same rule as the email side — see lib/outreach/leadStatus.js. Imported
       // lazily because whatsapp.js is loaded at boot to restore sockets, and a
       // static import would pull the scoring engine into that path.
-      const { onReplyReceived } = await import("./leadStatus.js");
+      const { onReplyReceived, onOptOut } = await import("./leadStatus.js");
       await onReplyReceived({ leadId: thread.leadId, channel: "WHATSAPP", from: fromNumber, snippet: text });
+      // "STOP" on WhatsApp is the same promise as "no" on email.
+      const { classifyOptOut } = await import("./optOut.js");
+      const optOut = text ? classifyOptOut({ body: text }) : { isOptOut: false };
+      if (optOut.isOptOut) {
+        // The number we wrote to, as stored on the thread — the gate matches
+        // suppressed phones against that, not against the sender's JID.
+        await onOptOut({ leadId: thread.leadId, channel: "WHATSAPP", address: thread.recipientEmail, verdict: optOut });
+        logger.info({ accountId, threadId: thread.id, kind: optOut.kind }, "WhatsApp reply was an opt-out — number suppressed");
+      }
       logger.info({ accountId, threadId: thread.id, fromNumber }, "WhatsApp reply recorded");
     } catch (err) {
       logger.warn({ accountId, msg: err.message }, "incoming WhatsApp message handling failed");

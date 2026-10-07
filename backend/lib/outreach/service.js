@@ -3,13 +3,14 @@ import { sendMail } from "./mailer.js";
 import { findReplies, canReceive } from "./inbox.js";
 import { recordBounce } from "./deliverability.js";
 import { classifyAutoReply } from "./autoReply.js";
+import { classifyOptOut } from "./optOut.js";
 import { sendWhatsAppText, getWhatsAppAccount, listWhatsAppAccounts } from "./whatsapp.js";
 import { resolveSignature, signatureSuffix } from "./signature.js";
 import { postalAddressRequiredFor } from "./sendPolicy.js";
 import { toActor } from "./attribution.js";
 import { followUpTemplate, productFollowUpTemplate, whatsappFollowUpTemplate } from "../research/templates.js";
 import { gatherFacts, promotedProductForLead } from "../research/compose.js";
-import { onInitialSent, onFollowUpSent, onReplyReceived, onFollowUpsExhausted } from "./leadStatus.js";
+import { onInitialSent, onFollowUpSent, onReplyReceived, onFollowUpsExhausted, onOptOut } from "./leadStatus.js";
 import { SERVICE_LABELS } from "../scoring/scoreEngine.js";
 import { log } from "../../utils/logger.js";
 
@@ -684,6 +685,13 @@ export const syncReplies = async ({ account }) => {
       leadId: thread.leadId, channel: "EMAIL",
       from: hit.from, snippet: hit.snippet || hit.subject,
     });
+    // "Unsubscribe" or "no thank you" is still a reply — a person wrote it —
+    // but it is also the answer our footer promises to honour.
+    const optOut = classifyOptOut({ body: hit.snippet || "" });
+    if (optOut.isOptOut) {
+      await onOptOut({ leadId: thread.leadId, channel: "EMAIL", address: thread.recipientEmail, verdict: optOut });
+      logger.info({ threadId: thread.id, kind: optOut.kind, phrase: optOut.phrase }, "reply was an opt-out — address suppressed");
+    }
     replies += 1;
   }
 
