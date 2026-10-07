@@ -160,6 +160,35 @@ describe("follow-ups add new value", () => {
     expect(body).toMatch(/things I would change first/);
   });
 
+  it("offers the same thing the opener offered — the Syston case", () => {
+    const alreadySaid = "your booking page\n\nI was looking at Syston Chiropractic Clinic's site and noticed patients can only book with you by phone.\n\nShall I send a short video of it running on your site? A one-word reply is enough.";
+    const { body } = followUpTemplate({
+      company: { name: "Syston Chiropractic Clinic", countryCode: "GB" },
+      serviceLabel: "website development", followUpNumber: 1, alreadySaid,
+      facts: [fact(1, "Syston Chiropractic Clinic is a clinic in Syston.", "VERIFIED"),
+        fact(2, "The site is built on WordPress.")],
+    });
+    expect(body).toMatch(/still happy to send the short video over/);
+    expect(body).not.toMatch(/short list|WordPress/);
+  });
+
+  it("re-offers a one-page plan when that is what the opener named", () => {
+    const alreadySaid = "Your React developer role\n\nWhile you hire, can I send a one-page plan for the booking portal?";
+    const { body } = followUpTemplate({ company, serviceLabel: "software development", followUpNumber: 1, facts: [], alreadySaid });
+    expect(body).toMatch(/still happy to send the one-page plan over/);
+  });
+
+  it("never offers a CMS name as something it noticed", () => {
+    const { body } = followUpTemplate({
+      company, serviceLabel: "website development", followUpNumber: 1,
+      facts: [fact(1, "Bright Dental is a dental clinic in London.", "VERIFIED"),
+        fact(2, "Consultations are booked by phone — no online booking."),
+        fact(3, "The site is built on WordPress.")],
+      alreadySaid: "Bright Dental — booking by phone only\n\nPatients can only book by phone.",
+    });
+    expect(body).not.toMatch(/WordPress/);
+  });
+
   it("never tells a firm that does not sell online that it lacks a shopping app", () => {
     const { body } = followUpTemplate({
       company: { name: "Reza Solicitors", industry: "Law firm", countryCode: "GB" },

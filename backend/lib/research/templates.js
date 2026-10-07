@@ -1434,8 +1434,10 @@ const secondObservation = (facts = [], company = {}, alreadySaid = "") => {
     const said = describeObservation(f, company);
     // Same rules as the opener's supporting line: a new kind of thing, said in
     // plain words, or nothing — a chase that quotes analyst prose is worse
-    // than a chase with no new detail.
-    if (!said.line || said.kind === firstKind || said.kind === "DEFAULT") continue;
+    // than a chase with no new detail. TECH_DEBT is out too: "your site runs
+    // on WordPress" is a fact about the site, not a problem the reader has,
+    // and Syston Chiropractic was chased with exactly that line.
+    if (!said.line || said.kind === firstKind || said.kind === "DEFAULT" || said.kind === "TECH_DEBT") continue;
     // `first` is only the fact the template would have led with. An authored
     // opener may have led with another, and then the chase "noticed" what the
     // first email already said — Rajjak Associates was told its 8.4s load time
@@ -1634,6 +1636,17 @@ export const productFollowUpTemplate = ({ company, product, followUpNumber, fact
   };
 };
 
+/**
+ * What the thread's opener offered to send, when it named the thing — a video
+ * of the fix on their own site, a one-page plan. Null when it offered nothing
+ * specific, and the chase then makes its own offer.
+ */
+const OFFERS_MADE = [
+  { re: /\bvideo\b/i, thing: "the short video" },
+  { re: /\bone-page (?:plan|outline|build plan)\b/i, thing: "the one-page plan" },
+];
+export const offerMadeIn = (text) => OFFERS_MADE.find((o) => o.re.test(String(text || "")))?.thing || null;
+
 export const followUpTemplate = ({ company, serviceLabel, serviceKey, followUpNumber, facts = [], alreadySaid = "" }) => {
   const bilingual = ARABIC.test(company.name) || ARABIC_MARKETS.has(company.countryCode);
 
@@ -1642,6 +1655,21 @@ export const followUpTemplate = ({ company, serviceLabel, serviceKey, followUpNu
   // depresses replies because it gives the reader no reason to answer.
   if (followUpNumber <= 1) {
     const second = secondObservation(facts, company, alreadySaid);
+    // When the opener offered something by name, the chase offers the same
+    // thing. Syston Chiropractic was offered "a short video of it running on
+    // your site", then "the short list" three days later — two different
+    // offers read as two strangers.
+    const offered = offerMadeIn(alreadySaid);
+    if (offered) {
+      return {
+        body: [
+          "Hello,",
+          second ? `One more thing I noticed while looking at ${company.name}: ${second.line}.` : null,
+          `I'm still happy to send ${offered} over — a one-word reply is enough. And if the timing is wrong, "not now" is a completely fine answer.`,
+          "Best regards",
+        ].filter(Boolean).join("\n\n"),
+      };
+    }
     return {
       body: [
         "Hello,",
