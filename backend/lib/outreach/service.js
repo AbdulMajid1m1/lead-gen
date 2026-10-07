@@ -791,9 +791,29 @@ export const retryAfterFailure = (error, lastOutboundAt) => {
   return new Date(Date.now() + RETRY_GAP_MS);
 };
 
-/** Send every follow-up that has come due. Respects the account toggle. */
+/**
+ * How many follow-ups may go out in this pass. The mailbox's daily cap is a
+ * ceiling on everything it sends, not just campaign first-touches: follow-ups
+ * already counted towards it but never checked it, so a day with 40 chases due
+ * plus a running campaign sent 70+ from a mailbox capped at 40.
+ */
+export const followUpRoom = ({ cap, sentToday, batch = 20 }) =>
+  Math.max(0, Math.min(batch, cap - sentToday));
+
+/** Send every follow-up that has come due. Respects the account toggle and the daily cap. */
 export const processDueFollowUps = async ({ account, force = false }) => {
   if (!account.autoFollowUp && !force) return { sent: 0, skipped: "auto follow-up disabled" };
+  // Lazily imported: campaigns.js imports this module.
+  const { DAILY_EMAIL_CAP, sentTodayCount } = await import("./campaigns.js");
+  const { warmupDailyCap } = await import("./deliverability.js");
+  const room = followUpRoom({
+    cap: Math.min(DAILY_EMAIL_CAP, warmupDailyCap(account)),
+    sentToday: await sentTodayCount("EMAIL", account.id),
+  });
+  // Nothing is dropped: an unsent chase stays due and goes on the next pass
+  // with room, oldest first, so a busy day delays a sequence rather than
+  // reordering it.
+  if (!room) return { sent: 0, skipped: "daily cap reached" };
   const due = await prisma.outreachThread.findMany({
     where: {
       accountId: account.id,
@@ -801,7 +821,8 @@ export const processDueFollowUps = async ({ account, force = false }) => {
       nextFollowUpAt: { not: null, lte: new Date() },
       followUpsSent: { lt: account.maxFollowUps },
     },
-    take: 20,
+    orderBy: { nextFollowUpAt: "asc" },
+    take: room,
   });
   let sent = 0;
   for (const thread of due) {

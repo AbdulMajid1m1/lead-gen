@@ -1,5 +1,20 @@
 import { describe, it, expect } from "vitest";
-import { nextFollowUpDate, bucketFor } from "../../lib/outreach/service.js";
+import { nextFollowUpDate, bucketFor, followUpRoom } from "../../lib/outreach/service.js";
+
+describe("followUpRoom", () => {
+  it("lets a full batch through when the mailbox has room", () => {
+    expect(followUpRoom({ cap: 50, sentToday: 10 })).toBe(20);
+  });
+
+  it("sends only what is left under the cap", () => {
+    expect(followUpRoom({ cap: 50, sentToday: 44 })).toBe(6);
+  });
+
+  it("sends nothing once the cap is reached, or past it", () => {
+    expect(followUpRoom({ cap: 50, sentToday: 50 })).toBe(0);
+    expect(followUpRoom({ cap: 40, sentToday: 71 })).toBe(0);
+  });
+});
 
 /**
  * The two pure decisions behind outreach status tracking: when the next chase
