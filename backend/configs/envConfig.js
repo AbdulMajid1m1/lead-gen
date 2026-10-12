@@ -83,6 +83,14 @@ export const OPENAI_BASE_URL   = process.env.OPENAI_BASE_URL;
 export const OPENAI_MODEL      = process.env.OPENAI_MODEL || "gpt-4o-mini";
 export const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 export const ANTHROPIC_MODEL   = process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
+// A user-level key (sk-ant-usr-…) belongs to no workspace and must name one on
+// every request; a workspace-scoped key (sk-ant-api03-…) needs nothing here.
+export const ANTHROPIC_WORKSPACE_ID = process.env.ANTHROPIC_WORKSPACE_ID || null;
+export const anthropicClientOptions = (extra = {}) => ({
+  apiKey: ANTHROPIC_API_KEY,
+  ...(ANTHROPIC_WORKSPACE_ID ? { defaultHeaders: { "anthropic-workspace-id": ANTHROPIC_WORKSPACE_ID } } : {}),
+  ...extra,
+});
 
 // ─── AI deep-research layer ───────────────────────────────────────────────────
 // Two tiers: a stronger model does the live web search (where result quality

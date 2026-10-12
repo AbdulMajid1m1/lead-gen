@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   AI_ENABLED, OPENAI_API_KEY, OPENAI_BASE_URL,
-  ANTHROPIC_API_KEY, ANTHROPIC_MODEL,
+  ANTHROPIC_API_KEY, ANTHROPIC_MODEL, anthropicClientOptions,
   AI_SEARCH_MODEL, AI_FAST_MODEL, AI_RUN_BUDGET_USD,
 } from "../../configs/envConfig.js";
 import { log } from "../../utils/logger.js";
@@ -59,7 +59,7 @@ let anthropicClient = null;
 const getAnthropicClient = () => {
   if (!AI_ENABLED || !ANTHROPIC_API_KEY || !providerUp("anthropic")) return null;
   if (!anthropicClient) {
-    anthropicClient = new Anthropic({ apiKey: ANTHROPIC_API_KEY, maxRetries: 1 });
+    anthropicClient = new Anthropic(anthropicClientOptions({ maxRetries: 1 }));
   }
   return anthropicClient;
 };

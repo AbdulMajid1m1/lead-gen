@@ -1,4 +1,4 @@
-import { AI_ENABLED, AI_PROVIDER, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL } from "../../configs/envConfig.js";
+import { AI_ENABLED, AI_PROVIDER, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, anthropicClientOptions } from "../../configs/envConfig.js";
 import { log } from "../../utils/logger.js";
 
 const logger = log("llm");
@@ -25,7 +25,7 @@ const getClient = async () => {
     if (AI_PROVIDER === "anthropic") {
       if (!ANTHROPIC_API_KEY) return null;
       const { default: Anthropic } = await import("@anthropic-ai/sdk");
-      client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+      client = new Anthropic(anthropicClientOptions());
       clientKind = "anthropic";
     } else {
       if (!OPENAI_API_KEY) return null;
