@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   pickEmailContact, pickWhatsAppNumber,
   localHour, isWithinSendWindow, autoGapSeconds, startOfLocalToday,
-  localWeekday, sendDaysOf, isSendDay, isFutureStart, ALL_DAYS,
+  localWeekday, sendDaysOf, isSendDay, isFutureStart, ALL_DAYS, mayChaseNow,
 } from "../../lib/outreach/campaigns.js";
 import { recommendDailyLimit, warmupStage, MIN_DAILY_LIMIT } from "../../lib/outreach/planner.js";
 import { whatsappInitialTemplate } from "../../lib/research/templates.js";
@@ -236,5 +236,34 @@ describe("per-channel pacing", () => {
 
   it("never paces faster than one a minute", () => {
     expect(autoGapSeconds({ windowStart: 9, windowEnd: 10, dailyLimit: 999 }, "EMAIL", 0.5)).toBe(60);
+  });
+});
+
+describe("follow-up calendar", () => {
+  // 2026-10-10 is a Saturday, 2026-10-12 a Monday.
+  const sat = new Date(Date.UTC(2026, 9, 10, 10));
+  const mon = new Date(Date.UTC(2026, 9, 12, 10));
+  const monNight = new Date(Date.UTC(2026, 9, 12, 20));
+  const estate = { mode: "AUTO", sendDays: [1, 2, 3, 4, 5], windowStart: 9, windowEnd: 16, tzOffsetMinutes: 60 };
+
+  it("holds a chase that falls due on the campaign's day off", () => {
+    expect(mayChaseNow(estate, sat)).toBe(false);
+    expect(mayChaseNow(estate, mon)).toBe(true);
+  });
+
+  it("holds a chase outside the campaign's hours", () => {
+    expect(mayChaseNow(estate, monNight)).toBe(false);
+  });
+
+  it("keeps a Sun–Thu campaign's Sunday", () => {
+    const gulf = { mode: "AUTO", sendDays: [0, 1, 2, 3, 4], windowStart: 9, windowEnd: 13, tzOffsetMinutes: 240 };
+    const sun = new Date(Date.UTC(2026, 9, 11, 6));
+    expect(mayChaseNow(gulf, sun)).toBe(true);
+  });
+
+  it("gives manual sends and DIRECT campaigns working hours, not the clock", () => {
+    expect(mayChaseNow(null, sat)).toBe(false);
+    expect(mayChaseNow({ mode: "DIRECT" }, sat)).toBe(false);
+    expect(mayChaseNow(undefined, mon)).toBe(true);
   });
 });

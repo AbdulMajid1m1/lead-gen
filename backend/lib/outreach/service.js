@@ -800,11 +800,19 @@ export const retryAfterFailure = (error, lastOutboundAt) => {
 export const followUpRoom = ({ cap, sentToday, batch = 20 }) =>
   Math.max(0, Math.min(batch, cap - sentToday));
 
+/** The campaign that sent a lead its opener on this channel — its calendar governs the chase. */
+const CHASE_CAMPAIGN = (stateField, processedField) => ({
+  where: { [stateField]: "SENT" },
+  orderBy: { [processedField]: "desc" },
+  take: 1,
+  select: { campaign: { select: { mode: true, sendDays: true, windowStart: true, windowEnd: true, tzOffsetMinutes: true } } },
+});
+
 /** Send every follow-up that has come due. Respects the account toggle and the daily cap. */
 export const processDueFollowUps = async ({ account, force = false }) => {
   if (!account.autoFollowUp && !force) return { sent: 0, skipped: "auto follow-up disabled" };
   // Lazily imported: campaigns.js imports this module.
-  const { DAILY_EMAIL_CAP, sentTodayCount } = await import("./campaigns.js");
+  const { DAILY_EMAIL_CAP, sentTodayCount, mayChaseNow } = await import("./campaigns.js");
   const { warmupDailyCap } = await import("./deliverability.js");
   const room = followUpRoom({
     cap: Math.min(DAILY_EMAIL_CAP, warmupDailyCap(account)),
@@ -812,9 +820,9 @@ export const processDueFollowUps = async ({ account, force = false }) => {
   });
   // Nothing is dropped: an unsent chase stays due and goes on the next pass
   // with room, oldest first, so a busy day delays a sequence rather than
-  // reordering it.
+  // reordering it. The same holds outside the opener's send window.
   if (!room) return { sent: 0, skipped: "daily cap reached" };
-  const due = await prisma.outreachThread.findMany({
+  const candidates = await prisma.outreachThread.findMany({
     where: {
       accountId: account.id,
       status: "AWAITING_REPLY",
@@ -822,8 +830,11 @@ export const processDueFollowUps = async ({ account, force = false }) => {
       followUpsSent: { lt: account.maxFollowUps },
     },
     orderBy: { nextFollowUpAt: "asc" },
-    take: room,
+    take: room * 5,
+    include: { lead: { select: { campaignRecipients: CHASE_CAMPAIGN("emailState", "emailProcessedAt") } } },
   });
+  const due = candidates.filter((t) => mayChaseNow(t.lead?.campaignRecipients?.[0]?.campaign)).slice(0, room);
+  if (!due.length && candidates.length) return { sent: 0, skipped: "outside the send window" };
   let sent = 0;
   for (const thread of due) {
     const res = await sendFollowUp({ account, threadId: thread.id });
@@ -853,7 +864,8 @@ export const processDueWhatsAppFollowUps = async ({ device, force = false }) => 
   if (!device.autoFollowUp && !force) return { sent: 0, skipped: "auto follow-up disabled" };
   if (device.status !== "CONNECTED") return { sent: 0, skipped: `device is ${device.status.toLowerCase()}` };
 
-  const due = await prisma.outreachThread.findMany({
+  const { mayChaseNow } = await import("./campaigns.js");
+  const candidates = await prisma.outreachThread.findMany({
     where: {
       waAccountId: device.id,
       channel: "WHATSAPP",
@@ -861,8 +873,11 @@ export const processDueWhatsAppFollowUps = async ({ device, force = false }) => 
       nextFollowUpAt: { not: null, lte: new Date() },
       followUpsSent: { lt: device.maxFollowUps },
     },
-    take: 20,
+    orderBy: { nextFollowUpAt: "asc" },
+    take: 100,
+    include: { lead: { select: { campaignRecipients: CHASE_CAMPAIGN("waState", "waProcessedAt") } } },
   });
+  const due = candidates.filter((t) => mayChaseNow(t.lead?.campaignRecipients?.[0]?.campaign)).slice(0, 20);
   let sent = 0;
   for (const thread of due) {
     const res = await sendWhatsAppFollowUp({ device, threadId: thread.id });

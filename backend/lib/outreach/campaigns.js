@@ -105,6 +105,26 @@ export const isWithinSendWindow = (campaign, now = new Date()) => {
 };
 
 /**
+ * The calendar a chase without an AUTO campaign keeps: a manual send or a
+ * DIRECT campaign has no window of its own, but its follow-up still lands in
+ * somebody's working week.
+ */
+export const BUSINESS_HOURS = Object.freeze({
+  mode: "AUTO", sendDays: [1, 2, 3, 4, 5], windowStart: 9, windowEnd: 17, tzOffsetMinutes: 0,
+});
+
+/**
+ * Whether a follow-up on a thread opened by `campaign` may go out now.
+ *
+ * A chase is due a fixed number of days after the opener, so a Thursday
+ * opener's 3-day chase fell due on Sunday — and went, because only the
+ * campaign drain looked at the calendar. 167 of 381 chases in three weeks
+ * landed on a weekend, into offices that answer "closed until Monday".
+ */
+export const mayChaseNow = (campaign, now = new Date()) =>
+  isWithinSendWindow(campaign?.mode === "AUTO" ? campaign : BUSINESS_HOURS, now);
+
+/**
  * Whether a start time means "later" rather than "now". A minute of slack
  * absorbs the gap between a browser filling in "now" and the request landing,
  * so a campaign asked to start immediately never sits SCHEDULED for a tick.
