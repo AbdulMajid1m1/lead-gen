@@ -3,7 +3,7 @@ import { sendMail } from "./mailer.js";
 import { findReplies, canReceive } from "./inbox.js";
 import { recordBounce } from "./deliverability.js";
 import { classifyAutoReply } from "./autoReply.js";
-import { classifyOptOut } from "./optOut.js";
+import { classifyOptOut, isUnsubscribeSubject } from "./optOut.js";
 import { sendWhatsAppText, getWhatsAppAccount, listWhatsAppAccounts } from "./whatsapp.js";
 import { resolveSignature, signatureSuffix } from "./signature.js";
 import { postalAddressRequiredFor } from "./sendPolicy.js";
@@ -141,7 +141,7 @@ export const sendWhatsAppForLead = async ({
 
   // The chat form of the signature: two lines, no rule. A formatted block in a
   // WhatsApp bubble reads as spam.
-  const signature = await resolveSignature({ signatureId });
+  const signature = await resolveSignature({ signatureId: signatureId ?? device.signatureId ?? undefined });
   const text = `${message}${signatureSuffix(message, signature, { channel: "WHATSAPP" })}`;
 
   const sent = await sendWhatsAppText({ accountId: device.id, phone, text });
@@ -197,7 +197,7 @@ export const sendWhatsAppForLead = async ({
       data: {
         leadId, channel: "WHATSAPP", waAccountId: device.id,
         recipientEmail: digits, subject: `WhatsApp — ${lead.company.name}`.slice(0, 255),
-        status: "AWAITING_REPLY", lastOutboundAt: new Date(),
+        status: "AWAITING_REPLY", lastOutboundAt: new Date(), signatureId: signature?.id ?? null,
         nextFollowUpAt: nextFollowUpDate(device, 0),
         startedById: actor?.id ?? null, startedByName: actor?.name ?? null,
         messages: {
@@ -280,6 +280,7 @@ export const sendInitialEmail = async ({
       status: "AWAITING_REPLY",
       lastOutboundAt: new Date(),
       nextFollowUpAt,
+      signatureId: signature?.id ?? null,
       startedById: actor?.id ?? null, startedByName: actor?.name ?? null,
       messages: {
         create: {
@@ -325,7 +326,7 @@ export const sendFollowUp = async ({ account, threadId, sentBy = null }) => {
   if (thread.status !== "AWAITING_REPLY") return { ok: false, error: `Thread is ${thread.status.toLowerCase()} — no follow-up needed.` };
   if (thread.followUpsSent >= account.maxFollowUps) return { ok: false, error: "Follow-up limit reached for this thread." };
 
-  const signature = await resolveSignature({ account });
+  const signature = await resolveSignature({ signatureId: thread.signatureId ?? undefined, account });
   const blocked = await sendIsBlocked({ lead: thread.lead, recipientEmail: thread.recipientEmail, signature });
   if (blocked) return { ok: false, error: blocked };
 
@@ -553,7 +554,7 @@ export const sendWhatsAppFollowUp = async ({ device, threadId, sentBy = null }) 
   });
 
   // The same sign-off the first message used, so the chat reads as one person.
-  const signature = await resolveSignature({});
+  const signature = await resolveSignature({ signatureId: thread.signatureId ?? device.signatureId ?? undefined });
   const text = `${body}${signatureSuffix(body, signature, { channel: "WHATSAPP" })}`;
 
   const sent = await sendWhatsAppText({ accountId: device.id, phone: thread.recipientEmail, text });
@@ -656,7 +657,9 @@ export const syncReplies = async ({ account }) => {
     // In-Reply-To, so they match the thread exactly as a person's answer would.
     // Recorded on the thread for the record, but the thread stays open, the
     // follow-ups stay scheduled and the lead does not move to REPLIED.
-    const auto = classifyAutoReply({
+    // An unsubscribe-button mail is client-generated text, but a person pressed
+    // the button — it has to reach the opt-out below, not the auto-reply shelf.
+    const auto = isUnsubscribeSubject(hit.subject) ? { isAutoReply: false } : classifyAutoReply({
       from: hit.from, subject: hit.subject, body: hit.snippet || "", headers: hit.headers || "",
       companyDomain: thread.lead?.company?.domains?.[0]?.domain || null,
     });
@@ -687,7 +690,7 @@ export const syncReplies = async ({ account }) => {
     });
     // "Unsubscribe" or "no thank you" is still a reply — a person wrote it —
     // but it is also the answer our footer promises to honour.
-    const optOut = classifyOptOut({ body: hit.snippet || "" });
+    const optOut = classifyOptOut({ body: hit.snippet || "", subject: hit.subject || "" });
     if (optOut.isOptOut) {
       await onOptOut({ leadId: thread.leadId, channel: "EMAIL", address: thread.recipientEmail, verdict: optOut });
       logger.info({ threadId: thread.id, kind: optOut.kind, phrase: optOut.phrase }, "reply was an opt-out — address suppressed");
@@ -812,10 +815,11 @@ const CHASE_CAMPAIGN = (stateField, processedField) => ({
 export const processDueFollowUps = async ({ account, force = false }) => {
   if (!account.autoFollowUp && !force) return { sent: 0, skipped: "auto follow-up disabled" };
   // Lazily imported: campaigns.js imports this module.
-  const { DAILY_EMAIL_CAP, sentTodayCount, mayChaseNow } = await import("./campaigns.js");
+  const { DAILY_EMAIL_CAP, sentTodayCount, mayChaseNow, openerReserve } = await import("./campaigns.js");
   const { warmupDailyCap } = await import("./deliverability.js");
+  // Today's first touches are served first; chases get what is left.
   const room = followUpRoom({
-    cap: Math.min(DAILY_EMAIL_CAP, warmupDailyCap(account)),
+    cap: Math.min(DAILY_EMAIL_CAP, warmupDailyCap(account)) - (await openerReserve(account)),
     sentToday: await sentTodayCount("EMAIL", account.id),
   });
   // Nothing is dropped: an unsent chase stays due and goes on the next pass

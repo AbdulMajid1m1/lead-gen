@@ -57,6 +57,10 @@ model WhatsAppAccount {
   phoneNumber String? @unique @db.VarChar(30)
   pushName    String? @db.VarChar(120)
 
+  /// The device's own sign-off. A phone belongs to one person, and a WhatsApp
+  /// message signed by somebody else reads as a broadcast.
+  signatureId String?
+
   status    WhatsAppAccountStatus @default(DISCONNECTED)
   lastError String?               @db.VarChar(500)
 

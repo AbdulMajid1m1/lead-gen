@@ -181,6 +181,33 @@ export const sentTodayCount = (channel, senderId) =>
   });
 
 /**
+ * First touches still owed today by this mailbox's running campaigns.
+ *
+ * Follow-ups go out twenty a pass while a campaign trickles one opener per
+ * pacing gap, so whoever ran first took the mailbox cap — on 19–20 Oct 2026
+ * 50 chases to estate agents who had ignored two emails filled it entirely.
+ * A first touch to someone who has asked for help is worth more than a third
+ * chase to someone who has not, so the follow-up pass leaves this much room.
+ */
+export const openerReserve = async (account, now = new Date()) => {
+  const campaigns = await prisma.outreachCampaign.findMany({
+    // A campaign with no mailbox sends from the default one.
+    where: { status: "RUNNING", OR: [{ accountId: account.id }, ...(account.isDefault ? [{ accountId: null }] : [])] },
+    select: { id: true, channels: true, mode: true, dailyLimit: true, sendDays: true, tzOffsetMinutes: true, windowStart: true, windowEnd: true },
+  });
+  let reserve = 0;
+  for (const campaign of campaigns) {
+    if (!(Array.isArray(campaign.channels) && campaign.channels.includes("EMAIL"))) continue;
+    if (!isSendDay(campaign, now)) continue;
+    const pending = await prisma.campaignRecipient.count({ where: { campaignId: campaign.id, emailState: "PENDING" } });
+    if (!pending) continue;
+    const left = campaign.dailyLimit ? Math.max(0, campaign.dailyLimit - (await campaignSentToday(campaign, "EMAIL", now))) : pending;
+    reserve += Math.min(pending, left);
+  }
+  return reserve;
+};
+
+/**
  * Best usable email on a lead's company, source-authored proof first.
  *
  * `icp` is optional and only ever breaks ties the confidence ranking leaves
@@ -305,7 +332,7 @@ export const buildRecipientRows = (leads, { wantEmail, wantWa }) => leads.map((l
 export const createCampaign = async ({
   name, leadIds, channels, accountId = null, waAccountId = null, paceSeconds = 45,
   mode = "DIRECT", dailyLimit = null, waDailyLimit = null, windowStart = 9, windowEnd = 18, tzOffsetMinutes = 0,
-  sendDays = null, startAt = null,
+  sendDays = null, startAt = null, signatureId = null,
   createdBy = null,
 }) => {
   // The launcher owns every message the queue will send on their behalf, so the
@@ -359,6 +386,7 @@ export const createCampaign = async ({
     data: {
       name: (name || `Bulk send · ${new Date().toLocaleDateString("en-GB")}`).slice(0, 160),
       channels, accountId: wantEmail ? accountId : null, waAccountId: wantWa ? waAccountId : null,
+      signatureId,
       paceSeconds: Math.max(20, Math.min(600, paceSeconds)),
       mode,
       dailyLimit: mode === "AUTO" ? (dailyLimit || AUTO_DEFAULT_DAILY_LIMIT) : null,
@@ -470,6 +498,7 @@ const attemptEmail = async (campaign, recipient) => {
     const res = await sendInitialEmail({
       account, leadId: recipient.leadId,
       to: recipient.emailDetail, subject: draft.subject, body: draft.body, draftId: draft.id,
+      signatureId: campaign.signatureId ?? undefined,
       sentBy: campaignActor(campaign),
     });
     return res.ok ? ["SENT", recipient.emailDetail] : [/failed/i.test(res.error) ? "FAILED" : "SKIPPED", res.error.slice(0, 300)];

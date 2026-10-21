@@ -88,6 +88,10 @@ export const sendMail = async ({
       text,
       html: buildEmailHtml({ body, signature, legacyText }),
       ...(account.replyTo ? { replyTo: account.replyTo } : {}),
+      // The footer asks for a reply; this gives Gmail and Outlook their own
+      // "Unsubscribe" button, which mails the inbox the reply scan reads, with
+      // a subject `isUnsubscribeSubject` recognises.
+      list: { unsubscribe: `mailto:${account.replyTo || account.email}?subject=unsubscribe` },
       ...threadHeaders({ inReplyTo, references }),
     });
     // `text` comes back so the caller can store exactly what was sent — the

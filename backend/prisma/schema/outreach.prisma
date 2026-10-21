@@ -150,6 +150,10 @@ model OutreachThread {
   /// account is deleted and the foreign key above has gone to null.
   startedByName String?    @db.VarChar(160)
 
+  /// The sign-off the opener went out under. Every chase uses the same one, so
+  /// a thread opened by "Zubair Khan" never continues as "devEntia Tech".
+  signatureId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -254,6 +258,8 @@ model OutreachCampaign {
   /// ["EMAIL"], ["WHATSAPP"] or both.
   channels    Json
   accountId   String? // sending mailbox; null = the default account at send time
+  /// Who the campaign's emails are signed by; null = the mailbox's own sign-off.
+  signatureId String?
   waAccountId String? // sending device;  null = the default device at send time
 
   status       CampaignStatus @default(RUNNING)
