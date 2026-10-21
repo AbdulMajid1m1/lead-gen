@@ -172,6 +172,16 @@ describe("follow-ups add new value", () => {
     expect(body).not.toMatch(/short list|WordPress/);
   });
 
+  it("keeps the opener's offer in chase 2 instead of switching to a portfolio piece", () => {
+    const alreadySaid = "your valuation page\n\nYour Valuation page is a form — sellers get a callback, not a figure.\n\nCan I send you a 2-minute video of how it would look on yours?";
+    const { body } = followUpTemplate({
+      company: { name: "Burghleys", countryCode: "GB" },
+      serviceLabel: "website development", serviceKey: "WEBSITE_DEV", followUpNumber: 2, facts: [], alreadySaid,
+    });
+    expect(body).toMatch(/the short video for Burghleys is still yours/);
+    expect(body).not.toMatch(/HealthiPlate|one-page plan|closest thing/);
+  });
+
   it("re-offers a one-page plan when that is what the opener named", () => {
     const alreadySaid = "Your React developer role\n\nWhile you hire, can I send a one-page plan for the booking portal?";
     const { body } = followUpTemplate({ company, serviceLabel: "software development", followUpNumber: 1, facts: [], alreadySaid });

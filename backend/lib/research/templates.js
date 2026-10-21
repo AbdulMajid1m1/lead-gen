@@ -1692,6 +1692,23 @@ export const followUpTemplate = ({ company, serviceLabel, serviceKey, followUpNu
   // they can forward to whoever decides. Still no meeting request — the ask
   // stays a one-word reply until they have shown interest.
   if (followUpNumber === 2) {
+    // An opener that named its offer keeps it to the end. 171 estate agents
+    // offered "a 2-minute video" of an instant valuation were chased, a week
+    // later, with a nutrition app and a one-page plan nobody had mentioned —
+    // the portfolio is keyed by service, and an estate lead's service is
+    // WEBSITE_DEV. Same rule as chase 1: one thread, one offer.
+    const offered = offerMadeIn(alreadySaid);
+    if (offered) {
+      return {
+        body: [
+          "Hello,",
+          `I'll leave it here: ${offered} for ${company.name} is still yours if you want it, and it takes two minutes to watch or read.`,
+          `If it isn't a priority this year, a one-word "no" is just as useful and I'll stop.`,
+          "Best regards",
+        ].join("\n\n"),
+      };
+    }
+
     const work = portfolioFor(serviceKey);
 
     const english = [
