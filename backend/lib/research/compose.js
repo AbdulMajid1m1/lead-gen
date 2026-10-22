@@ -347,6 +347,7 @@ const saveDraft = async ({ leadId, runId, draft, facts, generatedBy, model, prom
       leadId, runId, promotedProductId,
       subject: draft.subject.slice(0, 200),
       body: draft.body.slice(0, 4000),
+      ...(Array.isArray(draft.followUps) ? { followUps: draft.followUps.map((b) => String(b).slice(0, 4000)) } : {}),
       aboutCompany: (draft.aboutCompany || "").slice(0, 1000),
       groundingFacts: facts,
       factIdsUsed: draft.factIdsUsed || [],
@@ -548,11 +549,14 @@ export const importDrafts = async ({ drafts, author = "external", forProduct = n
     const narrowed = forProduct === null ? Boolean(product) : forProduct;
     const gathered = await gatherFacts(d.leadId, { forProduct: narrowed });
     if (!gathered) { summary.rejected.push({ leadId: d.leadId, reason: "lead not found" }); continue; }
-    const grounded = bodyIsGrounded(d.body, gathered.facts);
-    if (!grounded.ok) { summary.rejected.push({ leadId: d.leadId, reason: `invented "${grounded.offending}"` }); continue; }
+    // The chases are held to the same rule as the opener: no address, number
+    // or link the lead's facts do not contain.
+    const ungrounded = [d.body, ...(Array.isArray(d.followUps) ? d.followUps : [])]
+      .map((b) => bodyIsGrounded(String(b), gathered.facts)).find((g) => !g.ok);
+    if (ungrounded) { summary.rejected.push({ leadId: d.leadId, reason: `invented "${ungrounded.offending}"` }); continue; }
     await saveDraft({
       leadId: d.leadId, runId: null,
-      draft: { subject: d.subject, body: d.body, aboutCompany: d.aboutCompany || "", factIdsUsed: d.factIdsUsed || [] },
+      draft: { subject: d.subject, body: d.body, followUps: d.followUps, aboutCompany: d.aboutCompany || "", factIdsUsed: d.factIdsUsed || [] },
       facts: gathered.facts, generatedBy: "LLM", model: author,
       // Unstamped, an imported product email was indistinguishable from an
       // agency one, so the campaign sender could not tell which pitch it was

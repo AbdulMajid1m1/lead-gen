@@ -271,7 +271,11 @@ export const sendInitialEmail = async ({
   const sent = await sendMail({ account, to, subject, body, signature });
   if (!sent.ok) return { ok: false, error: `Sending failed: ${sent.error}` };
 
-  const nextFollowUpAt = nextFollowUpDate(account, 0);
+  // A draft whose authored sequence is empty asked for no chase at all.
+  const draftChases = draftId
+    ? (await prisma.leadEmailDraft.findUnique({ where: { id: draftId }, select: { followUps: true } }))?.followUps
+    : null;
+  const nextFollowUpAt = Array.isArray(draftChases) && draftChases.length === 0 ? null : nextFollowUpDate(account, 0);
 
   const thread = await prisma.outreachThread.create({
     data: {
@@ -303,6 +307,18 @@ export const sendInitialEmail = async ({
   return { ok: true, thread };
 };
 
+/**
+ * The authored chase for this step, when the opener's draft carried its own
+ * sequence: `{ body, last }`, `{ done: true }` once the sequence has run out,
+ * or null when the draft had none and the templates apply.
+ */
+export const authoredChase = (followUps, followUpNumber) => {
+  if (!Array.isArray(followUps)) return null;
+  const body = followUps[followUpNumber - 1];
+  if (typeof body !== "string" || !body.trim()) return { done: true };
+  return { body: body.trim(), last: followUpNumber >= followUps.length };
+};
+
 /** Everything we have sent on a thread so far, subject included, as one text. */
 const alreadySaidIn = (thread) =>
   [thread.subject, ...(thread.messages || []).filter((m) => m.direction === "OUTBOUND").map((m) => m.body)]
@@ -331,28 +347,45 @@ export const sendFollowUp = async ({ account, threadId, sentBy = null }) => {
   if (blocked) return { ok: false, error: blocked };
 
   const followUpNumber = thread.followUpsSent + 1;
-  const serviceLabel = SERVICE_LABELS[thread.lead.primaryOpportunity] || "software development";
-  // Facts give the chase something new to say; a lead that vanished mid-thread
-  // still gets the factless variant rather than an error.
-  const gathered = await gatherFacts(thread.lead.id).catch(() => null);
-  // What this thread has already told them. The opener is often hand-written,
-  // so only its own words say which observation it led with.
-  const alreadySaid = alreadySaidIn(thread);
-  // A promoter lead is chased about the product it was pitched, not about the
-  // agency's services — the thread has to read as one conversation.
-  const product = await promotedProductForLead(thread.lead.id).catch(() => null);
-  const { body } = product
-    ? productFollowUpTemplate({
-        company: thread.lead.company, product, followUpNumber, facts: gathered?.facts || [],
-      })
-    : followUpTemplate({
-        company: thread.lead.company,
-        serviceLabel,
-        serviceKey: thread.lead.primaryOpportunity,
-        followUpNumber,
-        facts: gathered?.facts || [],
-        alreadySaid,
-      });
+
+  // An opener written for this lead brings its own chases, and they replace
+  // the templates outright — a template chase under a hand-written opener reads
+  // as a second, less attentive sender.
+  const openerDraftId = thread.messages.find((m) => m.kind === "INITIAL" && m.draftId)?.draftId;
+  const openerDraft = openerDraftId
+    ? await prisma.leadEmailDraft.findUnique({ where: { id: openerDraftId }, select: { followUps: true } })
+    : null;
+  const authored = authoredChase(openerDraft?.followUps, followUpNumber);
+  if (authored?.done) {
+    await prisma.outreachThread.update({ where: { id: threadId }, data: { nextFollowUpAt: null } });
+    return { ok: false, error: "This sequence has no more follow-ups." };
+  }
+
+  let body = authored?.body;
+  if (!authored) {
+    const serviceLabel = SERVICE_LABELS[thread.lead.primaryOpportunity] || "software development";
+    // Facts give the chase something new to say; a lead that vanished mid-thread
+    // still gets the factless variant rather than an error.
+    const gathered = await gatherFacts(thread.lead.id).catch(() => null);
+    // What this thread has already told them. The opener is often hand-written,
+    // so only its own words say which observation it led with.
+    const alreadySaid = alreadySaidIn(thread);
+    // A promoter lead is chased about the product it was pitched, not about the
+    // agency's services — the thread has to read as one conversation.
+    const product = await promotedProductForLead(thread.lead.id).catch(() => null);
+    ({ body } = product
+      ? productFollowUpTemplate({
+          company: thread.lead.company, product, followUpNumber, facts: gathered?.facts || [],
+        })
+      : followUpTemplate({
+          company: thread.lead.company,
+          serviceLabel,
+          serviceKey: thread.lead.primaryOpportunity,
+          followUpNumber,
+          facts: gathered?.facts || [],
+          alreadySaid,
+        }));
+  }
 
   const lastOutbound = [...thread.messages].reverse().find((m) => m.direction === "OUTBOUND");
   const subject = thread.subject.startsWith("Re:") ? thread.subject : `Re: ${thread.subject}`;
@@ -366,13 +399,13 @@ export const sendFollowUp = async ({ account, threadId, sentBy = null }) => {
   });
   if (!sent.ok) return { ok: false, error: `Sending failed: ${sent.error}` };
 
-  const nextFollowUpAt = nextFollowUpDate(account, followUpNumber);
+  const nextFollowUpAt = authored?.last ? null : nextFollowUpDate(account, followUpNumber);
 
   await prisma.outreachMessage.create({
     data: {
       threadId, direction: "OUTBOUND", kind: "FOLLOW_UP",
       subject: subject.slice(0, 255), body: (sent.text || body).slice(0, 8000),
-      messageId: sent.messageId, generatedBy: "RULE", sentAt: new Date(),
+      messageId: sent.messageId, generatedBy: authored ? "LLM" : "RULE", sentAt: new Date(),
       sentById: actor?.id ?? null, sentByName: actor?.name ?? null,
     },
   });

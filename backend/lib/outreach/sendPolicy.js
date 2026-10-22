@@ -56,6 +56,8 @@ const EMAIL_RULES = {
   IE: { policy: POLICY.ALLOWED, law: "SI 336/2011 reg. 13", note: "Opt-out for corporate subscribers." },
   BE: { policy: POLICY.ALLOWED, law: "Boek VI WER", note: "Opt-out for business recipients." },
   US: { policy: POLICY.ALLOWED, law: "CAN-SPAM", note: "Opt-out. Requires a real postal address, honest subject line, and opt-out honoured within 10 business days." },
+  AU: { policy: POLICY.RESTRICTED, law: "Spam Act 2003 sch. 2 cl. 4", note: "Consent is inferred only for an address the business publishes conspicuously, when the message relates to the role that address serves and no 'no unsolicited email' notice sits beside it. Identify the sender and include a working unsubscribe." },
+  NZ: { policy: POLICY.RESTRICTED, law: "UEMA 2007 s. 4", note: "Deemed consent only for a conspicuously published business address, where the message is relevant to that business and nothing published refuses it. Identify the sender and include a working unsubscribe." },
   CA: { policy: POLICY.RESTRICTED, law: "CASL", note: "Consent-based with narrow business exemptions. Confirm the basis before sending." },
 
   // ── Lawful only in a narrower shape ─────────────────────────────────────────

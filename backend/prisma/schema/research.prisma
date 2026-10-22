@@ -120,6 +120,11 @@ model LeadEmailDraft {
 
   subject        String @db.VarChar(200)
   body           String @db.VarChar(4000)
+  /// The chases written with this opener, in order. Null = the template
+  /// sequence. An array is the whole sequence: its length is how many chases
+  /// go out, so [] means none — a tender inbox must never get "just following
+  /// up" from a robot.
+  followUps      Json?
   aboutCompany   String @db.VarChar(1000)
   /// snapshot of the numbered facts handed to the model, so the email can
   /// always be audited against what it was allowed to know

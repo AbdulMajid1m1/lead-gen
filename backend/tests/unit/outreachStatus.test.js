@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { nextFollowUpDate, bucketFor, followUpRoom } from "../../lib/outreach/service.js";
+import { nextFollowUpDate, bucketFor, followUpRoom, authoredChase } from "../../lib/outreach/service.js";
 
 describe("followUpRoom", () => {
   it("lets a full batch through when the mailbox has room", () => {
@@ -103,5 +103,22 @@ describe("bucketFor", () => {
   it("treats bounced and closed threads as done", () => {
     expect(bucketFor(thread({ status: "BOUNCED" }), now)).toBe("closed");
     expect(bucketFor(thread({ status: "CLOSED" }), now)).toBe("closed");
+  });
+});
+
+describe("authoredChase", () => {
+  it("leaves the template sequence alone when the opener carried none", () => {
+    expect(authoredChase(null, 1)).toBeNull();
+  });
+
+  it("sends the written chases in order and marks the last one", () => {
+    const seq = ["First chase.", "Second chase."];
+    expect(authoredChase(seq, 1)).toEqual({ body: "First chase.", last: false });
+    expect(authoredChase(seq, 2)).toEqual({ body: "Second chase.", last: true });
+  });
+
+  it("stops once the written sequence has run out, and an empty one means no chase", () => {
+    expect(authoredChase(["Only one."], 2)).toEqual({ done: true });
+    expect(authoredChase([], 1)).toEqual({ done: true });
   });
 });
