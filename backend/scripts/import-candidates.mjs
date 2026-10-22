@@ -34,9 +34,24 @@
  *       "matchConfidence": "HIGH|MEDIUM|LOW",
  *       "email": "…", "phone": "…", "whatsapp": "…", "addressText": "…",
  *       "sourceUrls": ["https://…"],
- *       "detailSources": { "email": "https://…", "phone": "https://…" }
+ *       "detailSources": { "email": "https://…", "phone": "https://…" },
+ *       "intent": {                              // optional — why now
+ *         "kind": "BUYER_REQUEST" | "FUNDING_RAISED",
+ *         "summary": "a mobile and web resettlement app",   // or the amount
+ *         "quote": "words copied from the page",  // must appear on `url`
+ *         "url": "https://…", "deadline": "2026-11-02", "date": "2026-09-25"
+ *       }
  *     }]
  *   }
+ *
+ * An `intent` is a claim like any other. After the run, the cited page is
+ * fetched by our own crawler and the quote must be found on it; only then is
+ * it recorded as a fact (`buyer_request` / `funding_round`), which the signal
+ * engine turns into BUYER_REQUEST / FUNDING_RAISED and the company is
+ * re-scored. A request found nowhere on its page is reported and dropped.
+ *
+ * `--intent-only` applies the intents to companies an earlier import already
+ * created, without starting a new run.
  */
 import { readFile } from "node:fs/promises";
 import { stdin } from "node:process";
@@ -50,6 +65,10 @@ import { normalizeCompanyName, normalizeCityLabel } from "../utils/normalize.js"
 import { normaliseCountryCode } from "../utils/countries.js";
 import { DISCOVERY_MAX_CRAWL_HOSTS } from "../configs/envConfig.js";
 import { CostTracker } from "../lib/llm/responses.js";
+import { fetchPage } from "../lib/crawler/fetchPage.js";
+import { recordFact } from "../lib/provenance/recorder.js";
+import { evaluateCompanySignals } from "../lib/signals/signalEngine.js";
+import { scoreCompany } from "../lib/scoring/scoreEngine.js";
 
 const CLAIM_FIELDS = [
   ["email", "EMAIL", "email"],
@@ -85,6 +104,61 @@ const awaitRun = async (runId, { pollMs = 5000, hardCapMs = 25 * 60 * 1000 } = {
   }
 };
 
+/** Page text reduced to comparable words: tags, entities, case and punctuation gone. */
+const comparable = (text) => String(text || "")
+  .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ")
+  .replace(/<[^>]+>/g, " ")
+  .replace(/&[a-z#0-9]+;/gi, " ")
+  .toLowerCase()
+  .replace(/[^a-z0-9€£$]+/g, " ")
+  .trim();
+
+/**
+ * Verify each candidate's `intent` on its cited page and record it as a fact.
+ * Returns one line per intent for the console.
+ */
+const applyIntents = async ({ candidates, runId = null, source }) => {
+  const lines = [];
+  for (const c of candidates) {
+    const intent = c.intent;
+    if (!intent?.kind || !intent?.url || !intent?.quote) continue;
+    const row = await prisma.aiCandidate.findFirst({
+      where: { name: c.name.slice(0, 160), companyId: { not: null }, ...(runId ? { runId } : {}) },
+      orderBy: { createdAt: "desc" },
+      select: { companyId: true },
+    });
+    if (!row) { lines.push(`  ! ${c.name}: no company was created, intent skipped`); continue; }
+
+    const res = await fetchPage(intent.url, { timeoutMs: 15_000 });
+    const found = res.ok && comparable(res.body).includes(comparable(intent.quote));
+    if (!found) {
+      lines.push(`  ! ${c.name}: quote not found on ${intent.url}${res.ok ? "" : ` (${res.blockReason || res.status})`} — intent dropped`);
+      continue;
+    }
+    const record = await recordSourceRecord({
+      sourceId: source.id,
+      externalId: null,
+      url: res.finalUrl || intent.url,
+      payload: { url: res.finalUrl || intent.url, status: res.status, contentHash: res.contentHash, kind: intent.kind, quote: intent.quote },
+    });
+    const isRequest = intent.kind === "BUYER_REQUEST";
+    await recordFact({
+      companyId: row.companyId,
+      key: isRequest ? "buyer_request" : "funding_round",
+      value: intent.summary || null,
+      valueJson: { url: res.finalUrl || intent.url, deadline: intent.deadline || null, date: intent.date || null },
+      confidenceLevel: "VERIFIED",
+      extractorName: "importIntent",
+      evidenceSnippet: intent.quote,
+      sourceRecordId: record.id,
+    });
+    await evaluateCompanySignals(row.companyId);
+    const scored = await scoreCompany(row.companyId, { discoveryRunId: runId });
+    lines.push(`  ✓ ${c.name}: ${intent.kind} verified — ${scored.skipped ? `still below the bar (${scored.reason})` : "lead scored"}`);
+  }
+  return lines;
+};
+
 const main = async () => {
   const file = arg("file");
   const useStdin = process.argv.includes("--stdin");
@@ -112,6 +186,16 @@ const main = async () => {
   console.log(`grounded : ${doc.candidates.length - ungrounded.length}/${doc.candidates.length}`);
   if (ungrounded.length) console.log(`  uncited: ${ungrounded.map((c) => c.name).join(", ")}`);
   if (dryRun) return;
+
+  if (process.argv.includes("--intent-only")) {
+    const source = await ensureSource({
+      kind: "AI_WEB_SEARCH",
+      name: "Agent web research (stated need)",
+      attribution: "A tender, request or funding announcement cited by an assistant and re-fetched by our own crawler, which found the quoted words on the page.",
+    });
+    for (const line of await applyIntents({ candidates: doc.candidates, source })) console.log(line);
+    return;
+  }
 
   const tracker = new CostTracker();
   const { brief, producedBy, model } = await buildBrief({ rawQuery: q, parsed, tracker });
@@ -226,6 +310,17 @@ const main = async () => {
   });
   console.log(`${finished.status} in ${secs}s — ${leads} leads`);
   for (const r of rejected) console.log(`   ${r.status}: ${r._count}`);
+
+  if (doc.candidates.some((c) => c.intent)) {
+    const intentSource = await ensureSource({
+      kind: "AI_WEB_SEARCH",
+      name: "Agent web research (stated need)",
+      attribution: "A tender, request or funding announcement cited by an assistant and re-fetched by our own crawler, which found the quoted words on the page.",
+    });
+    for (const line of await applyIntents({ candidates: doc.candidates, runId: run.id, source: intentSource })) console.log(line);
+    const after = await prisma.lead.count({ where: { discoveryRunId: run.id } });
+    if (after !== leads) console.log(`leads after intents: ${after}`);
+  }
 };
 
 main()

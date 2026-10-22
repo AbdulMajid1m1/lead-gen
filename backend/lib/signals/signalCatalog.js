@@ -173,6 +173,23 @@ export const SIGNAL_CATALOG = {
     services: { CUSTOM_SOFTWARE: 0.5, SAAS_DEV: 0.5 },
     reason: () => "The company runs an active careers page with open positions.",
   },
+  // ─── Asked in public ────────────────────────────────────────────────────────
+  // The strongest evidence there is: the organisation itself wrote down that it
+  // wants a supplier for this work — a tender, a request for quotes, a brief, a
+  // contract role. Every other signal is an inference about a need; this is the
+  // need. Short half-life because these close: a tender has a deadline.
+  BUYER_REQUEST: {
+    weight: 45, halfLifeDays: 21, leadType: "HIRING_INTENT",
+    label: "Asked for a supplier",
+    services: { CUSTOM_SOFTWARE: 0.4, WEBSITE_DEV: 0.3, MOBILE_APP: 0.15, AI_AUTOMATION: 0.15 },
+    reason: (c) => `${c.companyName} has publicly asked for ${c.what}${c.deadline ? `, closing ${c.deadline}` : ""}.`,
+  },
+  FUNDING_RAISED: {
+    weight: 30, halfLifeDays: 90, leadType: "EXPANSION",
+    label: "Raised funding",
+    services: { SAAS_DEV: 0.5, CUSTOM_SOFTWARE: 0.3, MOBILE_APP: 0.2 },
+    reason: (c) => `${c.companyName} raised ${c.amount}${c.date ? ` (${c.date})` : ""}, earmarked for product build.`,
+  },
   GROWTH_MENTION: {
     weight: 8, halfLifeDays: 60, leadType: "EXPANSION",
     label: "Expansion mentioned",

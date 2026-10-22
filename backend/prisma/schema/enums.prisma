@@ -130,6 +130,8 @@ enum SignalType {
   GROWTH_MENTION
   MANUAL_PROCESS_HINT
   NAMED_CONTACT_FOUND
+  BUYER_REQUEST
+  FUNDING_RAISED
   // Disqualifiers. Weightless by design: they do not lower a score, they mark a
   // lead as one that must not be contacted at all.
   BUSINESS_CLOSED

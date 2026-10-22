@@ -207,6 +207,24 @@ export const evaluateCompanySignals = async (companyId) => {
       evidence: { factId: fact("mentions_growth")?.id, note: fact("mentions_growth")?.evidenceSnippet },
     });
   }
+  // Recorded only by the import after our own fetch found the quoted request
+  // or announcement on the cited page — see scripts/import-candidates.mjs.
+  const request = fact("buyer_request");
+  if (request) {
+    push("BUYER_REQUEST", {
+      dedupeKey: `request:${request.valueJson?.url || company.id}`,
+      context: { companyName: company.name, what: request.value, deadline: request.valueJson?.deadline || null },
+      evidence: { factId: request.id, note: request.evidenceSnippet },
+    });
+  }
+  const funding = fact("funding_round");
+  if (funding) {
+    push("FUNDING_RAISED", {
+      dedupeKey: `funding:${funding.valueJson?.url || company.id}`,
+      context: { companyName: company.name, amount: funding.value, date: funding.valueJson?.date || null },
+      evidence: { factId: funding.id, note: funding.evidenceSnippet },
+    });
+  }
   if (fact("careers_page_active")?.value === "true") {
     push("CAREERS_PAGE_ACTIVE", {
       dedupeKey: `careers:${company.id}`,
