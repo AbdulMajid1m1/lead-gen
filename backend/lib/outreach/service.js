@@ -58,6 +58,17 @@ export const getAccount = async (accountId = null) => {
 const domainOf = (email) => String(email).split("@")[1]?.toLowerCase() || "";
 
 /**
+ * A lead set to MANUAL belongs to a person: nothing automated may write to it
+ * (campaign drains, autopilot top-ups, scheduled chases). A send someone
+ * makes by hand is exactly what MANUAL is for, so `automated` decides.
+ * Worded without "failed" so a campaign records it as SKIPPED, not FAILED.
+ */
+export const manualLeadRefusal = (lead, automated) =>
+  automated && lead?.sendMode === "MANUAL"
+    ? "This lead is set to Manual — a person sends to it, so LeadSignal sends nothing automatically until it is switched back to Auto."
+    : null;
+
+/**
  * The compliance gate. Every send — initial, follow-up, manual or automated —
  * goes through here.
  *
@@ -65,13 +76,15 @@ const domainOf = (email) => String(email).split("@")[1]?.toLowerCase() || "";
  * needs because in two markets the legality of the send depends on what is in
  * the footer, not only on where the recipient is.
  */
-export const sendIsBlocked = async ({ lead, recipientEmail, signature = undefined }) => {
+export const sendIsBlocked = async ({ lead, recipientEmail, signature = undefined, automated = false }) => {
   // The same locked set the campaign builder uses. A follow-up used to check
   // only the first two, so a lead disqualified after the first email still got
   // chased three days later.
   if (["DO_NOT_CONTACT", "ARCHIVED", "DISQUALIFIED", "NOT_INTERESTED", "CONVERTED"].includes(lead.status)) {
     return `Lead status is ${lead.status}.`;
   }
+  const manual = manualLeadRefusal(lead, automated);
+  if (manual) return manual;
   const suppressed = await prisma.suppressionEntry.findFirst({
     where: {
       OR: [
@@ -103,10 +116,12 @@ export const sendIsBlocked = async ({ lead, recipientEmail, signature = undefine
 };
 
 /** Phone-side compliance gate, mirroring the email one. */
-export const phoneSendIsBlocked = async ({ lead, phone }) => {
+export const phoneSendIsBlocked = async ({ lead, phone, automated = false }) => {
   if (["DO_NOT_CONTACT", "ARCHIVED"].includes(lead.status)) {
     return `Lead status is ${lead.status}.`;
   }
+  const manual = manualLeadRefusal(lead, automated);
+  if (manual) return manual;
   const digits = String(phone).replace(/\D/g, "");
   const tail = digits.slice(-9);
   const matches = (value) => value.replace(/\D/g, "").endsWith(tail);
@@ -127,7 +142,7 @@ export const phoneSendIsBlocked = async ({ lead, phone }) => {
  * Same lifecycle as email: lead goes CONTACTED, replies land in the thread.
  */
 export const sendWhatsAppForLead = async ({
-  leadId, phone, message, waAccountId = null, signatureId = undefined, sentBy = null,
+  leadId, phone, message, waAccountId = null, signatureId = undefined, sentBy = null, automated = false,
 }) => {
   const actor = toActor(sentBy);
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { company: true } });
@@ -136,7 +151,7 @@ export const sendWhatsAppForLead = async ({
   const device = await getWhatsAppAccount(waAccountId);
   if (!device) return { ok: false, error: "No WhatsApp device is linked yet. Add one in Settings." };
 
-  const blocked = await phoneSendIsBlocked({ lead, phone });
+  const blocked = await phoneSendIsBlocked({ lead, phone, automated });
   if (blocked) return { ok: false, error: blocked };
 
   // The chat form of the signature: two lines, no rule. A formatted block in a
@@ -226,7 +241,7 @@ export const sendWhatsAppForLead = async ({
  * Marks the lead CONTACTED and schedules the first follow-up.
  */
 export const sendInitialEmail = async ({
-  account, leadId, to, subject, body, draftId = null, signatureId = undefined, sentBy = null,
+  account, leadId, to, subject, body, draftId = null, signatureId = undefined, sentBy = null, automated = false,
 }) => {
   const actor = toActor(sentBy);
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { company: true } });
@@ -265,7 +280,7 @@ export const sendInitialEmail = async ({
   // Resolved before the gate, not after: in the US and Canada what the footer
   // carries is part of whether the send is lawful at all.
   const signature = await resolveSignature({ signatureId, account });
-  const blocked = await sendIsBlocked({ lead, recipientEmail: to, signature });
+  const blocked = await sendIsBlocked({ lead, recipientEmail: to, signature, automated });
   if (blocked) return { ok: false, error: blocked };
 
   const sent = await sendMail({ account, to, subject, body, signature });
@@ -332,7 +347,7 @@ const alreadySaidIn = (thread) =>
  * the thread then reads "sent automatically" rather than crediting the chase to
  * whoever happened to open the first email.
  */
-export const sendFollowUp = async ({ account, threadId, sentBy = null }) => {
+export const sendFollowUp = async ({ account, threadId, sentBy = null, automated = false }) => {
   const actor = toActor(sentBy);
   const thread = await prisma.outreachThread.findUnique({
     where: { id: threadId },
@@ -343,7 +358,7 @@ export const sendFollowUp = async ({ account, threadId, sentBy = null }) => {
   if (thread.followUpsSent >= account.maxFollowUps) return { ok: false, error: "Follow-up limit reached for this thread." };
 
   const signature = await resolveSignature({ signatureId: thread.signatureId ?? undefined, account });
-  const blocked = await sendIsBlocked({ lead: thread.lead, recipientEmail: thread.recipientEmail, signature });
+  const blocked = await sendIsBlocked({ lead: thread.lead, recipientEmail: thread.recipientEmail, signature, automated });
   if (blocked) return { ok: false, error: blocked };
 
   const followUpNumber = thread.followUpsSent + 1;
@@ -560,7 +575,7 @@ export const sendWhatsAppReply = async ({ threadId, body, sentBy = null }) => {
  * reply-chain headers WhatsApp has no equivalent of — continuity there comes
  * from the chat itself, so the message just has to be short and human.
  */
-export const sendWhatsAppFollowUp = async ({ device, threadId, sentBy = null }) => {
+export const sendWhatsAppFollowUp = async ({ device, threadId, sentBy = null, automated = false }) => {
   const actor = toActor(sentBy);
   const thread = await prisma.outreachThread.findUnique({
     where: { id: threadId },
@@ -571,7 +586,7 @@ export const sendWhatsAppFollowUp = async ({ device, threadId, sentBy = null }) 
   if (thread.status !== "AWAITING_REPLY") return { ok: false, error: `Thread is ${thread.status.toLowerCase()} — no follow-up needed.` };
   if (thread.followUpsSent >= device.maxFollowUps) return { ok: false, error: "Follow-up limit reached for this thread." };
 
-  const blocked = await phoneSendIsBlocked({ lead: thread.lead, phone: thread.recipientEmail });
+  const blocked = await phoneSendIsBlocked({ lead: thread.lead, phone: thread.recipientEmail, automated });
   if (blocked) return { ok: false, error: blocked };
 
   const followUpNumber = thread.followUpsSent + 1;
@@ -865,6 +880,10 @@ export const processDueFollowUps = async ({ account, force = false }) => {
       status: "AWAITING_REPLY",
       nextFollowUpAt: { not: null, lte: new Date() },
       followUpsSent: { lt: account.maxFollowUps },
+      // A MANUAL lead is chased by a person, not by this loop. Left out here
+      // rather than refused at the gate, so its due date survives untouched
+      // and the chase resumes if the lead is ever switched back to AUTO.
+      lead: { sendMode: "AUTO" },
     },
     orderBy: { nextFollowUpAt: "asc" },
     take: room * 5,
@@ -874,7 +893,7 @@ export const processDueFollowUps = async ({ account, force = false }) => {
   if (!due.length && candidates.length) return { sent: 0, skipped: "outside the send window" };
   let sent = 0;
   for (const thread of due) {
-    const res = await sendFollowUp({ account, threadId: thread.id });
+    const res = await sendFollowUp({ account, threadId: thread.id, automated: true });
     if (res.ok) sent += 1;
     else {
       const nextFollowUpAt = retryAfterFailure(res.error, thread.lastOutboundAt);
@@ -909,6 +928,7 @@ export const processDueWhatsAppFollowUps = async ({ device, force = false }) => 
       status: "AWAITING_REPLY",
       nextFollowUpAt: { not: null, lte: new Date() },
       followUpsSent: { lt: device.maxFollowUps },
+      lead: { sendMode: "AUTO" },
     },
     orderBy: { nextFollowUpAt: "asc" },
     take: 100,
@@ -917,7 +937,7 @@ export const processDueWhatsAppFollowUps = async ({ device, force = false }) => 
   const due = candidates.filter((t) => mayChaseNow(t.lead?.campaignRecipients?.[0]?.campaign)).slice(0, 20);
   let sent = 0;
   for (const thread of due) {
-    const res = await sendWhatsAppFollowUp({ device, threadId: thread.id });
+    const res = await sendWhatsAppFollowUp({ device, threadId: thread.id, automated: true });
     if (res.ok) sent += 1;
     else {
       const nextFollowUpAt = retryAfterFailure(res.error, thread.lastOutboundAt);

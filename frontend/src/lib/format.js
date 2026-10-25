@@ -22,6 +22,10 @@ export const LEAD_TYPE_LABELS = {
   EXPANSION: "Expansion",
 };
 
+/** Who writes to a lead — see LeadSendMode in the schema. */
+export const SEND_MODE_LABELS = { AUTO: "Auto", MANUAL: "Manual" };
+export const ORIGIN_LABELS = { DISCOVERED: "Found by LeadSignal", IMPORTED: "Uploaded" };
+
 export const STATUS_LABELS = {
   NEW: "New",
   QUALIFIED: "Qualified",

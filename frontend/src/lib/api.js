@@ -85,6 +85,8 @@ export const api = {
   getLead: (id) => request(`/leads/${id}`),
   getProvenance: (id) => request(`/leads/${id}/provenance`),
   updateLeadStatus: (id, body) => request(`/leads/${id}/status`, { method: "PATCH", body }),
+  updateLeadHandling: (id, body) => request(`/leads/${id}/handling`, { method: "PATCH", body }),
+  importLeads: (body) => request("/leads/import", { method: "POST", body }),
 
   listRuns: () => request("/discovery-runs"),
   getRun: (id) => request(`/discovery-runs/${id}`),

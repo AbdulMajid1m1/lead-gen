@@ -274,6 +274,8 @@ const LOCKED = new Set(LOCKED_LEAD_STATUSES);
  */
 export const buildRecipientRows = (leads, { wantEmail, wantWa }) => leads.map((lead) => {
   const locked = LOCKED.has(lead.status);
+  // A person took this lead over; it is theirs to write to, not the queue's.
+  const manual = lead.sendMode === "MANUAL";
   // A trade this agency does not work with. The scoring engine disqualifies
   // these, but a lead scored before the rule existed may still read NEW until
   // the next re-score, and this is the last gate before a message leaves.
@@ -301,6 +303,7 @@ export const buildRecipientRows = (leads, { wantEmail, wantWa }) => leads.map((l
     : excluded ? ["SKIPPED", `Excluded line of business (${excluded.label}: "${excluded.matched}").`]
     : isSendBlocked(emailPolicy) ? ["SKIPPED", `Cold email is not lawful in ${emailPolicy.country} (${emailPolicy.law}).`]
     : locked ? ["SKIPPED", `Lead status is ${lead.status} — locked by a human decision.`]
+    : manual ? ["SKIPPED", "Set to Manual — a person sends to this lead, not LeadSignal."]
     : hasEmailThread ? ["SKIPPED", "Already in an email conversation."]
     : !email ? ["SKIPPED", "No usable email address on this lead."]
     : ["PENDING", email.value];
@@ -309,6 +312,7 @@ export const buildRecipientRows = (leads, { wantEmail, wantWa }) => leads.map((l
     : excluded ? ["SKIPPED", `Excluded line of business (${excluded.label}: "${excluded.matched}").`]
     : isSendBlocked(waPolicy) ? ["SKIPPED", `Cold messaging is not lawful in ${waPolicy.country} (${waPolicy.law}).`]
     : locked ? ["SKIPPED", `Lead status is ${lead.status} — locked by a human decision.`]
+    : manual ? ["SKIPPED", "Set to Manual — a person sends to this lead, not LeadSignal."]
     : hasWaThread ? ["SKIPPED", "Already in a WhatsApp conversation."]
     : !wa ? ["SKIPPED", "No usable phone number on this lead."]
     // `display` rather than `number`: this string is shown in the campaign
@@ -500,6 +504,7 @@ const attemptEmail = async (campaign, recipient) => {
       to: recipient.emailDetail, subject: draft.subject, body: draft.body, draftId: draft.id,
       signatureId: campaign.signatureId ?? undefined,
       sentBy: campaignActor(campaign),
+      automated: true,
     });
     return res.ok ? ["SENT", recipient.emailDetail] : [/failed/i.test(res.error) ? "FAILED" : "SKIPPED", res.error.slice(0, 300)];
   } catch (err) {
@@ -531,6 +536,7 @@ const attemptWhatsApp = async (campaign, recipient) => {
     const res = await sendWhatsAppForLead({
       leadId: recipient.leadId, phone: recipient.waDetail, message, waAccountId: device.id,
       sentBy: campaignActor(campaign),
+      automated: true,
     });
     return res.ok ? ["SENT", recipient.waDetail] : [/not (?:connected|linked)|device/i.test(res.error) ? "FAILED" : "SKIPPED", res.error.slice(0, 300)];
   } catch (err) {

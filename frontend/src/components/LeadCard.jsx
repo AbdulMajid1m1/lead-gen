@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Mail, Phone, FileText, MapPin, ArrowRight, Sparkles, ShieldAlert, User } from "lucide-react";
+import { Mail, Phone, FileText, MapPin, ArrowRight, Sparkles, ShieldAlert, User, Hand, Upload } from "lucide-react";
 import { Badge, ScoreRing, Surface } from "./ui.jsx";
 import {
   SERVICE_LABELS, LEAD_TYPE_LABELS, CONFIDENCE_STYLES, SEND_POLICY_STYLE,
@@ -50,6 +50,14 @@ export const LeadCard = ({ lead, selectable = false, selected = false, onToggleS
               <h3 className="truncate text-[15px] font-semibold tracking-tight">{lead.company.name}</h3>
               <Badge tone={tone}>{SERVICE_LABELS[lead.primaryOpportunity] || lead.primaryOpportunity}</Badge>
               <Badge>{LEAD_TYPE_LABELS[lead.type] || lead.type}</Badge>
+              {/* Manual means no automated email or message will reach it —
+                  worth seeing before anyone builds a campaign around it. */}
+              {lead.sendMode === "MANUAL" && (
+                <Badge tone="var(--color-caution)" title="Manual: LeadSignal sends nothing to this lead automatically.">
+                  <Hand size={10} />Manual
+                </Badge>
+              )}
+              {lead.origin === "IMPORTED" && <Badge title="Uploaded by a person"><Upload size={10} />Uploaded</Badge>}
             </div>
 
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-muted)]">

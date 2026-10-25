@@ -166,6 +166,25 @@ enum LeadStatus {
   DO_NOT_CONTACT
 }
 
+/// Who writes to a lead. Separate from LeadStatus on purpose: a person's own
+/// first email moves the lead to CONTACTED, and that must not hand the lead
+/// back to the scheduler's follow-ups.
+///
+/// AUTO   — campaigns, autopilot and scheduled follow-ups may send.
+/// MANUAL — a person handles it. Nothing leaves automatically until someone
+///          switches it back to AUTO; sending by hand still works.
+enum LeadSendMode {
+  AUTO
+  MANUAL
+}
+
+/// How a lead entered the book. An IMPORTED lead was uploaded by a person, so
+/// the scoring engine never re-scores, archives or rewrites it on its own.
+enum LeadOrigin {
+  DISCOVERED
+  IMPORTED
+}
+
 enum ActionType {
   CONTACT_IMMEDIATELY
   EMAIL_PITCH

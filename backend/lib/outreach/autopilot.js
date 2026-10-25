@@ -173,6 +173,7 @@ export const eligibleLeads = async ({ lane, settings, excludeLeadIds = [], take 
   const leads = await prisma.lead.findMany({
     where: {
       status: { notIn: LOCKED_LEAD_STATUSES },
+      sendMode: "AUTO",
       // A lead already in any conversation is not a cold prospect any more.
       threads: { none: {} },
       company: { is: laneCompanyWhere(lane) },

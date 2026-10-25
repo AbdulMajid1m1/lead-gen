@@ -101,6 +101,7 @@ export const eligibleProductLeads = async ({ productId, restrictedPolicy = "ROLE
   const leads = await prisma.lead.findMany({
     where: {
       status: { notIn: LOCKED_LEAD_STATUSES },
+      sendMode: "AUTO",
       threads: { none: {} },
       discoveryRun: { promotedProductId: productId },
       ...(excludeLeadIds.length ? { id: { notIn: excludeLeadIds } } : {}),
@@ -265,6 +266,7 @@ export const promoterAutopilotStatus = async (productId, now = new Date()) => {
   const eligible = await prisma.lead.count({
     where: {
       status: { notIn: LOCKED_LEAD_STATUSES },
+      sendMode: "AUTO",
       threads: { none: {} },
       discoveryRun: { promotedProductId: productId },
     },

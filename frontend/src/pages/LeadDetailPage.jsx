@@ -4,13 +4,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft, Mail, Phone, Globe, MapPin, Briefcase, ShieldCheck, Layers,
   GitBranch, Copy, ExternalLink, Sparkles, Clock, AlertTriangle, Check,
-  ShieldAlert, Users,
+  ShieldAlert, Users, Hand, Bot, StickyNote,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageBody } from "../App.jsx";
 import { api } from "../lib/api.js";
 import {
-  Badge, Button, ErrorState, Field, ScoreRing, SectionHeading, Skeleton, Surface,
+  Badge, Button, ErrorState, Field, ScoreRing, SectionHeading, Skeleton, Surface, Textarea,
 } from "../components/ui.jsx";
 import { ProvenanceDrawer } from "../components/ProvenanceDrawer.jsx";
 import EmailComposer, { ThreadStatusChip } from "../components/EmailComposer.jsx";
@@ -57,6 +57,20 @@ export default function LeadDetailPage() {
     queryFn: () => api.listThreads(id),
   });
   const activeThread = threadsData?.threads?.[0] || null;
+
+  // Who sends to this lead, and the notes on it — one endpoint, two uses.
+  const handlingMutation = useMutation({
+    mutationFn: (body) => api.updateLeadHandling(id, body),
+    onSuccess: (_, body) => {
+      toast.success(body.sendMode
+        ? (body.sendMode === "MANUAL" ? "Set to Manual — nothing will be sent automatically" : "Set to Auto")
+        : "Notes saved");
+      queryClient.invalidateQueries({ queryKey: ["lead", id] });
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const [notesDraft, setNotesDraft] = useState(null);
 
   const statusMutation = useMutation({
     mutationFn: (status) => api.updateLeadStatus(id, { status }),
@@ -134,7 +148,17 @@ export default function LeadDetailPage() {
                     <Clock size={10} />Evidence {lead.freshness.relative}
                   </Badge>
                   <Badge>{STATUS_LABELS[lead.status]}</Badge>
+                  {lead.origin === "IMPORTED" && <Badge>Uploaded</Badge>}
                 </div>
+                {lead.sendMode === "MANUAL" && (
+                  <p className="mt-2.5 flex items-start gap-2 rounded-lg border border-[var(--color-caution)]/40 bg-[color-mix(in_oklch,var(--color-caution)_10%,transparent)] p-2.5 text-[12px] leading-snug">
+                    <Hand size={14} className="mt-px shrink-0 text-[var(--color-caution)]" aria-hidden="true" />
+                    <span>
+                      <span className="font-medium">Manual.</span>{" "}
+                      LeadSignal sends nothing to this lead on its own — no campaigns, autopilot or follow-ups. Write and send from here yourself, or switch it to Auto.
+                    </span>
+                  </p>
+                )}
               </div>
             </div>
 
@@ -142,6 +166,25 @@ export default function LeadDetailPage() {
               <Button variant="secondary" size="sm" onClick={() => setDrawerOpen(true)}>
                 <GitBranch size={13} />Where did this come from?
               </Button>
+              <div className="inline-flex rounded-lg border border-[var(--border-strong)] p-0.5" role="radiogroup" aria-label="Who sends to this lead">
+                {[["AUTO", Bot, "Auto", "Campaigns, autopilot and follow-ups may send"], ["MANUAL", Hand, "Manual", "Only you send — nothing automatic"]].map(([value, Icon, label, hint]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={lead.sendMode === value}
+                    title={hint}
+                    disabled={handlingMutation.isPending || lead.sendMode === value}
+                    onClick={() => handlingMutation.mutate({ sendMode: value })}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors disabled:cursor-default",
+                      lead.sendMode === value ? "bg-[var(--accent-soft)] text-[var(--accent)]" : "text-[var(--text-muted)] hover:text-[var(--text)]",
+                    )}
+                  >
+                    <Icon size={13} />{label}
+                  </button>
+                ))}
+              </div>
               <select
                 value={lead.status}
                 onChange={(e) => statusMutation.mutate(e.target.value)}
@@ -534,6 +577,27 @@ export default function LeadDetailPage() {
                 </li>
               ))}
             </ul>
+          </Surface>
+
+          <Surface className="p-5">
+            <SectionHeading icon={StickyNote} title="Notes" description="Only people see these; nothing here goes into an email." />
+            <Textarea
+              rows={4}
+              maxLength={2000}
+              value={notesDraft ?? lead.notes ?? ""}
+              onChange={(e) => setNotesDraft(e.target.value)}
+              placeholder="Who you spoke to, what they said, what to do next…"
+              aria-label="Notes on this lead"
+            />
+            {notesDraft !== null && notesDraft !== (lead.notes ?? "") && (
+              <div className="mt-2 flex justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setNotesDraft(null)}>Cancel</Button>
+                <Button size="sm" disabled={handlingMutation.isPending}
+                  onClick={() => handlingMutation.mutate({ notes: notesDraft }, { onSuccess: () => setNotesDraft(null) })}>
+                  <Check size={13} />Save notes
+                </Button>
+              </div>
+            )}
           </Surface>
 
           <Surface className="p-5">

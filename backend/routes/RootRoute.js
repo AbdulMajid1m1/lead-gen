@@ -67,6 +67,7 @@ const canPromote       = requirePermission("promoter");
 const canListLeads     = requirePermission("leads", "promoter", "outreach", "research", "inbox");
 const canOpenLead      = requirePermission("leads", "promoter", "outreach", "research");
 const canSetLeadStatus = requirePermission("leads", "inbox");
+const canImportLeads   = requirePermission("leads");
 const canOutreach      = requirePermission("outreach");
 const canInbox         = requirePermission("inbox");
 const canReadThreads   = requirePermission("inbox", "leads", "outreach", "research", "promoter");
@@ -125,12 +126,14 @@ router.get("/leads", canListLeads, validate({ query: leads.listSchema }), leads.
 router.get("/leads/countries", canListLeads, leads.listCountries);
 router.get("/leads/ids", canListLeads, validate({ query: leads.listSchema }), leads.listLeadIds);
 router.get("/leads/status-counts", canListLeads, validate({ query: leads.listSchema }), leads.statusCounts);
+router.post("/leads/import", canImportLeads, writeLimiter, validate({ body: leads.importSchema }), leads.importLeadsHandler);
 router.get("/leads/:id", canOpenLead, validate({ params: idParam }), leads.getLead);
 router.get("/leads/:id/provenance", canOpenLead, validate({ params: idParam }), leads.getProvenance);
 router.get("/leads/:id/email-drafts", canOpenLead, validate({ params: idParam }), research.listEmailDrafts);
 router.post("/leads/:id/email-drafts", canOpenLead, writeLimiter, validate({ params: idParam }), research.regenerateEmailDraft);
 // Also reachable from the Inbox, where judging a reply *is* a status change.
 router.patch("/leads/:id/status", canSetLeadStatus, writeLimiter, validate({ params: idParam, body: leads.statusSchema }), leads.updateStatus);
+router.patch("/leads/:id/handling", canSetLeadStatus, writeLimiter, validate({ params: idParam, body: leads.handlingSchema }), leads.updateHandling);
 
 // ─── Outreach: mailboxes, sending, reply tracking, follow-ups ─────────────────
 // Several mailboxes may be connected at once; the composer picks which one

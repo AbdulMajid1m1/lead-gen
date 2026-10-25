@@ -94,6 +94,15 @@ export const scoreCompany = async (companyId, { searchQueryId = null, discoveryR
     return { skipped: true, reason: "DISQUALIFIED", disqualifier: disqualifier.type };
   }
 
+  // A lead a person uploaded keeps that person's judgement. The hard stops
+  // above (suppression, excluded trades, a closed business) still apply to it,
+  // but the engine does not re-score, archive or rewrite the reasons of a lead
+  // it did not find — a NEW upload with no signals would otherwise be archived
+  // as "below the bar" the first time a discovery run touched its company.
+  if (company.leads[0]?.origin === "IMPORTED") {
+    return { skipped: true, reason: "IMPORTED", leadId: company.leads[0].id };
+  }
+
   // A company with no website of its own is a website-development lead by
   // definition, and the exact opposite of a SaaS buyer: the reason it is in
   // the database is a gap this product does not fill, it published no email to

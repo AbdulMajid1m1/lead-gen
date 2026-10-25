@@ -10,6 +10,7 @@ import { asyncHandler } from "../../middlewares/validate.js";
 import { pickWhatsAppNumber } from "../../lib/outreach/phoneRank.js";
 import { sendPolicyFor, isRoleAddress, isSendBlocked } from "../../lib/outreach/sendPolicy.js";
 import { CAMPAIGN_MAX_RECIPIENTS } from "../../lib/outreach/campaigns.js";
+import { importLeads, IMPORT_MAX_ROWS } from "../../lib/leads/importLeads.js";
 
 export const listSchema = z.object({
   status: z.string().optional(),
@@ -29,6 +30,10 @@ export const listSchema = z.object({
   /// listing that filters and pages differently from All leads.
   productId: z.string().min(1).max(64).optional(),
   runId: z.string().min(1).max(64).optional(),
+  /// MANUAL = leads a person handles; AUTO = leads LeadSignal may send to.
+  sendMode: z.enum(["AUTO", "MANUAL"]).optional(),
+  /// IMPORTED = uploaded by a person; DISCOVERED = found by the system.
+  origin: z.enum(["DISCOVERED", "IMPORTED"]).optional(),
   freshness: z.enum(["NEW_TODAY", "NEW_THIS_WEEK", "THIS_MONTH", "THIS_QUARTER", "OLDER"]).optional(),
   sort: z.enum(["score", "freshness", "created"]).default("created"),
   page: z.coerce.number().int().min(1).default(1),
@@ -92,6 +97,8 @@ const buildListWhere = (q, { ignoreStatus = false } = {}) => {
   // A lead belongs to a promoted product through the run that found it.
   if (q.productId) where.AND.push({ discoveryRun: { promotedProductId: q.productId } });
   if (q.runId) where.AND.push({ discoveryRunId: q.runId });
+  if (q.sendMode) where.AND.push({ sendMode: q.sendMode });
+  if (q.origin) where.AND.push({ origin: q.origin });
   if (q.freshness && FRESHNESS_DAYS[q.freshness]) {
     where.AND.push({ newestEvidenceAt: { gte: new Date(Date.now() - FRESHNESS_DAYS[q.freshness] * 86_400_000) } });
   } else if (q.freshness === "OLDER") {
@@ -259,6 +266,9 @@ export const getLead = asyncHandler(async (req, res) => {
       scoreBreakdown: lead.scoreBreakdown,
       type: lead.type,
       status: lead.status,
+      sendMode: lead.sendMode,
+      origin: lead.origin,
+      notes: lead.notes,
       primaryOpportunity: lead.primaryOpportunity,
       primaryOpportunityLabel: SERVICE_LABELS[lead.primaryOpportunity],
       freshness: {
@@ -675,5 +685,82 @@ export const statusCounts = asyncHandler(async (req, res) => {
       all: of("NEW", "QUALIFIED", "CONTACTED", "FOLLOW_UP", "REPLIED", "INTERESTED", "CONVERTED", "NOT_INTERESTED"),
       raw: counts,
     },
+  });
+});
+
+const cell = z.union([z.string(), z.number()]).transform((v) => String(v)).optional().nullable();
+
+export const importSchema = z.object({
+  rows: z.array(z.object({
+    company: cell,
+    website: cell,
+    email: cell,
+    phone: cell,
+    contactName: cell,
+    contactTitle: cell,
+    city: cell,
+    country: cell,
+    industry: cell,
+    size: cell,
+    notes: cell,
+    hook: cell,
+    sourceUrl: cell,
+  })).min(1, "Add at least one row.").max(IMPORT_MAX_ROWS, `An upload is capped at ${IMPORT_MAX_ROWS} rows.`),
+  /// MANUAL by default: an uploaded lead is the uploader's until they say otherwise.
+  sendMode: z.enum(["AUTO", "MANUAL"]).default("MANUAL"),
+  productId: z.string().min(1).max(64).nullable().optional(),
+  service: z.enum(["WEBSITE_DEV", "CRM_DEV", "MOBILE_APP", "AI_AUTOMATION", "ECOMMERCE_DEV", "SAAS_DEV", "CUSTOM_SOFTWARE", "HR_SOFTWARE"]).nullable().optional(),
+  label: z.string().trim().max(120).nullable().optional(),
+});
+
+/** POST /api/leads/import — bring in leads from a spreadsheet or a form. */
+export const importLeadsHandler = asyncHandler(async (req, res) => {
+  req.setTimeout(0);
+  const { rows, sendMode, productId, service, label } = req.body;
+  let summary;
+  try {
+    summary = await importLeads({ rows, sendMode, productId: productId || null, service: service || null, label: label || null, actor: req.auth.user });
+  } catch (err) {
+    throw createError(400, err.message);
+  }
+  const parts = [`${summary.created} added`, summary.updated ? `${summary.updated} already in the book (updated)` : null, summary.skipped ? `${summary.skipped} skipped` : null].filter(Boolean);
+  res.status(201).json({ success: true, message: `Upload done: ${parts.join(", ")}.`, data: summary });
+});
+
+export const handlingSchema = z.object({
+  sendMode: z.enum(["AUTO", "MANUAL"]).optional(),
+  notes: z.string().max(2000).nullable().optional(),
+}).refine((v) => v.sendMode !== undefined || v.notes !== undefined, { message: "Nothing to change." });
+
+/**
+ * PATCH /api/leads/:id/handling — who sends to this lead, and the notes on it.
+ * Kept apart from the status endpoint because it is not a pipeline stage: a
+ * MANUAL lead still moves NEW → CONTACTED → REPLIED as a person works it.
+ */
+export const updateHandling = asyncHandler(async (req, res) => {
+  const lead = await prisma.lead.findUnique({ where: { id: req.params.id }, select: { id: true, status: true, sendMode: true } });
+  if (!lead) throw createError(404, "Lead not found.");
+
+  const data = {};
+  if (req.body.notes !== undefined) data.notes = req.body.notes?.trim() || null;
+  const switching = req.body.sendMode && req.body.sendMode !== lead.sendMode;
+  if (switching) data.sendMode = req.body.sendMode;
+
+  const updated = await prisma.lead.update({ where: { id: lead.id }, data, select: { id: true, sendMode: true, notes: true } });
+  if (switching) {
+    const who = req.auth.user?.name || req.auth.user?.email || "Someone";
+    await prisma.leadStatusHistory.create({
+      data: {
+        leadId: lead.id, fromStatus: lead.status, toStatus: lead.status,
+        note: updated.sendMode === "MANUAL"
+          ? `${who} set this lead to Manual — nothing is sent automatically.`
+          : `${who} set this lead to Auto — campaigns, autopilot and follow-ups may send.`,
+      },
+    });
+  }
+  res.json({
+    success: true,
+    message: switching ? (updated.sendMode === "MANUAL" ? "Set to Manual." : "Set to Auto.") : "Notes saved.",
+    data: updated,
   });
 });

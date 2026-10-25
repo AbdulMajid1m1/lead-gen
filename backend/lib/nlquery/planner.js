@@ -207,6 +207,8 @@ export const toLeadCard = (lead, rankScore = null, { forProduct = false } = {}) 
     rankScore: rankScore === null ? undefined : Math.round(rankScore * 10) / 10,
     type: lead.type,
     status: lead.status,
+    sendMode: lead.sendMode || "AUTO",
+    origin: lead.origin || "DISCOVERED",
     primaryOpportunity: lead.primaryOpportunity,
     opportunities: (lead.opportunities || []).map((o) => ({ service: o.service, points: o.points, rank: o.rank })),
     freshness: {

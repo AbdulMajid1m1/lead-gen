@@ -15,7 +15,11 @@ model Lead {
   /// timestamp of the newest piece of evidence behind this lead
   newestEvidenceAt DateTime
 
-  status LeadStatus @default(NEW)
+  status   LeadStatus   @default(NEW)
+  sendMode LeadSendMode @default(AUTO)
+  origin   LeadOrigin   @default(DISCOVERED)
+  /// Free-form notes from whoever uploaded or works the lead.
+  notes    String?      @db.VarChar(2000)
 
   searchQueryId  String?
   searchQuery    SearchQuery?  @relation(fields: [searchQueryId], references: [id])
@@ -40,6 +44,7 @@ model Lead {
 
   @@index([score(sort: Desc)])
   @@index([status])
+  @@index([sendMode])
   @@index([primaryOpportunity])
   @@index([newestEvidenceAt])
   @@index([type])

@@ -1,14 +1,15 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Users, SlidersHorizontal, Mail, MessageCircle, CheckSquare, X, ShieldAlert } from "lucide-react";
+import { Users, SlidersHorizontal, Mail, MessageCircle, CheckSquare, X, ShieldAlert, Upload } from "lucide-react";
 import { PageBody, PageHeader } from "../App.jsx";
 import { api } from "../lib/api.js";
 import { LeadCard } from "../components/LeadCard.jsx";
 import { Badge, Button, EmptyState, ErrorState, MultiSelect, SkeletonCard, Surface } from "../components/ui.jsx";
 import { BulkSendSheet } from "../components/BulkSendSheet.jsx";
+import { ImportLeadsSheet } from "../components/ImportLeadsSheet.jsx";
 import { useAuth } from "../lib/auth.jsx";
 import { toast } from "sonner";
-import { SERVICE_LABELS, STATUS_LABELS, FRESHNESS_LABELS, cn } from "../lib/format.js";
+import { SERVICE_LABELS, STATUS_LABELS, FRESHNESS_LABELS, SEND_MODE_LABELS, ORIGIN_LABELS, cn } from "../lib/format.js";
 
 const Select = ({ label, value, onChange, options }) => (
   <label className="flex flex-col gap-1">
@@ -38,12 +39,14 @@ const TABS = [
 export default function LeadsPage() {
   // `sort: "created"` is the default on purpose — the newest lead is the first
   // row until the user asks for something else.
-  const [filters, setFilters] = useState({ service: "", status: "NEW,QUALIFIED", freshness: "", sort: "created", minScore: "", city: "" });
+  const [filters, setFilters] = useState({ service: "", status: "NEW,QUALIFIED", freshness: "", sort: "created", minScore: "", city: "", sendMode: "", origin: "" });
+  const [importOpen, setImportOpen] = useState(false);
   const [countries, setCountries] = useState([]);
   const [page, setPage] = useState(1);
   // Selection for bulk send: a Set of lead ids plus what we know about their
   // reachability (used by the sheet's summary line).
   const { can } = useAuth();
+  const canImport = can("leads");
   // Bulk sending is Outreach, not All leads: someone who may read the pipeline
   // but was not given Outreach should not be shown a send bar the API would
   // refuse. The selection itself stays useful — it survives paging either way.
@@ -165,6 +168,17 @@ export default function LeadsPage() {
       <PageHeader
         title="All leads"
         description="Every company the system has qualified, newest first. Filter by country, opportunity or freshness to get to the ones worth a conversation today."
+        actions={canImport && (
+          <Button variant="secondary" size="sm" onClick={() => setImportOpen(true)}>
+            <Upload size={13} />Upload leads
+          </Button>
+        )}
+      />
+      <ImportLeadsSheet
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        // Land on what was just uploaded: every stage, uploaded leads only.
+        onImported={() => { setFilters((f) => ({ ...f, status: "", origin: "IMPORTED", sort: "created" })); setPage(1); clearSelection(); }}
       />
 
       {/* Extra bottom padding while the bulk bar is up, so the pagination row
@@ -203,7 +217,7 @@ export default function LeadsPage() {
             <SlidersHorizontal size={14} className="text-[var(--text-subtle)]" />
             <span className="text-sm font-medium">Filters</span>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             <Select
               label="Opportunity" value={filters.service} onChange={set("service")}
               options={[{ value: "", label: "Any" }, ...Object.entries(SERVICE_LABELS).map(([value, label]) => ({ value, label }))]}
@@ -211,6 +225,14 @@ export default function LeadsPage() {
             <Select
               label="Status" value={filters.status} onChange={set("status")}
               options={[{ value: "", label: "Active" }, ...Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))]}
+            />
+            <Select
+              label="Sending" value={filters.sendMode} onChange={set("sendMode")}
+              options={[{ value: "", label: "Any" }, ...Object.entries(SEND_MODE_LABELS).map(([value, label]) => ({ value, label }))]}
+            />
+            <Select
+              label="Source" value={filters.origin} onChange={set("origin")}
+              options={[{ value: "", label: "Any" }, ...Object.entries(ORIGIN_LABELS).map(([value, label]) => ({ value, label }))]}
             />
             <Select
               label="Freshness" value={filters.freshness} onChange={set("freshness")}
