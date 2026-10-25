@@ -209,6 +209,9 @@ export const toLeadCard = (lead, rankScore = null, { forProduct = false } = {}) 
     status: lead.status,
     sendMode: lead.sendMode || "AUTO",
     origin: lead.origin || "DISCOVERED",
+    // Undefined where the caller did not load them, so a card can tell
+    // "no draft" apart from "not asked".
+    draftReady: lead.emailDrafts ? lead.emailDrafts.length > 0 && !(lead.threads?.length) : undefined,
     primaryOpportunity: lead.primaryOpportunity,
     opportunities: (lead.opportunities || []).map((o) => ({ service: o.service, points: o.points, rank: o.rank })),
     freshness: {

@@ -157,13 +157,18 @@ function OutreachComposer({ leadId, name, contacts = null, address = null, onClo
   const { data: accountData } = useQuery({ queryKey: ["email-accounts"], queryFn: api.listEmailAccounts });
   const accounts = accountData?.accounts || [];
   const [accountId, setAccountId] = useState("");
-  const account = accounts.find((a) => a.id === accountId) || accounts.find((a) => a.isDefault) || accounts[0] || null;
-  const canSend = account && account.status !== "ERROR";
-
   const { data: draftsData } = useQuery({
     queryKey: ["email-drafts", leadId],
     queryFn: () => api.listEmailDrafts(leadId),
   });
+  // A lead sourced for a promoted product writes from that product's own
+  // mailbox (and so its sign-off) unless someone picks another — otherwise a
+  // TracefyHR prospect got its first email from the agency's default sender.
+  const preferredId = draftsData?.preferredAccountId || null;
+  const account = accounts.find((a) => a.id === accountId)
+    || (preferredId && accounts.find((a) => a.id === preferredId))
+    || accounts.find((a) => a.isDefault) || accounts[0] || null;
+  const canSend = account && account.status !== "ERROR";
   // A lead found by ordinary discovery has no stored draft — only deep-research
   // runs write those. The server then returns an unsaved `suggestion` built
   // from the same verified facts, which is what keeps this panel from opening

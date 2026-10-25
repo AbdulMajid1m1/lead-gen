@@ -184,14 +184,25 @@ const buildSuggestion = async (leadId) => {
 };
 
 export const listEmailDrafts = asyncHandler(async (req, res) => {
-  const drafts = await prisma.leadEmailDraft.findMany({
-    where: { leadId: req.params.id },
-    orderBy: { createdAt: "desc" },
-    take: 10,
-  });
+  const [drafts, lead] = await Promise.all([
+    prisma.leadEmailDraft.findMany({
+      where: { leadId: req.params.id },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+    }),
+    // The mailbox of the product this lead was sourced for, so the composer
+    // sends a product pitch from the product's sender by default.
+    prisma.lead.findUnique({
+      where: { id: req.params.id },
+      select: { discoveryRun: { select: { promotedProduct: { select: { id: true, name: true, autopilot: { select: { accountId: true } } } } } } },
+    }),
+  ]);
+  const product = lead?.discoveryRun?.promotedProduct || null;
   res.json({
     success: true,
     data: {
+      product: product ? { id: product.id, name: product.name } : null,
+      preferredAccountId: product?.autopilot?.accountId || null,
       drafts: drafts.map((d) => ({
         id: d.id, subject: d.subject, body: d.body, aboutCompany: d.aboutCompany,
         generatedBy: d.generatedBy, confidenceLevel: d.confidenceLevel,

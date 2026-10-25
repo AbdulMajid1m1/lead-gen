@@ -133,6 +133,9 @@ export const listLeads = asyncHandler(async (req, res) => {
         reasons: { orderBy: { rank: "asc" }, take: 6, include: { signal: { select: { type: true } } } },
         opportunities: { orderBy: { rank: "asc" } },
         actions: { orderBy: { priority: "desc" }, take: 1 },
+        // Whether an email is already written and waiting; one row is enough.
+        emailDrafts: { select: { id: true }, take: 1 },
+        threads: { select: { id: true }, take: 1 },
       },
     }),
   ]);

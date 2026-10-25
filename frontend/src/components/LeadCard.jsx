@@ -58,6 +58,7 @@ export const LeadCard = ({ lead, selectable = false, selected = false, onToggleS
                 </Badge>
               )}
               {lead.origin === "IMPORTED" && <Badge title="Uploaded by a person"><Upload size={10} />Uploaded</Badge>}
+              {lead.draftReady && <Badge tone="var(--color-positive)" title="An email is written and waiting — open the lead to review and send it."><Mail size={10} />Email ready</Badge>}
             </div>
 
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-muted)]">

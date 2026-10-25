@@ -58,6 +58,15 @@ export default function LeadDetailPage() {
   });
   const activeThread = threadsData?.threads?.[0] || null;
 
+  // The stored email for this lead, previewed on the page so a ready-to-send
+  // draft (uploaded leads get one written for them) is visible without
+  // opening the composer. Same cache key the composer reads.
+  const { data: draftsData } = useQuery({
+    queryKey: ["email-drafts", id],
+    queryFn: () => api.listEmailDrafts(id),
+  });
+  const readyDraft = draftsData?.drafts?.[0] || null;
+
   // Who sends to this lead, and the notes on it — one endpoint, two uses.
   const handlingMutation = useMutation({
     mutationFn: (body) => api.updateLeadHandling(id, body),
@@ -233,86 +242,111 @@ export default function LeadDetailPage() {
             </ol>
           </Surface>
 
-          {/* ── Recommended action ─────────────────────────────────────────── */}
-          {primaryAction && (
-            <Surface className="overflow-hidden">
-              <div className="border-b border-[var(--border)] bg-[var(--accent-soft)] px-5 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Recommended next step</p>
-                <p className="mt-0.5 text-[15px] font-semibold">{primaryAction.title}</p>
-                <p className="mt-1 text-sm text-[var(--text-muted)]">{primaryAction.rationale}</p>
-              </div>
+          {/* ── Recommended action / writing to them ──────────────────────── */}
+          {/* Always shown: an uploaded lead has no engine-made recommendation,
+              and hiding the send button with it left no way to write to one. */}
+          <Surface className="overflow-hidden">
+            <div className="border-b border-[var(--border)] bg-[var(--accent-soft)] px-5 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+                {primaryAction ? "Recommended next step" : "Next step"}
+              </p>
+              <p className="mt-0.5 text-[15px] font-semibold">
+                {primaryAction?.title || (activeThread ? "Keep the conversation going" : readyDraft ? "Your email is ready — review it and send" : "Write to them")}
+              </p>
+              <p className="mt-1 text-sm text-[var(--text-muted)]">
+                {primaryAction?.rationale || (lead.sendMode === "MANUAL"
+                  ? "This lead is Manual, so nothing goes out unless you send it from here."
+                  : "Send it yourself now, or leave it for a campaign.")}
+              </p>
+            </div>
 
-              <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-5 py-3">
-                <Button size="sm" onClick={() => setComposerOpen(true)}>
-                  <Mail size={13} />{activeThread ? "Open conversation" : "Write & send email"}
+            <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-5 py-3">
+              <Button size="sm" onClick={() => setComposerOpen(true)}>
+                <Mail size={13} />{activeThread ? "Open conversation" : readyDraft ? "Review & send email" : "Write & send email"}
+              </Button>
+              <ThreadStatusChip thread={activeThread} />
+              {activeThread && (
+                <span className="text-[11px] text-[var(--text-subtle)]">
+                  to {activeThread.recipientEmail}
+                  {activeThread.followUpsSent > 0 && ` · ${activeThread.followUpsSent} follow-up${activeThread.followUpsSent > 1 ? "s" : ""}`}
+                </span>
+              )}
+            </div>
+
+            {readyDraft && !activeThread && (
+              <div className="space-y-2 border-b border-[var(--border)] p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-medium uppercase tracking-wide text-[var(--text-subtle)]">Email ready to send</span>
+                  <span className="text-[11px] text-[var(--text-subtle)]">Written {formatDate(readyDraft.createdAt)}</span>
+                </div>
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-sunken)] p-3">
+                  <p className="text-[11px] uppercase tracking-wide text-[var(--text-subtle)]">Subject</p>
+                  <p className="mt-0.5 text-sm font-medium">{readyDraft.subject}</p>
+                  <p className="mt-2 line-clamp-6 whitespace-pre-line text-[13px] leading-relaxed text-[var(--text-muted)]">{readyDraft.body}</p>
+                </div>
+                <Button size="sm" variant="secondary" onClick={() => setComposerOpen(true)}>
+                  <Mail size={13} />Review, edit and send
                 </Button>
-                <ThreadStatusChip thread={activeThread} />
-                {activeThread && (
-                  <span className="text-[11px] text-[var(--text-subtle)]">
-                    to {activeThread.recipientEmail}
-                    {activeThread.followUpsSent > 0 && ` · ${activeThread.followUpsSent} follow-up${activeThread.followUpsSent > 1 ? "s" : ""}`}
-                  </span>
-                )}
               </div>
+            )}
 
-              {outreach && (
-                <div className="space-y-3 p-5">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-xs font-medium uppercase tracking-wide text-[var(--text-subtle)]">
-                      Suggested {outreach.channel.toLowerCase().replace("_", " ")} opener
-                    </span>
-                    <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium", CONFIDENCE_STYLES[outreach.generatedBy === "LLM" ? "AI_GENERATED" : "DETECTED"]?.className)}>
-                      {outreach.generatedBy === "LLM" ? "AI-drafted" : "Template"}
-                    </span>
-                  </div>
+            {!readyDraft && outreach && (
+              <div className="space-y-3 p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-medium uppercase tracking-wide text-[var(--text-subtle)]">
+                    Suggested {outreach.channel.toLowerCase().replace("_", " ")} opener
+                  </span>
+                  <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium", CONFIDENCE_STYLES[outreach.generatedBy === "LLM" ? "AI_GENERATED" : "DETECTED"]?.className)}>
+                    {outreach.generatedBy === "LLM" ? "AI-drafted" : "Template"}
+                  </span>
+                </div>
 
-                  {outreach.subjectLine && (
-                    <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-sunken)] p-3">
-                      <p className="text-[11px] uppercase tracking-wide text-[var(--text-subtle)]">Subject</p>
-                      <p className="mt-0.5 text-sm">{outreach.subjectLine}</p>
-                    </div>
-                  )}
+                {outreach.subjectLine && (
                   <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-sunken)] p-3">
-                    <p className="text-sm leading-relaxed">{outreach.openingLine}</p>
+                    <p className="text-[11px] uppercase tracking-wide text-[var(--text-subtle)]">Subject</p>
+                    <p className="mt-0.5 text-sm">{outreach.subjectLine}</p>
                   </div>
-
-                  {outreach.talkingPoints?.length > 0 && (
-                    <div>
-                      <p className="mb-1.5 text-[11px] uppercase tracking-wide text-[var(--text-subtle)]">Talking points</p>
-                      <ul className="space-y-1.5">
-                        {outreach.talkingPoints.map((tp, i) => (
-                          <li key={i} className="flex items-start gap-2 text-[13px] text-[var(--text-muted)]">
-                            <Check size={12} className="mt-1 shrink-0 text-[var(--color-positive)]" />
-                            <span>{tp.point}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  <Button
-                    variant="secondary" size="sm"
-                    onClick={() => copy([outreach.subjectLine, "", outreach.openingLine, "", ...(outreach.talkingPoints || []).map((t) => `• ${t.point}`)].filter(Boolean).join("\n"), "Outreach draft")}
-                  >
-                    <Copy size={13} />Copy draft
-                  </Button>
+                )}
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-sunken)] p-3">
+                  <p className="text-sm leading-relaxed">{outreach.openingLine}</p>
                 </div>
-              )}
 
-              {lead.actions.length > 1 && (
-                <div className="border-t border-[var(--border)] px-5 py-3">
-                  <p className="mb-1.5 text-[11px] uppercase tracking-wide text-[var(--text-subtle)]">Also consider</p>
-                  <ul className="space-y-1">
-                    {lead.actions.slice(1).map((a, i) => (
-                      <li key={i} className="text-[13px] text-[var(--text-muted)]">
-                        <span className="font-medium text-[var(--text)]">{ACTION_LABELS[a.actionType] || a.actionType}</span> — {a.rationale}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </Surface>
-          )}
+                {outreach.talkingPoints?.length > 0 && (
+                  <div>
+                    <p className="mb-1.5 text-[11px] uppercase tracking-wide text-[var(--text-subtle)]">Talking points</p>
+                    <ul className="space-y-1.5">
+                      {outreach.talkingPoints.map((tp, i) => (
+                        <li key={i} className="flex items-start gap-2 text-[13px] text-[var(--text-muted)]">
+                          <Check size={12} className="mt-1 shrink-0 text-[var(--color-positive)]" />
+                          <span>{tp.point}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                <Button
+                  variant="secondary" size="sm"
+                  onClick={() => copy([outreach.subjectLine, "", outreach.openingLine, "", ...(outreach.talkingPoints || []).map((t) => `• ${t.point}`)].filter(Boolean).join("\n"), "Outreach draft")}
+                >
+                  <Copy size={13} />Copy draft
+                </Button>
+              </div>
+            )}
+
+            {lead.actions.length > 1 && (
+              <div className="border-t border-[var(--border)] px-5 py-3">
+                <p className="mb-1.5 text-[11px] uppercase tracking-wide text-[var(--text-subtle)]">Also consider</p>
+                <ul className="space-y-1">
+                  {lead.actions.slice(1).map((a, i) => (
+                    <li key={i} className="text-[13px] text-[var(--text-muted)]">
+                      <span className="font-medium text-[var(--text)]">{ACTION_LABELS[a.actionType] || a.actionType}</span> — {a.rationale}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </Surface>
 
           {/* ── Active hiring ──────────────────────────────────────────────── */}
           {lead.jobs.length > 0 && (
