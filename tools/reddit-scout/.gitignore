@@ -1,0 +1,3 @@
+node_modules/
+# Each run's posts and report hold Reddit usernames and post text.
+out/

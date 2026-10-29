@@ -1,0 +1,19 @@
+{
+  "name": "reddit-scout",
+  "private": true,
+  "type": "module",
+  "description": "Finds Reddit posts asking for CRM, HR software or AI automation help, and has Claude judge each one.",
+  "scripts": {
+    "login": "node login.js",
+    "start": "node scout.js",
+    "scout": "node scout.js --no-analyze",
+    "analyze": "node scout.js --analyze-only",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright-core": "1.64.1"
+  }
+}
