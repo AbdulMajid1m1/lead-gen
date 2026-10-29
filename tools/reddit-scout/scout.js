@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { chromium } from "playwright-core";
+import { fileURLToPath } from "node:url";
 import { SEARCHES, LIMITS } from "./config.js";
 import { searchUrl, toOld, postId, pickNew, pickRechecks, readSearchPage, readThread } from "./extract.js";
-import { analyzePosts } from "./analyze.js";
+import { analyzePosts, triagePosts } from "./analyze.js";
 import { renderReport } from "./report.js";
-import { PROFILE_DIR, loadState, saveState, newRunDir, latestRunDir, readJson, writeJson } from "./store.js";
+import { openScoutBrowser, ScoutStop as Stop } from "./browser.js";
+import { loadRun, buildItems } from "./actions.js";
+import { loadState, saveState, newRunDir, latestRunDir, readJson, writeJson } from "./store.js";
 
 /**
  * npm start                  browse Reddit, judge new posts, open the report
@@ -20,10 +22,8 @@ const log = (...m) => console.log(...m);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const pause = () => sleep(LIMITS.minDelayMs + Math.random() * (LIMITS.maxDelayMs - LIMITS.minDelayMs));
 
-class Stop extends Error {}
-
 const STOP_HELP = {
-  login: "Reddit shows you as logged out. Run `npm run login`, sign in, quit that window, then run again.",
+  login: "Reddit shows you as logged out. Run `npm run login`, sign in, then run again.",
   blocked: "Reddit is refusing this browser right now. Wait a couple of hours before the next run.",
   captcha: "Reddit is showing a CAPTCHA. The scout stops there; it does not solve them.",
   ratelimited: "Reddit answered 429 (too many requests). Wait an hour before the next run.",
@@ -33,20 +33,7 @@ const label = (s) => (s.sub ? `r/${s.sub.split("+")[0]}+…` : "all of Reddit") 
 
 /** Opens the scout's Chrome profile, runs every search, reads the threads worth reading. */
 async function browse(state, runDir) {
-  let context;
-  try {
-    context = await chromium.launchPersistentContext(PROFILE_DIR, {
-      channel: "chrome",
-      headless: false,
-      viewport: null,
-      args: ["--no-first-run", "--no-default-browser-check"],
-    });
-  } catch (e) {
-    if (/ProcessSingleton|already in use|SingletonLock/i.test(e.message)) {
-      throw new Stop("The Chrome window from `npm run login` is still open. Quit it (Cmd+Q) and run again.");
-    }
-    throw e;
-  }
+  const context = await openScoutBrowser();
   const page = context.pages()[0] ?? (await context.newPage());
   const visit = async (url) => {
     const res = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
@@ -58,16 +45,32 @@ async function browse(state, runDir) {
   const out = { me: null, threads: [], stats: { searched: 0, opened: 0, rechecked: 0, stoppedEarly: null } };
   const found = new Map();
   try {
+    // old.reddit only picks up the session after its front page has loaded;
+    // a search as the first page is sent to the login screen.
+    await visit("https://old.reddit.com/");
+    out.me = (await page.evaluate(readSearchPage)).me;
+    if (!out.me) {
+      await keepPage("debug-search.html");
+      throw new Stop(STOP_HELP.login);
+    }
+    log(`Signed in as u/${out.me}`);
+    await pause();
     for (const s of SEARCHES) {
       let url = searchUrl(s);
       for (let p = 0; p < LIMITS.pagesPerSearch && url; p++) {
         await visit(url);
         const r = await page.evaluate(readSearchPage);
-        if (r.blocked) throw new Stop(STOP_HELP[r.blocked]);
-        out.me ??= r.me;
-        if (!out.me) {
+        // Signed in, yet old.reddit sends some searches to its login page.
+        // Skip that search rather than the whole run.
+        if (r.blocked === "login") {
+          log(`  ${label(s)}: Reddit sent this search to its login page, skipped`);
+          out.stats.skippedSearches = [...(out.stats.skippedSearches ?? []), s.q];
+          await pause();
+          break;
+        }
+        if (r.blocked) {
           await keepPage("debug-search.html");
-          throw new Stop(STOP_HELP.login);
+          throw new Stop(STOP_HELP[r.blocked]);
         }
         if (!found.size && !r.results.length && p === 0) await keepPage("debug-search.html");
         for (const x of r.results) {
@@ -81,16 +84,39 @@ async function browse(state, runDir) {
       }
     }
 
-    const fresh = pickNew([...found.values()], state, LIMITS).map((p) => ({ ...p, kind: "new" }));
+    // Keyword search drags in plenty of noise, so Claude screens titles and
+    // snippets first and only the plausible asks get opened. Screened-out
+    // posts are remembered so the next run does not screen them again.
+    const candidates = pickNew([...found.values()], state, { ...LIMITS, maxNewThreads: Infinity });
+    let chosen = candidates.slice(0, LIMITS.maxNewThreads);
+    if (candidates.length) {
+      log(`\nScreening ${candidates.length} new search results with Claude…`);
+      try {
+        const keep = await triagePosts(candidates, { limit: LIMITS.maxNewThreads });
+        const why = new Map(keep.map((k) => [k.id, k.why]));
+        chosen = keep.map((k) => candidates.find((c) => c.id === k.id));
+        for (const c of candidates) {
+          if (why.has(c.id)) continue;
+          state.posts[c.id] = { firstSeenAt: new Date().toISOString(), url: c.url, title: c.title, subreddit: c.subreddit, verdict: "skip", screenedOut: true };
+        }
+        out.candidates = candidates.map((c) => ({ id: c.id, subreddit: c.subreddit, title: c.title, kept: why.get(c.id) ?? null }));
+      } catch (e) {
+        log(`  screening failed (${e.message}); opening the newest ${chosen.length} instead`);
+      }
+    }
+    const fresh = chosen.map((p) => ({ ...p, kind: "new" }));
     const rechecks = pickRechecks(state, LIMITS)
       .filter((r) => !fresh.some((f) => f.id === r.id))
       .map((r) => ({ ...r, kind: "recheck" }));
-    log(`\n${found.size} unique posts, ${fresh.length} new worth opening, ${rechecks.length} watched threads to re-read`);
+    log(`${found.size} unique posts, ${fresh.length} worth opening, ${rechecks.length} watched threads to re-read`);
 
     for (const p of [...fresh, ...rechecks]) {
       await visit(toOld(p.url));
       const t = await page.evaluate(readThread, out.me);
-      if (t.blocked) throw new Stop(STOP_HELP[t.blocked]);
+      if (t.blocked) {
+        await keepPage("debug-thread.html");
+        throw new Stop(STOP_HELP[t.blocked]);
+      }
       if (t.missing) {
         if (!out.threads.length) await keepPage("debug-thread.html");
         log(`  gone: ${p.title.slice(0, 70)}`);
@@ -112,13 +138,13 @@ async function browse(state, runDir) {
 }
 
 /**
- * Decides what each thread needs: new posts and threads where OP answered
- * you go to Claude; threads you commented on days ago with no answer get the
- * one nudge. Updates the watch state for re-read threads.
+ * Decides what each thread needs. New posts get judged. In a thread you are
+ * already in, an answer from OP gets a reply drafted under it; silence for
+ * a few days gets the one follow-up drafted under your own comment; never
+ * having commented ends the watch.
  */
-function plan(threads, state, now) {
+export function plan(threads, state, now) {
   const toJudge = [];
-  const nudges = [];
   for (const t of threads) {
     if (t.kind === "new") {
       toJudge.push({ id: t.id, mode: "new" });
@@ -126,20 +152,21 @@ function plan(threads, state, now) {
     }
     const s = state.posts[t.id];
     s.lastCheckedAt = new Date(now).toISOString();
-    const opReplies = t.mine.reduce((n, c) => n + c.opReplies.length, 0);
+    const opReplies = t.mine.flatMap((c) => c.opReplies);
     if (!t.mine.length) {
       if (!t.canComment || now - Date.parse(s.firstSeenAt) > LIMITS.nudgeAfterDays * DAY) s.closed = true;
-    } else if (opReplies > (s.opRepliesSeen ?? 0)) {
-      toJudge.push({ id: t.id, mode: "respond", opReplies });
-    } else if (!s.nudged && !opReplies) {
-      const firstMine = Math.min(...t.mine.map((c) => Date.parse(c.at) || now));
-      if (now - firstMine >= LIMITS.nudgeAfterDays * DAY) {
-        nudges.push({ id: t.id, note: `You said: "${t.mine[0].text.slice(0, 240)}". The plan from the first look: ${s.followUp || "add one useful thing, then stop."}` });
+    } else if (opReplies.length > (s.opRepliesSeen ?? 0)) {
+      const latest = opReplies.reduce((a, b) => (Date.parse(b.at) > Date.parse(a.at) ? b : a));
+      toJudge.push({ id: t.id, mode: "respond", parentId: latest.id, opReplies: opReplies.length });
+    } else if (!s.nudged && !opReplies.length) {
+      const first = t.mine.reduce((a, b) => (Date.parse(b.at) < Date.parse(a.at) ? b : a));
+      if (now - (Date.parse(first.at) || now) >= LIMITS.nudgeAfterDays * DAY) {
+        toJudge.push({ id: t.id, mode: "nudge", parentId: first.id });
         s.nudged = true;
       }
     }
   }
-  return { toJudge, nudges };
+  return { toJudge };
 }
 
 const openFile = (file) => spawn("open", [file], { stdio: "ignore", detached: true }).unref();
@@ -155,9 +182,6 @@ async function main() {
     run = readJson(path.join(runDir, "posts.json"));
     log(`Re-judging ${runDir}`);
   } else {
-    if (!fs.existsSync(PROFILE_DIR)) {
-      throw new Stop("No scout profile yet. Run `npm run login` first, sign in to Reddit, quit that window, then `npm start`.");
-    }
     runDir = newRunDir(new Date(now));
     log(`Browsing Reddit as the scout profile. Leave the Chrome window alone until it closes.\n`);
     const data = await browse(state, runDir);
@@ -188,24 +212,24 @@ async function main() {
     if (!a) continue;
     const s = (state.posts[j.id] ??= { firstSeenAt: run.startedAt, url: t.url, title: t.title, subreddit: t.subreddit });
     if (j.mode === "respond") s.opRepliesSeen = j.opReplies;
-    else Object.assign(s, { verdict: a.verdict, score: a.score, followUp: a.followUp });
+    else if (j.mode === "new") Object.assign(s, { verdict: a.verdict, score: a.score, followUp: a.followUp });
   }
   saveState(state);
 
-  const items = [
-    ...run.toJudge.map((j) => ({ post: byId.get(j.id), a: analyses[j.id], kind: j.mode === "respond" ? "respond" : "new" })),
-    ...run.nudges.map((n) => ({ post: byId.get(n.id), kind: "nudge", note: n.note })),
-  ];
+  const items = buildItems(loadRun(runDir));
   const reportFile = path.join(runDir, "report.html");
   fs.writeFileSync(reportFile, renderReport({ items, me: run.me, startedAt: run.startedAt, stats: run.stats, now }));
 
-  const count = (v) => items.filter((i) => i.kind === "new" && i.a?.verdict === v).length;
-  log(`\nReply now: ${items.filter((i) => i.kind === "respond").length} · act on: ${count("pursue")} · follow-ups due: ${run.nudges.length} · maybe: ${count("maybe")} · skipped: ${count("skip")}`);
+  const count = (kind, v) => items.filter((i) => i.kind === kind && (!v || i.a?.verdict === v)).length;
+  log(`\nReply now: ${count("respond")} · act on: ${count("new", "pursue")} · follow-ups due: ${count("nudge")} · maybe: ${count("new", "maybe")} · skipped: ${count("new", "skip")}`);
   log(`Report: ${reportFile}`);
-  openFile(reportFile);
+  log(`To post from the report: npm run review`);
+  if (!args.has("--no-open")) openFile(reportFile);
 }
 
-main().catch((e) => {
-  console.error(e instanceof Stop ? e.message : e);
-  process.exitCode = 1;
-});
+if (fileURLToPath(import.meta.url) === path.resolve(process.argv[1] ?? "")) {
+  main().catch((e) => {
+    console.error(e instanceof Stop ? e.message : e);
+    process.exitCode = 1;
+  });
+}

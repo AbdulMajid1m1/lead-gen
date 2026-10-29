@@ -148,7 +148,7 @@ test("readThread reads the post, top comments and your comments with OP's replie
   assert.deepEqual(t.topComments.map((c) => [c.author, c.opReplied]), [["Abdul_Dev", true], ["someone", false]]);
   assert.equal(t.mine.length, 1);
   assert.equal(t.mine[0].text, "Before buying anything, map the job stages.");
-  assert.deepEqual(t.mine[0].opReplies, [{ at: "2026-10-26T09:00:00+00:00", text: "Good point, we have 5 stages." }]);
+  assert.deepEqual(t.mine[0].opReplies, [{ id: "t1_c2", at: "2026-10-26T09:00:00+00:00", text: "Good point, we have 5 stages." }]);
 });
 
 test("readThread notices a thread it cannot read or comment on", async () => {

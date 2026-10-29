@@ -7,10 +7,15 @@
  * with "+". Reddit search understands quotes and upper-case OR.
  */
 export const SEARCHES = [
-  { q: '"custom CRM" OR "build a CRM" OR "CRM developer" OR "CRM for my"' },
+  // old.reddit sends some long OR searches to its login page even when you
+  // are signed in (this one, as four phrases, every time), so keep them short.
+  { q: '"custom CRM" OR "build a CRM"' },
+  { q: '"CRM developer" OR "CRM for my"' },
   { q: '"HR software" OR HRMS OR HRIS OR "payroll software" OR "employee management system"' },
   { q: '"AI automation" OR "automate my business" OR "AI agent for my" OR "automation expert"' },
-  { q: '"n8n developer" OR "n8n expert" OR "zapier expert" OR "make.com expert"' },
+  { q: "hire n8n OR hire zapier OR hire automation" },
+  // Owners in trades and professional services asking what to run on.
+  { sub: "realestate+RealEstateTechnology+InsuranceAgent+LawFirm+Accounting+Bookkeeping+HVAC+Construction+Roofing+landscaping+dentistry", q: "CRM OR software OR automate OR spreadsheet" },
   { sub: "forhire+hiring+freelance_forhire+jobbit", q: "hiring CRM OR automation OR HR OR dashboard OR AI OR portal" },
   { sub: "smallbusiness+Entrepreneur+startups+sweatystartup", q: 'CRM OR automate OR "HR software" OR "custom software" OR spreadsheet' },
   { sub: "n8n+automation+AI_Agents+zapier+nocode", q: 'hire OR hiring OR "looking for" OR "need someone" OR paid' },
@@ -33,6 +38,7 @@ export const LIMITS = {
 
 export const ANALYSIS = {
   model: process.env.SCOUT_MODEL || "opus",
+  triageModel: process.env.SCOUT_TRIAGE_MODEL || "sonnet",
   postsPerCall: 8,
   parallelCalls: 2,
 };

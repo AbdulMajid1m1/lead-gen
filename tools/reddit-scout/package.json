@@ -8,6 +8,8 @@
     "start": "node scout.js",
     "scout": "node scout.js --no-analyze",
     "analyze": "node scout.js --analyze-only",
+    "review": "node review.js",
+    "post": "node post.js",
     "test": "node --test \"test/*.test.js\""
   },
   "engines": {

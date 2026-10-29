@@ -3,17 +3,29 @@
 Finds Reddit posts from people asking for help with a CRM, HR software or AI
 automation, then has Claude judge each one and draft the reply. It runs on
 this Mac, in a real Chrome window, on your Claude subscription (the `claude`
-CLI). It never posts anything: you read the thread, edit the draft and post
-it yourself.
+CLI). Nothing is posted until you click Post on a draft you have read.
 
 ## Run it
 
 ```sh
 cd tools/reddit-scout
 npm install
-npm run login    # once: sign in to Reddit in the window that opens, then Cmd+Q
+npm run login    # once: sign in to Reddit in the window that opens
 npm start        # about 10 minutes; opens the report when done
+npm run review   # the same report with Post buttons, on http://127.0.0.1:4777
 ```
+
+On the review page, edit a draft until it sounds like you, then click
+**Post to Reddit** twice. The scout's Chrome window opens the thread, posts
+that exact text as you, waits for Reddit to show it and links to it. Posts are
+spaced at least 90 seconds apart. If Reddit refuses ("you are doing that too
+much…", locked thread), its message is shown and nothing is retried. DMs are
+never sent by the scout: **Open message** opens Reddit's compose page with
+the draft filled in, and you press send.
+
+Posted comments are watched on later runs: when OP answers you, the next run
+drafts your reply under their answer; after 3 days of silence it drafts one
+follow-up under your comment, and after that it stops.
 
 Chrome 136+ will not let a script drive your everyday profile, so the scout
 has its own profile in `~/.reddit-scout/chrome-profile`. You sign in once.
@@ -45,6 +57,8 @@ reports what it already had. It does not try to get past them.
 | `npm start` | browse, judge, open the report |
 | `npm run scout` | browse only, no Claude |
 | `npm run analyze` | judge what the last run collected but did not judge |
+| `npm run review` | serve the latest report with Post buttons |
+| `npm run post -- t3_abc` | show the draft for one thread; add `--yes` to post it |
 | `npm test` | unit tests (uses headless Chrome, no network) |
 
 `SCOUT_MODEL=sonnet npm start` uses less of the subscription than the

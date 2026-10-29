@@ -146,7 +146,7 @@ export function readThread(me) {
         text: text(c, 800),
         opReplies: kids(c)
           .filter((k) => same(k.getAttribute("data-author"), op))
-          .map((k) => ({ at: when(k), text: text(k, 800) })),
+          .map((k) => ({ id: k.getAttribute("data-fullname"), at: when(k), text: text(k, 800) })),
       })),
   };
 }
