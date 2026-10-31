@@ -63,11 +63,13 @@ export async function openScoutBrowser() {
   }
 }
 
-/** Same checks the readers make, for pages the poster lands on. */
-export const blockReason = () => {
-  const text = `${document.title} ${(document.body?.innerText ?? "").slice(0, 3000)}`;
-  if (/whoa there,? pardner|you've been blocked|blocked by network security|too many requests/i.test(text)) return "blocked";
-  if (document.querySelector('iframe[src*="captcha"], .g-recaptcha, [data-hcaptcha-widget-id]')) return "captcha";
-  if (location.pathname.startsWith("/login")) return "login";
-  return null;
-};
+/**
+ * The short-lived token_v2 cookie lasts about a day. Loading the front page
+ * first refreshes it, so the pages after it are served as you.
+ */
+export async function refreshSession(page, pauseMs = 4000) {
+  await page.goto("https://www.reddit.com/", { waitUntil: "domcontentloaded", timeout: 45000 });
+  await page.waitForTimeout(pauseMs);
+}
+
+export { blockReason } from "./extract.js";

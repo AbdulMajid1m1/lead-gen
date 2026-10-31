@@ -11,7 +11,7 @@ CLI). Nothing is posted until you click Post on a draft you have read.
 cd tools/reddit-scout
 npm install
 npm run login    # once: sign in to Reddit in the window that opens
-npm start        # about 10 minutes; opens the report when done
+npm start        # about 10 minutes, once a day; opens the report when done
 npm run review   # the same report with Post buttons, on http://127.0.0.1:4777
 ```
 
@@ -33,11 +33,12 @@ Your normal Chrome is not touched.
 
 ## What a run does
 
-1. Runs each search in `config.js` on old.reddit.com, newest first, past week
-   (2 pages each), pausing 4–9 s between pages.
+1. Runs each search in `config.js` on www.reddit.com, newest first, past week,
+   pausing 8–15 s between pages. old.reddit.com now redirects to the main site.
 2. Drops posts it has already judged, freelancers' "[For Hire]" ads,
-   AutoModerator and anything older than 7 days, then opens up to 40 threads
-   and reads the post, top comments and whether OP is answering people.
+   AutoModerator and anything older than 4 days. Claude screens the titles,
+   then up to 15 threads are opened to read the post, top comments and whether
+   OP is answering people.
 3. Re-reads threads it marked worth pursuing in the last 10 days. If you
    commented and OP replied to you, that goes back to Claude for a reply. If
    you commented 3+ days ago with no answer, it suggests the one follow-up.
@@ -47,8 +48,10 @@ Your normal Chrome is not touched.
 5. Writes `out/<date_time>/report.html` and opens it. The links open Reddit
    in your normal browser.
 
-If Reddit shows a CAPTCHA, a block page or a 429, the run stops there and
-reports what it already had. It does not try to get past them.
+If Reddit shows a CAPTCHA or a block page, or two pages in a row fail, the run
+stops there and reports what it already had. It does not try to get past them.
+Reddit refused the account after about 120 page loads in half an hour, so run
+this once a day and keep `config.js` near 40 pages a run.
 
 ## Commands
 

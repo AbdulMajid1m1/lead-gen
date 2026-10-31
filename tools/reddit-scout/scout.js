@@ -3,7 +3,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { SEARCHES, LIMITS } from "./config.js";
-import { searchUrl, toOld, postId, pickNew, pickRechecks, readSearchPage, readThread } from "./extract.js";
+import { searchUrl, toWww, postId, pickNew, pickRechecks, blockReason, readSearchPage, readThread } from "./extract.js";
 import { analyzePosts, triagePosts } from "./analyze.js";
 import { renderReport } from "./report.js";
 import { openScoutBrowser, ScoutStop as Stop } from "./browser.js";
@@ -26,7 +26,7 @@ const STOP_HELP = {
   login: "Reddit shows you as logged out. Run `npm run login`, sign in, then run again.",
   blocked: "Reddit is refusing this browser right now. Wait a couple of hours before the next run.",
   captcha: "Reddit is showing a CAPTCHA. The scout stops there; it does not solve them.",
-  ratelimited: "Reddit answered 429 (too many requests). Wait an hour before the next run.",
+  ratelimited: "Reddit stopped serving pages (too many requests). Wait a couple of hours before the next run.",
 };
 
 const label = (s) => (s.sub ? `r/${s.sub.split("+")[0]}+…` : "all of Reddit") + ` "${s.q.slice(0, 40)}"`;
@@ -35,58 +35,69 @@ const label = (s) => (s.sub ? `r/${s.sub.split("+")[0]}+…` : "all of Reddit") 
 async function browse(state, runDir) {
   const context = await openScoutBrowser();
   const page = context.pages()[0] ?? (await context.newPage());
-  const visit = async (url) => {
-    const res = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
-    if (res?.status() === 429) throw new Stop(STOP_HELP.ratelimited);
-  };
   // Kept so a selector that stops matching can be fixed from a real page.
   const keepPage = async (name) => fs.writeFileSync(path.join(runDir, name), await page.content());
+  // One page failing is usually that thread. Two in a row means Reddit wants a
+  // rest, so stop there and keep what has been read.
+  let failedInARow = 0;
+  const visit = async (url, debugName) => {
+    let res;
+    try {
+      res = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+      failedInARow = 0;
+    } catch (e) {
+      if (++failedInARow >= 2) throw new Stop(STOP_HELP.ratelimited);
+      log(`  could not load ${url.slice(0, 80)} (${e.message.split("\n")[0].slice(0, 60)}), skipping`);
+      return false;
+    }
+    if (res?.status() === 429) throw new Stop(STOP_HELP.ratelimited);
+    const blocked = await page.evaluate(blockReason);
+    if (blocked) {
+      await keepPage(debugName);
+      throw new Stop(STOP_HELP[blocked]);
+    }
+    return true;
+  };
 
   const out = { me: null, threads: [], stats: { searched: 0, opened: 0, rechecked: 0, stoppedEarly: null } };
   const found = new Map();
   try {
-    // old.reddit only picks up the session after its front page has loaded;
-    // a search as the first page is sent to the login screen.
-    await visit("https://old.reddit.com/");
-    out.me = (await page.evaluate(readSearchPage)).me;
-    if (!out.me) {
+    // The front page refreshes the short-lived token_v2 cookie.
+    await visit("https://www.reddit.com/", "debug-search.html");
+    await pause();
+    await visit("https://www.reddit.com/user/me/", "debug-search.html");
+    out.me = /\/user\/([^/]+)/.exec(page.url())?.[1] ?? null;
+    if (!out.me || out.me === "me") {
       await keepPage("debug-search.html");
       throw new Stop(STOP_HELP.login);
     }
     log(`Signed in as u/${out.me}`);
     await pause();
+
     for (const s of SEARCHES) {
-      let url = searchUrl(s);
-      for (let p = 0; p < LIMITS.pagesPerSearch && url; p++) {
-        await visit(url);
-        const r = await page.evaluate(readSearchPage);
-        // Signed in, yet old.reddit sends some searches to its login page.
-        // Skip that search rather than the whole run.
-        if (r.blocked === "login") {
-          log(`  ${label(s)}: Reddit sent this search to its login page, skipped`);
-          out.stats.skippedSearches = [...(out.stats.skippedSearches ?? []), s.q];
-          await pause();
-          break;
-        }
-        if (r.blocked) {
-          await keepPage("debug-search.html");
-          throw new Stop(STOP_HELP[r.blocked]);
-        }
-        if (!found.size && !r.results.length && p === 0) await keepPage("debug-search.html");
-        for (const x of r.results) {
-          const id = x.id || postId(x.url);
-          if (id && !found.has(id)) found.set(id, { ...x, id });
-        }
-        out.stats.searched += r.results.length;
-        log(`  ${label(s)} p${p + 1}: ${r.results.length} results`);
-        url = r.next;
+      if (!(await visit(searchUrl(s), "debug-search.html"))) {
         await pause();
+        continue;
       }
+      await page.waitForSelector('[data-testid="search-post-unit"]', { timeout: 7000 }).catch(() => {});
+      for (let i = 0; i < LIMITS.scrollsPerSearch; i++) {
+        await page.mouse.wheel(0, 2500);
+        await sleep(1800);
+      }
+      const results = await page.evaluate(readSearchPage);
+      if (!found.size && !results.length) await keepPage("debug-search.html");
+      for (const x of results) {
+        const id = x.id || postId(x.url);
+        if (id && !found.has(id)) found.set(id, { ...x, id });
+      }
+      out.stats.searched += results.length;
+      log(`  ${label(s)}: ${results.length} results`);
+      await pause();
     }
 
-    // Keyword search drags in plenty of noise, so Claude screens titles and
-    // snippets first and only the plausible asks get opened. Screened-out
-    // posts are remembered so the next run does not screen them again.
+    // Keyword search drags in plenty of noise, so Claude screens titles first
+    // and only the plausible asks get opened. Screened-out posts are
+    // remembered so the next run does not screen them again.
     const candidates = pickNew([...found.values()], state, { ...LIMITS, maxNewThreads: Infinity });
     let chosen = candidates.slice(0, LIMITS.maxNewThreads);
     if (candidates.length) {
@@ -111,12 +122,13 @@ async function browse(state, runDir) {
     log(`${found.size} unique posts, ${fresh.length} worth opening, ${rechecks.length} watched threads to re-read`);
 
     for (const p of [...fresh, ...rechecks]) {
-      await visit(toOld(p.url));
-      const t = await page.evaluate(readThread, out.me);
-      if (t.blocked) {
-        await keepPage("debug-thread.html");
-        throw new Stop(STOP_HELP[t.blocked]);
+      if (!(await visit(toWww(p.url), "debug-thread.html"))) {
+        await pause();
+        continue;
       }
+      await page.waitForSelector("shreddit-post", { timeout: 7000 }).catch(() => {});
+      await page.waitForSelector("shreddit-comment", { timeout: 2500 }).catch(() => {});
+      const t = await page.evaluate(readThread, out.me);
       if (t.missing) {
         if (!out.threads.length) await keepPage("debug-thread.html");
         log(`  gone: ${p.title.slice(0, 70)}`);
@@ -128,9 +140,10 @@ async function browse(state, runDir) {
       await pause();
     }
   } catch (e) {
-    if (!(e instanceof Stop)) throw e;
-    out.stats.stoppedEarly = e.message;
-    log(`\nStopped: ${e.message}`);
+    // Whatever went wrong, what was already read still gets judged.
+    if (!(e instanceof Stop)) console.error(e);
+    out.stats.stoppedEarly = e.message.split("\n")[0];
+    log(`\nStopped: ${out.stats.stoppedEarly}`);
   } finally {
     await context.close();
   }

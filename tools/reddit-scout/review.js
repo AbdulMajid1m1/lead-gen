@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { renderReport } from "./report.js";
 import { loadRun, buildItems, recordPost } from "./actions.js";
-import { openScoutBrowser, ScoutStop } from "./browser.js";
+import { openScoutBrowser, refreshSession, ScoutStop } from "./browser.js";
 import { postToThread, PostError } from "./post.js";
 import { latestRunDir, OUT_DIR } from "./store.js";
 
@@ -38,6 +38,7 @@ const scoutPage = async () => {
   if (!context) {
     context = await openScoutBrowser();
     context.on("close", () => (context = null));
+    await refreshSession(context.pages()[0] ?? (await context.newPage()));
   }
   return context.pages()[0] ?? context.newPage();
 };

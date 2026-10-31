@@ -2,38 +2,43 @@
  * What the scout searches for and how hard it works. Every run reads this
  * file, so edit the searches here rather than in the code.
  *
- * Searches run on old.reddit.com (plain HTML, real "next" pages), newest
- * first, past week. `sub` restricts a search to those subreddits, joined
- * with "+". Reddit search understands quotes and upper-case OR.
+ * Searches run on www.reddit.com, newest first, past week. Reddit's search
+ * does not accept several subreddits joined with "+" any more, so each
+ * subreddit is its own search, one page load each.
  */
+const bySubreddit = (q, subs) => subs.map((sub) => ({ sub, q }));
+
 export const SEARCHES = [
-  // old.reddit sends some long OR searches to its login page even when you
-  // are signed in (this one, as four phrases, every time), so keep them short.
-  { q: '"custom CRM" OR "build a CRM"' },
-  { q: '"CRM developer" OR "CRM for my"' },
-  { q: '"HR software" OR HRMS OR HRIS OR "payroll software" OR "employee management system"' },
-  { q: '"AI automation" OR "automate my business" OR "AI agent for my" OR "automation expert"' },
-  { q: "hire n8n OR hire zapier OR hire automation" },
-  // Owners in trades and professional services asking what to run on.
-  { sub: "realestate+RealEstateTechnology+InsuranceAgent+LawFirm+Accounting+Bookkeeping+HVAC+Construction+Roofing+landscaping+dentistry", q: "CRM OR software OR automate OR spreadsheet" },
-  { sub: "forhire+hiring+freelance_forhire+jobbit", q: "hiring CRM OR automation OR HR OR dashboard OR AI OR portal" },
-  { sub: "smallbusiness+Entrepreneur+startups+sweatystartup", q: 'CRM OR automate OR "HR software" OR "custom software" OR spreadsheet' },
-  { sub: "n8n+automation+AI_Agents+zapier+nocode", q: 'hire OR hiring OR "looking for" OR "need someone" OR paid' },
-  { sub: "humanresources+HRIS+askhr", q: "software OR system OR recommend OR spreadsheet" },
-  { sub: "CRM+sales+realestate+msp", q: '"looking for" OR recommend OR build OR custom' },
+  { q: "custom CRM" },
+  { q: "need a CRM" },
+  { q: "CRM developer" },
+  { q: "HR software small business" },
+  { q: "automate my business" },
+  { q: "hire n8n developer" },
+  ...bySubreddit("hiring", ["forhire", "hiring"]),
+  ...bySubreddit("CRM", ["smallbusiness", "Entrepreneur", "CRM", "sales", "realestate", "PropertyManagement"]),
+  ...bySubreddit("automate", ["smallbusiness", "n8n", "automation", "AI_Agents"]),
+  ...bySubreddit("software", ["humanresources"]),
 ];
 
 export const LIMITS = {
-  pagesPerSearch: 2, // 25 results a page
-  maxAgeHours: 7 * 24, // older asks are usually filled
-  maxNewThreads: 40, // new posts opened and analysed per run
-  maxRechecks: 20, // posts you commented on, re-read for OP replies
+  scrollsPerSearch: 1, // search results load as you scroll
+  maxAgeHours: 4 * 24, // live runs: older threads were dead or crowded
+  maxNewThreads: 15, // new posts opened and analysed per run
+  maxRechecks: 5, // threads worth pursuing, re-read for OP replies
   trackDays: 10, // how long a post you commented on is watched
   nudgeAfterDays: 3, // one follow-up, no sooner
-  // A pause between page loads, so a run reads Reddit like one person does
-  // and stays light on it. A full run is roughly 10 minutes.
-  minDelayMs: 4000,
-  maxDelayMs: 9000,
+  // A pause between page loads. Reddit refused the account after about 120
+  // pages in half an hour, so keep a run near 40 pages and run it once a day.
+  minDelayMs: 8000,
+  maxDelayMs: 15000,
+};
+
+// A new account's comments get removed if they look promotional, so until this
+// date drafts just help and leave out what he sells. Posts that ask for offers
+// are the exception. Clear it once the account has about 100 karma.
+export const ACCOUNT = {
+  warmUpUntil: process.env.SCOUT_WARMUP_UNTIL ?? "2026-11-12",
 };
 
 export const ANALYSIS = {

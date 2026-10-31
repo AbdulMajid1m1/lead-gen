@@ -62,3 +62,13 @@ test("the report shows Post buttons only when served for review, and never for D
   assert.match(live, /message\/compose\/\?to=op2/);
   assert.match(live, /View|view/);
 });
+
+test("warm-up rules apply until the date, then the normal prompt returns", async () => {
+  const { systemPromptFor, warmingUp, SYSTEM_PROMPT } = await import("../analyze.js");
+  const before = Date.parse("2026-11-01T00:00:00Z");
+  const after = Date.parse("2026-11-13T00:00:00Z");
+  assert.equal(warmingUp(before), true);
+  assert.match(systemPromptFor(before), /still warming up/);
+  assert.equal(warmingUp(after), false);
+  assert.equal(systemPromptFor(after), SYSTEM_PROMPT);
+});

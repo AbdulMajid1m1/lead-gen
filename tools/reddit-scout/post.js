@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { toOld, toWww } from "./extract.js";
-import { openScoutBrowser, blockReason, ScoutStop } from "./browser.js";
+import { toWww } from "./extract.js";
+import { openScoutBrowser, refreshSession, blockReason, ScoutStop } from "./browser.js";
 import { loadRun, buildItems, recordPost } from "./actions.js";
 import { latestRunDir } from "./store.js";
 
@@ -28,52 +28,59 @@ export async function postToThread(page, { url, text, parentId = null, me }) {
   if (parentId && !ID_RE.test(parentId)) throw new PostError(`Bad comment id ${parentId}.`);
   if (!text?.trim()) throw new PostError("Nothing to post.");
 
-  const res = await page.goto(toOld(url), { waitUntil: "domcontentloaded", timeout: 45000 });
-  if (res?.status() === 429) throw new PostError("Reddit answered 429 (too many requests). Try again in an hour.");
+  const res = await page.goto(toWww(url), { waitUntil: "domcontentloaded", timeout: 45000 });
+  if (res?.status() === 429) throw new PostError("Reddit answered 429 (too many requests). Try again in a couple of hours.");
   const blocked = await page.evaluate(blockReason);
   if (blocked) throw new PostError(`Reddit is showing a ${blocked} page. Nothing was posted.`);
+  await page.waitForSelector("shreddit-post", { timeout: 10000 }).catch(() => {});
 
-  const mineSel = `.thing.comment[data-author="${me}"]`;
-  const before = new Set(await page.$$eval(mineSel, (els) => els.map((e) => e.getAttribute("data-fullname"))));
+  const mineSel = `shreddit-comment[author="${me}"]`;
+  const before = new Set(await page.$$eval(mineSel, (els) => els.map((e) => e.getAttribute("thingid"))));
 
-  let form;
   if (parentId) {
-    const parent = page.locator(`.thing.comment[data-fullname="${parentId}"]`).first();
+    const parent = page.locator(`shreddit-comment[thingid="${parentId}"]`).first();
     if (!(await parent.count())) throw new PostError("The comment you are replying to is no longer on the page.");
-    await parent.locator(':scope > .entry a[data-event-action="comment"]').first().click();
-    form = parent.locator(":scope > .child form.usertext").first();
+    await parent.getByRole("button", { name: "Reply", exact: true }).first().click({ timeout: 10000 });
   } else {
-    form = page.locator(".commentarea > form.usertext").first();
+    await page.locator('comment-composer-host [data-testid="trigger-button"]').first().click({ timeout: 10000 });
   }
-  const box = form.locator('textarea[name="text"]');
+  const box = page.locator('[slot="rte"][contenteditable="true"]').filter({ visible: true }).last();
   try {
     await box.waitFor({ state: "visible", timeout: 10000 });
   } catch {
     throw new PostError("Reddit is not offering a comment box here (locked, archived or logged out). Nothing was posted.");
   }
-  await box.fill(text);
-  await form.locator('button[type="submit"]').first().click();
+  await box.click();
+  const paragraphs = text.split(/\n+/).map((t) => t.trim()).filter(Boolean);
+  for (const [i, line] of paragraphs.entries()) {
+    await page.keyboard.insertText(line);
+    if (i < paragraphs.length - 1) await page.keyboard.press("Enter");
+  }
+  const typed = await box.innerText();
+  if (paragraphs.some((line) => !typed.includes(line))) throw new PostError("The comment box did not take the full text. Nothing was posted.");
+  await page.locator('shreddit-composer button[slot="submit-button"]').filter({ visible: true }).last().click({ timeout: 10000 });
 
   const outcome = await firstOf([
     page
       .waitForFunction(
-        ([sel, seen]) => [...document.querySelectorAll(sel)].some((e) => !seen.includes(e.getAttribute("data-fullname"))),
+        ([sel, seen]) => [...document.querySelectorAll(sel)].some((e) => !seen.includes(e.getAttribute("thingid"))),
         [mineSel, [...before]],
         { timeout: 30000 },
       )
       .then(() => ({ ok: true }), () => null),
-    form
-      .locator(".error:visible")
+    page
+      .locator('faceplate-toast, [role="alert"]')
+      .filter({ visible: true })
       .first()
       .waitFor({ timeout: 30000 })
-      .then(async () => ({ ok: false, error: (await form.locator(".error:visible").first().innerText()).trim() }), () => null),
+      .then(async () => ({ ok: false, error: (await page.locator('faceplate-toast, [role="alert"]').filter({ visible: true }).first().innerText()).trim() }), () => null),
   ]);
   if (!outcome) throw new PostError("Reddit did not confirm the comment within 30 s. Check the thread before trying again.");
   if (!outcome.ok) throw new PostError(`Reddit refused it: ${outcome.error}`);
 
   const permalink = await page.$$eval(
     mineSel,
-    (els, seen) => els.find((e) => !seen.includes(e.getAttribute("data-fullname")))?.getAttribute("data-permalink") ?? null,
+    (els, seen) => els.find((e) => !seen.includes(e.getAttribute("thingid")))?.getAttribute("permalink") ?? null,
     [...before],
   );
   return { permalink: permalink ? toWww(permalink) : toWww(url) };
@@ -102,6 +109,7 @@ async function cli() {
   const context = await openScoutBrowser();
   try {
     const page = context.pages()[0] ?? (await context.newPage());
+    await refreshSession(page);
     const { permalink } = await postToThread(page, { url: item.post.url, text: draft.text, parentId: draft.parentId, me: loaded.run.me });
     recordPost(runDir, id, { at: new Date().toISOString(), kind: draft.kind, text: draft.text, permalink });
     console.log(`Posted: ${permalink}`);
