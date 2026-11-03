@@ -240,8 +240,34 @@ export const sendWhatsAppForLead = async ({
  * Send the initial pitch for a lead and open a tracked thread.
  * Marks the lead CONTACTED and schedules the first follow-up.
  */
+/**
+ * When a person has chosen to write to someone *else* at a company whose shared
+ * inbox already had a first email, the duplicate guard below steps aside, but
+ * only for that. It still refuses the same address twice, and it refuses once
+ * anyone at the company has answered: that conversation belongs to whoever is
+ * handling it now, not to a second opener.
+ *
+ * Worded without "failed" so a campaign records it as SKIPPED.
+ *
+ * @param {{recipientEmail: string, status: string}[]} threads the lead's email threads
+ * @param {string} to the address about to be written to
+ * @returns {string|null} why not, or null to let it through
+ */
+export const newPersonRefusal = (threads, to) => {
+  const target = String(to || "").trim().toLowerCase();
+  if ((threads || []).some((t) => String(t.recipientEmail || "").trim().toLowerCase() === target)) {
+    return `${to} has already been written to — a new-person email must go to someone not yet contacted.`;
+  }
+  const answered = (threads || []).find((t) => t.status === "REPLIED");
+  if (answered) {
+    return `${answered.recipientEmail} already replied — carry on that conversation instead of opening a second one.`;
+  }
+  return null;
+};
+
 export const sendInitialEmail = async ({
   account, leadId, to, subject, body, draftId = null, signatureId = undefined, sentBy = null, automated = false,
+  newPersonAtCompany = false,
 }) => {
   const actor = toActor(sentBy);
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { company: true } });
@@ -269,12 +295,22 @@ export const sendInitialEmail = async ({
     orderBy: { lastOutboundAt: "desc" },
     select: { lastOutboundAt: true, recipientEmail: true },
   });
-  if (recentThread) {
+  if (recentThread && !newPersonAtCompany) {
     const days = Math.round((Date.now() - recentThread.lastOutboundAt.getTime()) / 86400000);
     return {
       ok: false,
       error: `Already emailed ${days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`} at ${recentThread.recipientEmail} — not sending a second first-contact.`,
     };
+  }
+  if (recentThread) {
+    // Every thread, not only the recent ones: a reply from months ago still
+    // means a person at this company is already talking to us.
+    const threads = await prisma.outreachThread.findMany({
+      where: { leadId, channel: "EMAIL" },
+      select: { recipientEmail: true, status: true },
+    });
+    const refusal = newPersonRefusal(threads, to);
+    if (refusal) return { ok: false, error: refusal };
   }
 
   // Resolved before the gate, not after: in the US and Canada what the footer
@@ -312,6 +348,16 @@ export const sendInitialEmail = async ({
     },
     include: { messages: true },
   });
+
+  if (newPersonAtCompany) {
+    // The shared inbox's "just following up" would now land beside a personal
+    // note to the very person it was trying to reach. Stop it; the thread stays
+    // open, so a late reply from that inbox is still picked up.
+    await prisma.outreachThread.updateMany({
+      where: { leadId, channel: "EMAIL", id: { not: thread.id }, status: "AWAITING_REPLY", nextFollowUpAt: { not: null } },
+      data: { nextFollowUpAt: null },
+    });
+  }
 
   await onInitialSent({
     leadId, currentStatus: lead.status, channel: "EMAIL",

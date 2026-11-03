@@ -1,5 +1,5 @@
 import prisma from "../../prismaClient.js";
-import { getAccount, sendInitialEmail, sendWhatsAppForLead } from "./service.js";
+import { getAccount, sendInitialEmail, sendWhatsAppForLead, newPersonRefusal } from "./service.js";
 import { getWhatsAppAccount } from "./whatsapp.js";
 import { pickWhatsAppNumber } from "./phoneRank.js";
 import { sendPolicyFor, isRoleAddress, isSendBlocked, POLICY } from "./sendPolicy.js";
@@ -272,7 +272,7 @@ const LOCKED = new Set(LOCKED_LEAD_STATUSES);
  *
  * Each lead needs `company.contacts` and `threads` loaded.
  */
-export const buildRecipientRows = (leads, { wantEmail, wantWa }) => leads.map((lead) => {
+export const buildRecipientRows = (leads, { wantEmail, wantWa, recipientEmails = null, newPersonAtCompany = false }) => leads.map((lead) => {
   const locked = LOCKED.has(lead.status);
   // A person took this lead over; it is theirs to write to, not the queue's.
   const manual = lead.sendMode === "MANUAL";
@@ -284,9 +284,23 @@ export const buildRecipientRows = (leads, { wantEmail, wantWa }) => leads.map((l
   // — its approved profile names the buyer, and the buyer decides which of the
   // company's inboxes is the right one to write to.
   const icp = lead.discoveryRun?.promotedProduct?.icp || null;
-  const email = pickEmailContact(lead.company.contacts, icp, { people: lead.company.people || [], countryCode: lead.company.countryCode });
+  // An address the launcher chose for this lead (a named decision-maker) wins
+  // over the picker. It is a person's address, so the legal gate below reads it
+  // as one: in the Gulf that makes it RESTRICTED, which a human launching the
+  // campaign with this list is exactly the decision RESTRICTED asks for.
+  const chosen = String(recipientEmails?.[lead.id] || "").trim().toLowerCase();
+  const email = chosen
+    ? { kind: "EMAIL", value: chosen, roleHint: "PERSONAL" }
+    : pickEmailContact(lead.company.contacts, icp, { people: lead.company.people || [], countryCode: lead.company.countryCode });
   const wa = pickWhatsAppNumber(lead.company.contacts, lead.company.countryCode);
-  const hasEmailThread = lead.threads.some((t) => t.channel === "EMAIL");
+  const emailThreads = lead.threads.filter((t) => t.channel === "EMAIL");
+  // A new-person campaign may write to a company whose shared inbox was already
+  // emailed — but never to the same address twice, and never once someone there
+  // has answered. The same rule is re-checked at send time.
+  const newPersonBlock = newPersonAtCompany && chosen && emailThreads.length
+    ? newPersonRefusal(emailThreads, chosen)
+    : null;
+  const hasEmailThread = emailThreads.length > 0 && !(newPersonAtCompany && chosen && !newPersonBlock);
   const hasWaThread = lead.threads.some((t) => t.channel === "WHATSAPP");
 
   // The legal gate comes before every other reason to skip: in the opt-in
@@ -304,6 +318,7 @@ export const buildRecipientRows = (leads, { wantEmail, wantWa }) => leads.map((l
     : isSendBlocked(emailPolicy) ? ["SKIPPED", `Cold email is not lawful in ${emailPolicy.country} (${emailPolicy.law}).`]
     : locked ? ["SKIPPED", `Lead status is ${lead.status} — locked by a human decision.`]
     : manual ? ["SKIPPED", "Set to Manual — a person sends to this lead, not LeadSignal."]
+    : newPersonBlock ? ["SKIPPED", newPersonBlock]
     : hasEmailThread ? ["SKIPPED", "Already in an email conversation."]
     : !email ? ["SKIPPED", "No usable email address on this lead."]
     : ["PENDING", email.value];
@@ -337,6 +352,7 @@ export const createCampaign = async ({
   name, leadIds, channels, accountId = null, waAccountId = null, paceSeconds = 45,
   mode = "DIRECT", dailyLimit = null, waDailyLimit = null, windowStart = 9, windowEnd = 18, tzOffsetMinutes = 0,
   sendDays = null, startAt = null, signatureId = null,
+  newPersonAtCompany = false, recipientEmails = null,
   createdBy = null,
 }) => {
   // The launcher owns every message the queue will send on their behalf, so the
@@ -365,7 +381,7 @@ export const createCampaign = async ({
       // People, so the owner's own address can outrank the generic inbox.
       company: { include: { contacts: { where: { isSuppressed: false } }, people: true } },
       // An existing conversation means this campaign must not pitch again.
-      threads: { select: { channel: true } },
+      threads: { select: { channel: true, recipientEmail: true, status: true } },
       // The approved profile behind a promoter lead, which names the buyer and
       // so decides which of the company's inboxes to write to.
       discoveryRun: { select: { promotedProduct: { select: { icp: true } } } },
@@ -373,7 +389,7 @@ export const createCampaign = async ({
   });
   if (leads.length === 0) return { ok: false, error: "None of the selected leads exist any more." };
 
-  const recipients = buildRecipientRows(leads, { wantEmail, wantWa });
+  const recipients = buildRecipientRows(leads, { wantEmail, wantWa, recipientEmails, newPersonAtCompany });
 
   const sendable = recipients.filter((r) => r.emailState === "PENDING" || r.waState === "PENDING");
 
@@ -391,6 +407,7 @@ export const createCampaign = async ({
       name: (name || `Bulk send · ${new Date().toLocaleDateString("en-GB")}`).slice(0, 160),
       channels, accountId: wantEmail ? accountId : null, waAccountId: wantWa ? waAccountId : null,
       signatureId,
+      newPersonAtCompany: Boolean(newPersonAtCompany),
       paceSeconds: Math.max(20, Math.min(600, paceSeconds)),
       mode,
       dailyLimit: mode === "AUTO" ? (dailyLimit || AUTO_DEFAULT_DAILY_LIMIT) : null,
@@ -505,6 +522,7 @@ const attemptEmail = async (campaign, recipient) => {
       signatureId: campaign.signatureId ?? undefined,
       sentBy: campaignActor(campaign),
       automated: true,
+      newPersonAtCompany: campaign.newPersonAtCompany === true,
     });
     return res.ok ? ["SENT", recipient.emailDetail] : [/failed/i.test(res.error) ? "FAILED" : "SKIPPED", res.error.slice(0, 300)];
   } catch (err) {

@@ -42,6 +42,14 @@ export const campaignCreateSchema = z.object({
   // ISO timestamp to begin at; omitted = now. Bounded both ways so a typo in
   // the year cannot park a campaign for a decade or start one "yesterday".
   startAt: z.coerce.date().optional(),
+  // A named decision-maker per lead, chosen by the person launching the
+  // campaign, in place of the address LeadSignal would pick.
+  recipientEmails: z.record(z.string().min(1).max(64), z.string().trim().toLowerCase().email().max(320)).optional(),
+  // Write to that person even though the company's shared inbox was already
+  // emailed. Needs recipientEmails: the point is a different person.
+  newPersonAtCompany: z.boolean().default(false),
+}).refine((v) => !v.newPersonAtCompany || (v.recipientEmails && Object.keys(v.recipientEmails).length > 0), {
+  message: "Writing to a new person at a company needs the person's address for each lead.", path: ["recipientEmails"],
 }).refine((v) => v.windowEnd > v.windowStart, {
   message: "The sending window must end after it starts.", path: ["windowEnd"],
 }).refine((v) => !v.startAt || v.startAt.getTime() >= Date.now() - START_GRACE_MS, {
@@ -53,9 +61,11 @@ export const campaignCreateSchema = z.object({
 /** POST /api/outreach/campaigns — start a paced bulk send. */
 export const create = asyncHandler(async (req, res) => {
   const { name, leadIds, channels, accountId, waAccountId, paceSeconds,
-    mode, dailyLimit, windowStart, windowEnd, tzOffsetMinutes, sendDays, startAt } = req.body;
+    mode, dailyLimit, windowStart, windowEnd, tzOffsetMinutes, sendDays, startAt,
+    recipientEmails, newPersonAtCompany } = req.body;
   const result = await createCampaign({ name, leadIds, channels, accountId, waAccountId, paceSeconds,
     mode, dailyLimit, windowStart, windowEnd, tzOffsetMinutes, sendDays, startAt,
+    recipientEmails, newPersonAtCompany,
     // Every message this queue sends over the coming days is attributed to the
     // person who launched it, exactly as a hand-typed send would be.
     createdBy: req.auth.user });

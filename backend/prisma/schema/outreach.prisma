@@ -260,6 +260,12 @@ model OutreachCampaign {
   accountId   String? // sending mailbox; null = the default account at send time
   /// Who the campaign's emails are signed by; null = the mailbox's own sign-off.
   signatureId String?
+  /// A person decided to write to a *named* person at companies whose shared
+  /// inbox already had a first email and never answered. Lets the 30-day
+  /// second-first-contact guard step aside for a different address only, never
+  /// for the same one or after anyone at the company replied, and stops the
+  /// shared inbox's pending chase once the personal email is out.
+  newPersonAtCompany Boolean @default(false)
   waAccountId String? // sending device;  null = the default device at send time
 
   status       CampaignStatus @default(RUNNING)

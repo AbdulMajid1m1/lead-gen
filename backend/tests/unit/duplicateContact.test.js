@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * threads — plus a mailer that refuses, so execution stops just past the gate
  * and the assertion is about which check spoke, not about SMTP.
  */
-const thread = { findFirst: vi.fn() };
+const thread = { findFirst: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() };
 const lead = { findUnique: vi.fn() };
 
 vi.mock("../../prismaClient.js", () => ({
@@ -71,5 +71,46 @@ describe("sendInitialEmail — the duplicate first-contact guard", () => {
     expect(where.leadId).toBe("l1");
     const cutoff = where.lastOutboundAt.gte.getTime();
     expect(Math.round((Date.now() - cutoff) / 86400000)).toBe(30);
+  });
+});
+
+describe("sendInitialEmail — writing to a new person at a company already emailed", () => {
+  let sendInitialEmail;
+  const account = { id: "a1", email: "abdul@trytracefyhr.com", maxFollowUps: 1 };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    lead.findUnique.mockResolvedValue({ id: "l1", status: "CONTACTED", companyId: "c1", company: { countryCode: "AE" } });
+    thread.findFirst.mockResolvedValue({ lastOutboundAt: daysAgo(6), recipientEmail: "info@royex.net" });
+    ({ sendInitialEmail } = await import("../../lib/outreach/service.js"));
+  });
+
+  it("still refuses without the flag, however different the address", async () => {
+    const res = await sendInitialEmail({ account, leadId: "l1", to: "rajib@royex.net", subject: "s", body: "b" });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("6 days ago");
+    expect(thread.findMany).not.toHaveBeenCalled();
+  });
+
+  it("lets a different, named address through when a person chose it", async () => {
+    thread.findMany.mockResolvedValue([{ recipientEmail: "info@royex.net", status: "AWAITING_REPLY" }]);
+    const res = await sendInitialEmail({ account, leadId: "l1", to: "rajib@royex.net", subject: "s", body: "b", newPersonAtCompany: true });
+    // Reached the mailer: the guard stepped aside.
+    expect(res.error).toMatch(/SMTP refused/);
+  });
+
+  it("never writes the same address twice, flag or not", async () => {
+    thread.findMany.mockResolvedValue([{ recipientEmail: "Info@Royex.net", status: "AWAITING_REPLY" }]);
+    const res = await sendInitialEmail({ account, leadId: "l1", to: "info@royex.net", subject: "s", body: "b", newPersonAtCompany: true });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/already been written to/);
+    expect(res.error).not.toMatch(/failed/i);
+  });
+
+  it("stands down once anyone at the company has replied", async () => {
+    thread.findMany.mockResolvedValue([{ recipientEmail: "info@royex.net", status: "REPLIED" }]);
+    const res = await sendInitialEmail({ account, leadId: "l1", to: "rajib@royex.net", subject: "s", body: "b", newPersonAtCompany: true });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/already replied/);
   });
 });

@@ -105,3 +105,44 @@ describe("the Manual switch", () => {
     expect(a.emailDetail).toBe("info@gulfbridge.ae");
   });
 });
+
+describe("buildRecipientRows — a campaign to named people", () => {
+  const lead = (threads) => ({
+    id: "l1", status: "CONTACTED", sendMode: "AUTO", threads, discoveryRun: null,
+    company: {
+      name: "Royex Technologies", industry: "IT Services", countryCode: "AE", people: [],
+      contacts: [{ kind: "EMAIL", value: "info@royex.net", roleHint: "ROLE", isSuppressed: false }],
+    },
+  });
+  const opts = { wantEmail: true, wantWa: false, recipientEmails: { l1: "Rajib@Royex.net" } };
+
+  it("keeps the old rule unless the launcher asked for a new person", () => {
+    const [row] = buildRecipientRows([lead([{ channel: "EMAIL", recipientEmail: "info@royex.net", status: "AWAITING_REPLY" }])], opts);
+    expect(row.emailState).toBe("SKIPPED");
+    expect(row.emailDetail).toMatch(/Already in an email conversation/);
+  });
+
+  it("queues the chosen person when the shared inbox never answered", () => {
+    const [row] = buildRecipientRows([lead([{ channel: "EMAIL", recipientEmail: "info@royex.net", status: "AWAITING_REPLY" }])],
+      { ...opts, newPersonAtCompany: true });
+    expect(row.emailState).toBe("PENDING");
+    expect(row.emailDetail).toBe("rajib@royex.net");
+  });
+
+  it("skips the company once someone there replied, or when the address was already used", () => {
+    const [replied] = buildRecipientRows([lead([{ channel: "EMAIL", recipientEmail: "info@royex.net", status: "REPLIED" }])],
+      { ...opts, newPersonAtCompany: true });
+    expect(replied.emailState).toBe("SKIPPED");
+    expect(replied.emailDetail).toMatch(/already replied/);
+    const [same] = buildRecipientRows([lead([{ channel: "EMAIL", recipientEmail: "rajib@royex.net", status: "AWAITING_REPLY" }])],
+      { ...opts, newPersonAtCompany: true });
+    expect(same.emailState).toBe("SKIPPED");
+  });
+
+  it("uses the chosen address on a lead never emailed, without needing the flag", () => {
+    const [row] = buildRecipientRows([lead([])], opts);
+    expect(row.emailState).toBe("PENDING");
+    expect(row.emailDetail).toBe("rajib@royex.net");
+  });
+});
+
