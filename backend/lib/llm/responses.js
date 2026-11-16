@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   AI_ENABLED, OPENAI_API_KEY, OPENAI_BASE_URL,
-  ANTHROPIC_API_KEY, ANTHROPIC_MODEL, anthropicClientOptions,
+  ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_SEARCH_MODEL, anthropicClientOptions,
   AI_SEARCH_MODEL, AI_FAST_MODEL, AI_RUN_BUDGET_USD,
 } from "../../configs/envConfig.js";
 import { log } from "../../utils/logger.js";
@@ -33,7 +33,8 @@ const tripBreaker = (provider, err) => {
 const providerUp = (provider) => Date.now() >= breaker[provider].until;
 
 /**
- * OpenAI Responses API layer: live web search plus schema-guaranteed JSON.
+ * OpenAI Responses API layer: live web search plus schema-guaranteed JSON,
+ * with Claude standing in for both when OpenAI is missing or failing.
  *
  * Two rules hold everywhere in this file:
  *  1. Every call is optional. If there is no key, no credit, or the API errors,
@@ -95,8 +96,12 @@ const PRICING = {
   "gpt-4.1": { in: 2.0, out: 8.0 },
   "gpt-4.1-mini": { in: 0.4, out: 1.6 },
   "gpt-4o-mini": { in: 0.15, out: 0.6 },
+  "claude-fable-5-2": { in: 8.0, out: 40.0 },
+  "claude-opus-5-5": { in: 4.0, out: 20.0 },
   "claude-opus-5": { in: 5.0, out: 25.0 },
-  "claude-sonnet-5": { in: 3.0, out: 15.0 },
+  "claude-sonnet-5-5": { in: 2.0, out: 10.0 },
+  "claude-sonnet-5": { in: 2.0, out: 10.0 },
+  "claude-haiku-5-5": { in: 0.1, out: 0.5 },
   "claude-haiku-4-5": { in: 1.0, out: 5.0 },
   default: { in: 1.0, out: 5.0 },
 };
@@ -198,6 +203,59 @@ const extractSources = (response) => {
   return [...urls];
 };
 
+/**
+ * Schema keywords Claude's structured output refuses with a 400 ("For 'array'
+ * type, property 'maxItems' is not supported"). The Anthropic SDK's parse()
+ * strips the same ones; minItems is accepted only as 0 or 1.
+ */
+const CLAUDE_UNSUPPORTED = new Set([
+  "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+  "minLength", "maxLength", "maxItems", "uniqueItems",
+]);
+// Keys whose values are property names, so a field called "maximum" survives.
+const SCHEMA_MAPS = new Set(["properties", "$defs", "definitions"]);
+const VERBATIM = new Set(["enum", "const", "required", "default", "examples"]);
+
+const JSON_TYPE_OF = { string: "string", number: "number", integer: "number", boolean: "boolean" };
+
+export const claudeSchema = (node) => {
+  if (Array.isArray(node)) return node.map(claudeSchema);
+  if (!node || typeof node !== "object") return node;
+  // `{ type: ["string", "null"], enum: [..., null] }` is refused ("Enum value
+  // does not match declared type"); the same choice as anyOf is accepted.
+  if (Array.isArray(node.type) && Array.isArray(node.enum)) {
+    const { type, enum: values, ...rest } = node;
+    const branches = type.filter((t) => t !== "null").map((t) => ({
+      type: t,
+      enum: values.filter((v) => v !== null && typeof v === JSON_TYPE_OF[t]),
+    }));
+    return { ...claudeSchema(rest), anyOf: type.includes("null") ? [...branches, { type: "null" }] : branches };
+  }
+  const out = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (CLAUDE_UNSUPPORTED.has(key) || (key === "minItems" && value > 1)) continue;
+    if (SCHEMA_MAPS.has(key) && value && typeof value === "object") {
+      out[key] = Object.fromEntries(Object.entries(value).map(([name, sub]) => [name, claudeSchema(sub)]));
+    } else {
+      out[key] = VERBATIM.has(key) ? value : claudeSchema(value);
+    }
+  }
+  return out;
+};
+
+/** Claude was not given the array limits, so its answer is held to them here. */
+export const capArrays = (data, schema) => {
+  if (!schema || typeof schema !== "object" || data == null) return data;
+  if (Array.isArray(data)) {
+    const kept = Number.isInteger(schema.maxItems) ? data.slice(0, schema.maxItems) : data;
+    return kept.map((item) => capArrays(item, schema.items));
+  }
+  if (typeof data === "object" && schema.properties) {
+    return Object.fromEntries(Object.entries(data).map(([key, value]) => [key, capArrays(value, schema.properties[key])]));
+  }
+  return data;
+};
+
 /** Anthropic structured-output call, used when OpenAI is missing or paused. */
 const parseStructuredAnthropic = async ({ system, user, schema, schemaName, timeoutMs, tracker }) => {
   const c = getAnthropicClient();
@@ -210,7 +268,7 @@ const parseStructuredAnthropic = async ({ system, user, schema, schemaName, time
         max_tokens: 8000,
         system,
         messages: [{ role: "user", content: user }],
-        output_config: { format: { type: "json_schema", schema } },
+        output_config: { format: { type: "json_schema", schema: claudeSchema(schema) } },
       }),
       timeoutMs,
       `${schemaName} call (anthropic)`,
@@ -219,7 +277,7 @@ const parseStructuredAnthropic = async ({ system, user, schema, schemaName, time
     if (response.stop_reason === "refusal") return null;
     const text = response.content?.find((b) => b.type === "text")?.text || "";
     let data = null;
-    try { data = JSON.parse(text); } catch { data = null; }
+    try { data = capArrays(JSON.parse(text), schema); } catch { data = null; }
     return data ? { data, usage: response.usage, model } : null;
   } catch (err) {
     if (isHardFailure(err)) tripBreaker("anthropic", err);
@@ -270,9 +328,128 @@ export const parseStructured = async ({
   return parseStructuredAnthropic({ system, user, schema, schemaName, timeoutMs, tracker });
 };
 
+/** How many searches one Claude research call may make, and how often it may resume a paused turn. */
+const CLAUDE_SEARCH_MAX_USES = 3;
+const CLAUDE_SEARCH_MAX_RESUMES = 2;
+// The basic search tool, on purpose. The newer web_search_20260209 filters
+// results by running code first, and on the real discovery prompt it did not
+// finish one search in four minutes; the basic tool did two searches and wrote
+// its notes in 18 seconds (measured live, 2026-11-16, Claude Sonnet 5).
+const CLAUDE_SEARCH_TOOL = "web_search_20250305";
+const CLAUDE_SEARCH_MIN_TIMEOUT_MS = 150_000;
+
+/**
+ * Claude's web search, for when OpenAI is missing or failing.
+ *
+ * Two calls, because Claude cannot return schema-constrained JSON from a turn
+ * that searched (structured output and search citations are incompatible).
+ * The first searches and writes plain notes; the second turns those notes into
+ * the caller's schema. The sources returned are the pages the search actually
+ * retrieved, so `citationsAreGrounded` keeps checking claims against them.
+ */
+const searchAndParseAnthropic = async ({ system, user, schema, schemaName, country, city, timeoutMs, tracker }) => {
+  const c = getAnthropicClient();
+  if (!c) return null;
+  const model = ANTHROPIC_SEARCH_MODEL;
+  const tool = { type: CLAUDE_SEARCH_TOOL, name: "web_search", max_uses: CLAUDE_SEARCH_MAX_USES };
+  // The search tool accepts only some countries as a location (not Pakistan,
+  // for one). The prompt names the place either way, so an unsupported country
+  // costs a retry without it, not the search.
+  let tools = [country ? { ...tool, user_location: { type: "approximate", country, ...(city ? { city } : {}) } } : tool];
+  const limitMs = Math.max(timeoutMs, CLAUDE_SEARCH_MIN_TIMEOUT_MS);
+  const ask = (messages) => withTimeout(
+    c.messages.create(
+      {
+        model,
+        max_tokens: 16000,
+        system: `${system}\n\nSearch the web, then write what you found as plain notes: each company's name, website, location and the page you found it on. Leave out anything no page supports.`,
+        tools,
+        messages,
+        // Finding and listing companies needs little deliberation; at the
+        // default effort the thinking alone pushed a turn past the time limit.
+        output_config: { effort: "medium" },
+      },
+      // The SDK aborts the request at the limit, so a slow search is cancelled
+      // rather than left running and billed after we have given up on it.
+      { timeout: limitMs, maxRetries: 0 },
+    ),
+    limitMs + 5_000,
+    `${schemaName} web search (anthropic)`,
+  );
+
+  const urls = new Set();
+  const usage = { input_tokens: 0, output_tokens: 0 };
+  const notes = [];
+  let searchCalls = 0;
+  let searchErrors = 0;
+  try {
+    let messages = [{ role: "user", content: user }];
+    for (let turn = 0; turn <= CLAUDE_SEARCH_MAX_RESUMES; turn += 1) {
+      let response;
+      try {
+        response = await ask(messages);
+      } catch (err) {
+        if (!(err?.status === 400 && tools[0].user_location && /not supported/i.test(err.message))) throw err;
+        tools = [tool];
+        response = await ask(messages);
+      }
+      usage.input_tokens += response.usage?.input_tokens ?? 0;
+      usage.output_tokens += response.usage?.output_tokens ?? 0;
+      searchCalls += response.usage?.server_tool_use?.web_search_requests ?? 0;
+      for (const block of response.content || []) {
+        if (block.type === "web_search_tool_result") {
+          // A list is results; an object is the tool's error (it does not raise).
+          if (Array.isArray(block.content)) block.content.forEach((r) => r?.url && urls.add(r.url));
+          else searchErrors += 1;
+        } else if (block.type === "text") {
+          if (block.text) notes.push(block.text);
+          for (const cite of block.citations || []) if (cite?.url) urls.add(cite.url);
+        }
+      }
+      if (response.stop_reason === "refusal") {
+        tracker?.record({ model, usage, searchCalls });
+        return null;
+      }
+      if (response.stop_reason !== "pause_turn") break;
+      // The server stopped its own search loop; sending the turn back resumes it.
+      messages = [...messages, { role: "assistant", content: response.content }];
+    }
+  } catch (err) {
+    if (isHardFailure(err)) tripBreaker("anthropic", err);
+    if (tracker) tracker.lastError = String(err.message).slice(0, 200);
+    logger.warn({ schemaName, model, msg: err.message }, "claude web search failed — degrading to deterministic sources");
+    return null;
+  }
+  tracker?.record({ model, usage, searchCalls: Math.max(1, searchCalls) });
+
+  if (!urls.size || !notes.join("").trim()) {
+    if (tracker) tracker.lastError = searchErrors ? "Claude web search returned only errors" : "Claude web search found nothing";
+    logger.warn({ schemaName, searchErrors }, "claude web search came back empty");
+    return null;
+  }
+
+  const sources = [...urls];
+  const shaped = await parseStructuredAnthropic({
+    system,
+    user: `${user}\n\nNotes from a live web search:\n${notes.join("\n\n")}\n\nPages the search returned:\n${sources.join("\n")}\n\nUse only what these notes and pages support. Every URL in your answer must be one of the pages listed above or that page's own website.`,
+    schema,
+    schemaName,
+    timeoutMs,
+    tracker,
+  });
+  if (!shaped?.data) return null;
+  return {
+    data: shaped.data,
+    sources,
+    searchCalls,
+    usage: { input_tokens: usage.input_tokens + (shaped.usage?.input_tokens ?? 0), output_tokens: usage.output_tokens + (shaped.usage?.output_tokens ?? 0) },
+    model,
+  };
+};
+
 /**
  * Live web search returning schema-shaped results with the sources the model
- * actually retrieved.
+ * actually retrieved. OpenAI when it is set up and answering, Claude otherwise.
  *
  * `user_location` materially improves regional results — a Saudi query without
  * it returns mostly US pages.
@@ -282,12 +459,13 @@ export const searchAndParse = async ({
   model = AI_SEARCH_MODEL, searchContextSize = "medium",
   country = null, city = null, timeoutMs = 90_000, tracker = null,
 }) => {
-  const c = getClient();
-  if (!c) return null;
   if (tracker && !tracker.canSpend(0.06)) {
     logger.warn({ schemaName }, "skipping web search — run budget exhausted");
     return null;
   }
+  const claude = () => searchAndParseAnthropic({ system, user, schema, schemaName, country, city, timeoutMs, tracker });
+  const c = getClient();
+  if (!c) return claude();
 
   const tool = { type: "web_search", search_context_size: searchContextSize };
   if (country) {
@@ -322,8 +500,8 @@ export const searchAndParse = async ({
   } catch (err) {
     if (isHardFailure(err)) tripBreaker("openai", err);
     if (tracker) tracker.lastError = String(err.message).slice(0, 200);
-    logger.warn({ schemaName, model, msg: err.message }, "web search failed — degrading to deterministic sources");
-    return null;
+    logger.warn({ schemaName, model, msg: err.message }, "web search failed — trying Claude");
+    return claude();
   }
 };
 

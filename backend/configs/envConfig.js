@@ -83,8 +83,10 @@ export const OPENAI_BASE_URL   = process.env.OPENAI_BASE_URL;
 export const OPENAI_MODEL      = process.env.OPENAI_MODEL || "gpt-4o-mini";
 export const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 export const ANTHROPIC_MODEL   = process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
-// A user-level key (sk-ant-usr-…) belongs to no workspace and must name one on
-// every request; a workspace-scoped key (sk-ant-api03-…) needs nothing here.
+// Live web search runs on Claude's own search tool when there is no OpenAI key.
+export const ANTHROPIC_SEARCH_MODEL = process.env.ANTHROPIC_SEARCH_MODEL || ANTHROPIC_MODEL;
+// Some user-level keys (sk-ant-usr-…) must name their workspace on every
+// request; a workspace-scoped key (sk-ant-api03-…) never needs it.
 export const ANTHROPIC_WORKSPACE_ID = process.env.ANTHROPIC_WORKSPACE_ID || null;
 export const anthropicClientOptions = (extra = {}) => ({
   apiKey: ANTHROPIC_API_KEY,
