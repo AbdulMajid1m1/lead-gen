@@ -36,9 +36,10 @@ export const LIMITS = {
 
 // A new account's comments get removed if they look promotional, so until this
 // date drafts just help and leave out what he sells. Posts that ask for offers
-// are the exception. Clear it once the account has about 100 karma.
+// are the exception. Clear it once the account has about 100 karma; on
+// 2026-11-16 it still had 1, with no comments yet.
 export const ACCOUNT = {
-  warmUpUntil: process.env.SCOUT_WARMUP_UNTIL ?? "2026-11-12",
+  warmUpUntil: process.env.SCOUT_WARMUP_UNTIL ?? "2026-11-30",
 };
 
 export const ANALYSIS = {
