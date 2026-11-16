@@ -8,7 +8,7 @@
 # Each file is backed up first. Only the api and worker containers restart.
 #
 # A workspace API key (sk-ant-api03-...) needs nothing else. A user key
-# (sk-ant-usr-...) also needs its workspace id (wrkspc_...), asked for below.
+# (sk-ant-usr-...) may also need its workspace id (wrkspc_...), asked for below.
 #
 # Usage: bash scripts/set-anthropic-key.sh
 set -euo pipefail
@@ -18,8 +18,9 @@ echo
 case "$KEY" in
   sk-ant-api*) WS="" ;;
   sk-ant-usr*)
-    read -r -p "Workspace id for this user key (wrkspc_...): " WS
-    [[ "$WS" =~ ^wrkspc_[A-Za-z0-9]+$ ]] || { echo "That is not a workspace id, nothing changed."; exit 1; }
+    # Some user keys work on their own; others are refused without a workspace.
+    read -r -p "Workspace id (wrkspc_...), or Enter if the key works without one: " WS
+    [[ -z "$WS" || "$WS" =~ ^wrkspc_[A-Za-z0-9]+$ ]] || { echo "That is not a workspace id, nothing changed."; exit 1; }
     ;;
   sk-ant-admin*) echo "That is an admin key, which cannot call models. Nothing changed."; exit 1 ;;
   *) echo "That does not look like an Anthropic key, nothing changed."; exit 1 ;;
